@@ -1,70 +1,85 @@
 use super::util::{
-    diff_target_is_svg, diff_target_wants_image_preview, selected_conflict_target_path,
+    SelectedConflictTarget, diff_target_preview_flags, selected_conflict_target,
     start_conflict_target_reload, start_conflict_target_reload_with_mode,
+    start_current_conflict_target_reload,
 };
 use crate::model::{AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId};
 use crate::msg::Effect;
 use gitcomet_core::domain::{Diff, DiffArea, DiffTarget, FileDiffImage, FileDiffText};
 use gitcomet_core::error::Error;
+use smallvec::SmallVec;
 use std::sync::Arc;
+
+pub(crate) const SELECT_DIFF_INLINE_EFFECT_CAPACITY: usize = 1;
+pub(crate) type SelectDiffEffects = SmallVec<[Effect; SELECT_DIFF_INLINE_EFFECT_CAPACITY]>;
 
 pub(super) fn select_diff(
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
 ) -> Vec<Effect> {
+    let mut effects = SelectDiffEffects::new();
+    fill_select_diff_inline(state, repo_id, target, &mut effects);
+    effects.into_vec()
+}
+
+pub(super) fn fill_select_diff_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: DiffTarget,
+    effects: &mut SelectDiffEffects,
+) {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
+        return;
     };
 
-    repo_state.diff_state.diff_target = Some(target.clone());
-    if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
+    if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
+        repo_state.diff_state.diff_target = Some(target.clone());
         repo_state.diff_state.diff = Loadable::NotLoaded;
         repo_state.diff_state.diff_file = Loadable::NotLoaded;
         repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
         repo_state.bump_diff_state_rev();
-        return start_conflict_target_reload(repo_state, conflict_path);
+        let conflict_effects = match conflict_target {
+            SelectedConflictTarget::Current => start_current_conflict_target_reload(repo_state),
+            SelectedConflictTarget::Path(path) => start_conflict_target_reload(repo_state, path),
+        };
+        debug_assert!(conflict_effects.len() <= SELECT_DIFF_INLINE_EFFECT_CAPACITY);
+        effects.extend(conflict_effects);
+        return;
     }
 
+    repo_state.diff_state.diff_target = Some(target);
     repo_state.diff_state.diff = Loadable::Loading;
     let supports_file = matches!(
-        &target,
-        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+        repo_state.diff_state.diff_target.as_ref(),
+        Some(DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. })
     );
-    let wants_image = diff_target_wants_image_preview(&target);
-    let is_svg = diff_target_is_svg(&target);
-    repo_state.diff_state.diff_file = if supports_file && (!wants_image || is_svg) {
+    let preview = diff_target_preview_flags(
+        repo_state
+            .diff_state
+            .diff_target
+            .as_ref()
+            .expect("diff target set before load planning"),
+    );
+    let load_file_text = supports_file && (!preview.wants_image || preview.is_svg);
+    let load_file_image = supports_file && preview.wants_image;
+    repo_state.diff_state.diff_file = if load_file_text {
         Loadable::Loading
     } else {
         Loadable::NotLoaded
     };
-    repo_state.diff_state.diff_file_image = if supports_file && wants_image {
+    repo_state.diff_state.diff_file_image = if load_file_image {
         Loadable::Loading
     } else {
         Loadable::NotLoaded
     };
     repo_state.bump_diff_state_rev();
 
-    // Build effects inline with precomputed flags to avoid redundant extension
-    // checks that `diff_reload_effects` would redo. File payload loads are
-    // ordered before the main diff load to keep selection-path ordering stable.
-    let mut effects = Vec::with_capacity(2);
-    if supports_file {
-        if wants_image {
-            effects.push(Effect::LoadDiffFileImage {
-                repo_id,
-                target: target.clone(),
-            });
-        }
-        if !wants_image || is_svg {
-            effects.push(Effect::LoadDiffFile {
-                repo_id,
-                target: target.clone(),
-            });
-        }
-    }
-    effects.push(Effect::LoadDiff { repo_id, target });
-    effects
+    effects.push(Effect::LoadSelectedDiff {
+        repo_id,
+        load_file_text,
+        load_file_image,
+    });
 }
 
 pub(super) fn select_conflict_diff(
@@ -86,7 +101,7 @@ pub(super) fn select_conflict_diff(
     repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
     repo_state.bump_diff_state_rev();
 
-    start_conflict_target_reload_with_mode(repo_state, path, ConflictFileLoadMode::CurrentOnly)
+    start_conflict_target_reload_with_mode(repo_state, &path, ConflictFileLoadMode::CurrentOnly)
 }
 
 pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {

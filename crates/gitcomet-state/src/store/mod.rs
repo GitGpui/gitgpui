@@ -18,7 +18,11 @@ mod send_diagnostics;
 
 use effects::schedule_effect;
 use executor::{TaskExecutor, default_worker_threads};
-use reducer::reduce;
+use reducer::{
+    fill_select_diff_inline, fill_set_active_repo_inline, fill_stage_path_inline,
+    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce,
+    reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
+};
 use repo_monitor::RepoMonitorManager;
 use send_diagnostics::{SendFailureKind, send_or_log, try_send_state_changed_or_log};
 
@@ -72,6 +76,76 @@ fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
     }
 }
 
+fn handle_reducer_effects<I>(
+    effects: I,
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    active_repo_id: &Arc<AtomicU64>,
+    event_tx: &smol::channel::Sender<StoreEvent>,
+    repo_monitors: &mut RepoMonitorManager,
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    thread_msg_tx: &mpsc::Sender<Msg>,
+    executor: &TaskExecutor,
+    session_persist_executor: &TaskExecutor,
+    backend: &Arc<dyn GitBackend>,
+) where
+    I: IntoIterator<Item = crate::msg::Effect>,
+{
+    let active_value = thread_state
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .active_repo
+        .map(|id| id.0)
+        .unwrap_or(0);
+    active_repo_id.store(active_value, Ordering::Relaxed);
+
+    try_send_state_changed_or_log(event_tx, "store worker loop state notification");
+
+    // Keep filesystem monitoring scoped to the active repository only, to minimize
+    // OS watcher load in large multi-repo sessions.
+    let (active_repo, active_workdir) = {
+        let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+        let active_repo = state.active_repo;
+        let active_workdir = active_repo.and_then(|repo_id| {
+            state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.spec.workdir.clone())
+        });
+        (active_repo, active_workdir)
+    };
+
+    for repo_id in repo_monitors.running_repo_ids() {
+        if Some(repo_id) != active_repo {
+            repo_monitors.stop(repo_id);
+        }
+    }
+
+    if let Some(repo_id) = active_repo
+        && let Some(workdir) = active_workdir
+        && repos.contains_key(&repo_id)
+    {
+        repo_monitors.start(
+            repo_id,
+            workdir,
+            thread_msg_tx.clone(),
+            Arc::clone(active_repo_id),
+        );
+    }
+
+    for effect in effects {
+        schedule_effect(
+            executor,
+            session_persist_executor,
+            thread_state,
+            backend,
+            repos,
+            thread_msg_tx.clone(),
+            effect,
+        );
+    }
+}
+
 pub struct AppStore {
     state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: mpsc::Sender<Msg>,
@@ -115,67 +189,229 @@ impl AppStore {
                     _ => {}
                 }
 
-                let effects = {
-                    let mut app_state = thread_state.write().unwrap_or_else(|e| e.into_inner());
-                    let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                    let reduce_started = Instant::now();
-                    let effects = reduce(&mut repos, &id_alloc, app_state, msg);
-                    reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-                    effects
-                };
-
-                let active_value = thread_state
-                    .read()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .active_repo
-                    .map(|id| id.0)
-                    .unwrap_or(0);
-                active_repo_id.store(active_value, Ordering::Relaxed);
-
-                try_send_state_changed_or_log(&event_tx, "store worker loop state notification");
-
-                // Keep filesystem monitoring scoped to the active repository only, to minimize
-                // OS watcher load in large multi-repo sessions.
-                let (active_repo, active_workdir) = {
-                    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
-                    let active_repo = state.active_repo;
-                    let active_workdir = active_repo.and_then(|repo_id| {
-                        state
-                            .repos
-                            .iter()
-                            .find(|r| r.id == repo_id)
-                            .map(|r| r.spec.workdir.clone())
-                    });
-                    (active_repo, active_workdir)
-                };
-
-                for repo_id in repo_monitors.running_repo_ids() {
-                    if Some(repo_id) != active_repo {
-                        repo_monitors.stop(repo_id);
+                match msg {
+                    Msg::SetActiveRepo { repo_id } => {
+                        let mut effects = reducer::SetActiveRepoEffects::new();
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            fill_set_active_repo_inline(app_state, repo_id, &mut effects);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
                     }
-                }
-
-                if let Some(repo_id) = active_repo
-                    && let Some(workdir) = active_workdir
-                    && repos.contains_key(&repo_id)
-                {
-                    repo_monitors.start(
+                    Msg::SelectDiff { repo_id, target } => {
+                        let mut effects = reducer::SelectDiffEffects::new();
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            fill_select_diff_inline(app_state, repo_id, target, &mut effects);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
+                    Msg::StagePath { repo_id, path } => {
+                        let mut effects = reducer::SinglePathActionEffects::new();
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            fill_stage_path_inline(app_state, repo_id, path, &mut effects);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
+                    Msg::StagePaths { repo_id, paths } => {
+                        let mut effects = reducer::BatchPathActionEffects::new();
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            fill_stage_paths_inline(app_state, repo_id, paths, &mut effects);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
+                    Msg::UnstagePath { repo_id, path } => {
+                        let mut effects = reducer::SinglePathActionEffects::new();
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            fill_unstage_path_inline(app_state, repo_id, path, &mut effects);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
+                    Msg::UnstagePaths { repo_id, paths } => {
+                        let mut effects = reducer::BatchPathActionEffects::new();
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            fill_unstage_paths_inline(app_state, repo_id, paths, &mut effects);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
+                    Msg::ConflictSetRegionChoice {
                         repo_id,
-                        workdir,
-                        thread_msg_tx.clone(),
-                        Arc::clone(&active_repo_id),
-                    );
-                }
-
-                for effect in effects {
-                    schedule_effect(
-                        &executor,
-                        &session_persist_executor,
-                        &backend,
-                        &repos,
-                        thread_msg_tx.clone(),
-                        effect,
-                    );
+                        path,
+                        region_index,
+                        choice,
+                    } => {
+                        {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            set_conflict_region_choice_inline(
+                                app_state,
+                                repo_id,
+                                path,
+                                region_index,
+                                choice,
+                            );
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                        }
+                        handle_reducer_effects(
+                            std::iter::empty::<crate::msg::Effect>(),
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
+                    Msg::ConflictResetResolutions { repo_id, path } => {
+                        {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            reset_conflict_resolutions_inline(app_state, repo_id, path);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                        }
+                        handle_reducer_effects(
+                            std::iter::empty::<crate::msg::Effect>(),
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
+                    msg => {
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            let effects = reduce(&mut repos, &id_alloc, app_state, msg);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
                 }
             }
         });
@@ -203,6 +439,103 @@ pub fn dispatch_sync_for_bench(state: &mut AppState, msg: Msg) -> Vec<crate::msg
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     reduce(&mut repos, &id_alloc, state, msg)
+}
+
+#[cfg(feature = "benchmarks")]
+pub(crate) fn with_set_active_repo_inline_for_bench<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
+) -> T {
+    let mut effects = reducer::SetActiveRepoEffects::new();
+    fill_set_active_repo_inline(state, repo_id, &mut effects);
+    f(state, &effects)
+}
+
+#[cfg(feature = "benchmarks")]
+pub(crate) fn with_select_diff_inline_for_bench<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: gitcomet_core::domain::DiffTarget,
+    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
+) -> T {
+    let mut effects = reducer::SelectDiffEffects::new();
+    fill_select_diff_inline(state, repo_id, target, &mut effects);
+    f(state, &effects)
+}
+
+#[cfg(feature = "benchmarks")]
+#[inline]
+pub(crate) fn with_stage_path_inline_for_bench<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
+) -> T {
+    let mut effects = reducer::SinglePathActionEffects::new();
+    fill_stage_path_inline(state, repo_id, path, &mut effects);
+    f(state, &effects)
+}
+
+#[cfg(feature = "benchmarks")]
+#[inline]
+pub(crate) fn with_stage_paths_inline_for_bench<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    paths: crate::msg::RepoPathList,
+    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
+) -> T {
+    let mut effects = reducer::BatchPathActionEffects::new();
+    fill_stage_paths_inline(state, repo_id, paths, &mut effects);
+    f(state, &effects)
+}
+
+#[cfg(feature = "benchmarks")]
+#[inline]
+pub(crate) fn with_unstage_path_inline_for_bench<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
+) -> T {
+    let mut effects = reducer::SinglePathActionEffects::new();
+    fill_unstage_path_inline(state, repo_id, path, &mut effects);
+    f(state, &effects)
+}
+
+#[cfg(feature = "benchmarks")]
+#[inline]
+pub(crate) fn with_unstage_paths_inline_for_bench<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    paths: crate::msg::RepoPathList,
+    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
+) -> T {
+    let mut effects = reducer::BatchPathActionEffects::new();
+    fill_unstage_paths_inline(state, repo_id, paths, &mut effects);
+    f(state, &effects)
+}
+
+#[cfg(feature = "benchmarks")]
+#[inline]
+pub(crate) fn set_conflict_region_choice_inline_for_bench(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: crate::msg::RepoPath,
+    region_index: usize,
+    choice: crate::msg::ConflictRegionChoice,
+) {
+    set_conflict_region_choice_inline(state, repo_id, path, region_index, choice);
+}
+
+#[cfg(feature = "benchmarks")]
+#[inline]
+pub(crate) fn reset_conflict_resolutions_inline_for_bench(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: crate::msg::RepoPath,
+) {
+    reset_conflict_resolutions_inline(state, repo_id, path);
 }
 
 #[cfg(test)]

@@ -396,7 +396,7 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             hide_resolved: true,
         },
     );
@@ -589,7 +589,7 @@ fn conflict_set_hide_resolved_updates_repo_state() {
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             hide_resolved: true,
         },
     );
@@ -673,7 +673,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictApplyBulkChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             choice: crate::msg::ConflictBulkChoice::Ours,
         },
     );
@@ -759,7 +759,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictSetRegionChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             region_index: 1,
             choice: crate::msg::ConflictRegionChoice::Theirs,
         },
@@ -841,7 +841,7 @@ theirs only\n\
         &mut state,
         Msg::ConflictSetRegionChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             region_index: 0,
             choice: crate::msg::ConflictRegionChoice::Base,
         },
@@ -915,7 +915,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictSetRegionChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             region_index: 0,
             choice: crate::msg::ConflictRegionChoice::Ours,
         },
@@ -926,7 +926,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictSetRegionChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             region_index: 1,
             choice: crate::msg::ConflictRegionChoice::Theirs,
         },
@@ -946,7 +946,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictResetResolutions {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
         },
     );
 
@@ -1025,7 +1025,7 @@ theirs one\n\
         &mut state,
         Msg::ConflictResetResolutions {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
         },
     );
 
@@ -1100,7 +1100,7 @@ same content\n\
         &mut state,
         Msg::ConflictApplyAutosolve {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             mode: crate::msg::ConflictAutosolveMode::Safe,
             whitespace_normalize: false,
         },
@@ -1184,7 +1184,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictSyncRegionResolutions {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             updates: vec![
                 crate::msg::ConflictRegionResolutionUpdate {
                     region_index: 0,
@@ -1279,7 +1279,7 @@ theirs one\n\
         &mut state,
         Msg::ConflictSyncRegionResolutions {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             updates: vec![crate::msg::ConflictRegionResolutionUpdate {
                 region_index: 0,
                 resolution: gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved,
@@ -1580,7 +1580,7 @@ fn repo_command_finished_launch_mergetool_clears_conflict_context() {
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             hide_resolved: true,
         },
     );
@@ -1659,7 +1659,7 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("image.png"),
+            path: PathBuf::from("image.png").into(),
             hide_resolved: true,
         },
     );
@@ -1741,7 +1741,7 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("image.png"),
+            path: PathBuf::from("image.png").into(),
             hide_resolved: true,
         },
     );

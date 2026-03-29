@@ -780,7 +780,7 @@ fn repo_switch_refocus_same_repo_stays_on_primary_refresh_path() {
     let fixture = RepoSwitchFixture::refocus_same_repo(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 6);
+    assert_eq!(metrics.effect_count, 5);
     assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 0);
     assert_eq!(metrics.persist_session_effect_count, 0);
@@ -791,7 +791,7 @@ fn repo_switch_two_hot_repos_reloads_selected_diff_and_persists_session() {
     let fixture = RepoSwitchFixture::two_hot_repos(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 9);
+    assert_eq!(metrics.effect_count, 7);
     assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 2);
     assert_eq!(metrics.persist_session_effect_count, 1);
@@ -806,7 +806,7 @@ fn repo_switch_selected_commit_and_details_skips_diff_reload_path() {
     let fixture = RepoSwitchFixture::selected_commit_and_details(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 7);
+    assert_eq!(metrics.effect_count, 6);
     assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 0);
     assert_eq!(metrics.persist_session_effect_count, 1);
@@ -821,7 +821,7 @@ fn repo_switch_twenty_tabs_scales_repo_count_without_heating_all_tabs() {
     let fixture = RepoSwitchFixture::twenty_tabs(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 9);
+    assert_eq!(metrics.effect_count, 7);
     assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 2);
     assert_eq!(metrics.persist_session_effect_count, 1);
@@ -855,7 +855,7 @@ fn repo_switch_twenty_repos_all_hot_tracks_extreme_hot_tab_scale() {
     let fixture = RepoSwitchFixture::twenty_repos_all_hot(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 9);
+    assert_eq!(metrics.effect_count, 7);
     assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 2);
     assert_eq!(metrics.persist_session_effect_count, 1);
@@ -870,7 +870,7 @@ fn repo_switch_selected_diff_file_triggers_diff_reload_with_loaded_content() {
     let fixture = RepoSwitchFixture::selected_diff_file(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 8);
+    assert_eq!(metrics.effect_count, 7);
     assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 2);
     assert_eq!(metrics.persist_session_effect_count, 1);
@@ -885,7 +885,7 @@ fn repo_switch_selected_conflict_target_dispatches_conflict_reload() {
     let fixture = RepoSwitchFixture::selected_conflict_target(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 8);
+    assert_eq!(metrics.effect_count, 7);
     assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
@@ -899,7 +899,7 @@ fn repo_switch_merge_active_with_draft_restore_includes_merge_message() {
     let fixture = RepoSwitchFixture::merge_active_with_draft_restore(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    assert_eq!(metrics.effect_count, 8);
+    assert_eq!(metrics.effect_count, 7);
     assert_eq!(metrics.refresh_effect_count, 6);
     assert_eq!(metrics.selected_diff_reload_effect_count, 2);
     assert_eq!(metrics.persist_session_effect_count, 1);
@@ -913,8 +913,9 @@ fn status_select_diff_open_unstaged_produces_expected_effects() {
     let fixture = StatusSelectDiffOpenFixture::unstaged(500);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    // SelectDiff for a .rs file should produce LoadDiffFile + LoadDiff = 2 effects
-    assert_eq!(metrics.effect_count, 2);
+    // SelectDiff now emits one lightweight selected-diff intent and lets
+    // effect scheduling expand it to the same file+patch reload work.
+    assert_eq!(metrics.effect_count, 1);
     assert_eq!(metrics.load_diff_effect_count, 1);
     assert_eq!(metrics.load_diff_file_effect_count, 1);
     assert_eq!(metrics.load_diff_file_image_effect_count, 0);
@@ -926,8 +927,7 @@ fn status_select_diff_open_staged_produces_expected_effects() {
     let fixture = StatusSelectDiffOpenFixture::staged(500);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
-    // SelectDiff for a .toml file should produce LoadDiffFile + LoadDiff = 2 effects
-    assert_eq!(metrics.effect_count, 2);
+    assert_eq!(metrics.effect_count, 1);
     assert_eq!(metrics.load_diff_effect_count, 1);
     assert_eq!(metrics.load_diff_file_effect_count, 1);
     assert_eq!(metrics.load_diff_file_image_effect_count, 0);
@@ -1244,6 +1244,19 @@ fn text_input_wrap_incremental_tabs_fixture_matches_full_recompute() {
 }
 
 #[test]
+fn text_input_wrap_incremental_tabs_fixture_matches_full_recompute_after_revisiting_lines() {
+    let mut full = TextInputWrapIncrementalTabsFixture::new(3, 96, 680);
+    let mut incremental = TextInputWrapIncrementalTabsFixture::new(3, 96, 680);
+    for step in 0..384usize {
+        let line_ix = step % 3;
+        let full_hash = full.run_full_recompute_step(line_ix);
+        let incremental_hash = incremental.run_incremental_step(line_ix);
+        assert_eq!(full_hash, incremental_hash);
+    }
+    assert_eq!(full.row_counts(), incremental.row_counts());
+}
+
+#[test]
 fn text_input_wrap_incremental_tabs_fixture_reports_expected_sidecar_metrics() {
     let mut full_fixture = TextInputWrapIncrementalTabsFixture::new(512, 96, 680);
     let full_hash_without_metrics = full_fixture.run_full_recompute_step(0);
@@ -1306,6 +1319,7 @@ fn text_input_wrap_incremental_burst_edits_fixture_reports_expected_sidecar_metr
     assert_eq!(full_metrics.total_lines, 768);
     assert_eq!(full_metrics.edits_per_burst, 12);
     assert_eq!(full_metrics.wrap_columns, 92);
+    assert_eq!(full_metrics.total_dirty_lines, 12);
     assert_eq!(full_metrics.recomputed_lines, 768 * 12);
     assert_eq!(full_metrics.incremental_patch, 0);
 
@@ -1320,6 +1334,8 @@ fn text_input_wrap_incremental_burst_edits_fixture_reports_expected_sidecar_metr
     assert_eq!(incremental_metrics.total_lines, 768);
     assert_eq!(incremental_metrics.edits_per_burst, 12);
     assert_eq!(incremental_metrics.wrap_columns, 92);
+    assert_eq!(incremental_metrics.total_dirty_lines, 12);
+    assert_eq!(incremental_metrics.recomputed_lines, 12);
     assert_eq!(incremental_metrics.incremental_patch, 1);
 
     // Both variants should agree on total_rows_after and total_dirty_lines
@@ -2513,10 +2529,12 @@ fn branch_sidebar_cache_single_ref_change_rebuilds_when_branch_rows_change() {
     fixture.run_cached();
     fixture.reset_metrics();
 
-    let Loadable::Ready(branches) = &mut fixture.repo.branches else {
+    let Loadable::Ready(branches) = &fixture.repo.branches else {
         panic!("expected ready branches");
     };
-    Arc::make_mut(branches)[0].name.push_str("-renamed");
+    let mut next_branches = branches.as_ref().clone();
+    next_branches[0].name.push_str("-renamed");
+    fixture.repo.branches = Loadable::Ready(Arc::new(next_branches));
     fixture.repo.branches_rev = fixture.repo.branches_rev.wrapping_add(1);
     fixture.repo.branch_sidebar_rev = fixture.repo.branch_sidebar_rev.wrapping_add(1);
 
@@ -2943,6 +2961,14 @@ fn repo_switch_during_scroll_reports_expected_metrics() {
     assert_eq!(metrics.scroll_frames, 28);
     assert!(stats.frame_count >= 30);
     assert!(stats.p50_frame_ns > 0);
+}
+
+#[test]
+fn repo_switch_during_scroll_is_deterministic() {
+    let fixture = RepoSwitchDuringScrollFixture::new(1_000, 10, 30, 60, 12, 30, 10, 16_666_667);
+    let h1 = fixture.run();
+    let h2 = fixture.run();
+    assert_eq!(h1, h2);
 }
 
 // ---------------------------------------------------------------------------

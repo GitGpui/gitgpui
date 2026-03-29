@@ -1571,7 +1571,7 @@ impl DetailsPaneView {
         let theme = this.theme;
         let repo_id = repo.id;
         let has_active_menu = this.active_context_menu_invoker.is_some();
-        let path_labels = this.cached_commit_file_path_labels(
+        let file_rows = this.cached_commit_file_rows(
             repo_id,
             repo.history_state.commit_details_rev,
             &details.files,
@@ -1582,12 +1582,11 @@ impl DetailsPaneView {
                 details
                     .files
                     .get(ix)
-                    .zip(path_labels.get(ix))
-                    .map(|(f, path_label)| (ix, f, path_label.clone()))
+                    .zip(file_rows.get(ix))
+                    .map(|(f, row)| (ix, f, row.label.clone(), row.visuals))
             })
-            .map(|(ix, f, path_label)| {
+            .map(|(ix, f, path_label, visuals)| {
                 let commit_id = details.id.clone();
-                let visuals = commit_file_kind_visuals(f.kind);
                 let icon = Some(visuals.icon);
                 let color = visuals.color(&theme);
 
@@ -1653,7 +1652,7 @@ impl DetailsPaneView {
                             .text_sm()
                             .line_clamp(1)
                             .whitespace_nowrap()
-                            .child(path_label.clone()),
+                            .child(path_label),
                     )
                     .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         this.store.dispatch(Msg::SelectDiff {

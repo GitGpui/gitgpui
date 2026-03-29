@@ -2,6 +2,7 @@ use crate::theme::{AppTheme, GRAPH_LANE_PALETTE_SIZE};
 use gitcomet_core::domain::{Commit, CommitId};
 use gpui::Rgba;
 use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use smallvec::SmallVec;
 use std::sync::OnceLock;
 
@@ -110,6 +111,13 @@ pub fn lane_color(theme: AppTheme, color_ix: LaneColorIx) -> Rgba {
     lane_color_palette(theme.is_dark)[usize::from(color_ix)]
 }
 
+#[inline]
+fn single_lane_paints(lane: LanePaint) -> LanePaints {
+    let mut lanes = LanePaints::new();
+    lanes.push(lane);
+    lanes
+}
+
 fn compute_linear_visible_history_fast_path<C: GraphCommitLike>(
     commits: &[C],
     has_branch_heads: bool,
@@ -123,17 +131,6 @@ fn compute_linear_visible_history_fast_path<C: GraphCommitLike>(
         return None;
     }
     if active_head_target.is_some_and(|target| target != first_commit.id_str()) {
-        return None;
-    }
-    if commits.windows(2).any(|pair| {
-        pair[0].parent_ids().len() != 1 || pair[0].parent_ids()[0].as_ref() != pair[1].id_str()
-    }) {
-        return None;
-    }
-    if commits
-        .last()
-        .is_some_and(|commit| commit.parent_ids().len() > 1)
-    {
         return None;
     }
 
@@ -152,24 +149,36 @@ fn compute_linear_visible_history_fast_path<C: GraphCommitLike>(
         incoming: false,
         from_col: Some(0),
     };
-    let mut rows = Vec::with_capacity(commits.len());
 
-    for ix in 0..commits.len() {
-        let mut lanes_now = LanePaints::with_capacity(1);
-        lanes_now.push(if ix == 0 {
-            first_row_lane
-        } else {
-            continuing_lane
+    if commits.len() == 1 {
+        return (first_commit.parent_ids().len() <= 1).then(|| {
+            vec![GraphRow {
+                lanes_now: single_lane_paints(first_row_lane),
+                lanes_next: LanePaints::new(),
+                joins_in: GraphEdges::new(),
+                edges_out: GraphEdges::new(),
+                node_col: 0,
+                is_merge: false,
+            }]
         });
+    }
 
-        let mut lanes_next = LanePaints::new();
-        if ix + 1 < commits.len() {
-            lanes_next.push(next_lane);
+    let mut rows = Vec::with_capacity(commits.len());
+    for ix in 0..(commits.len() - 1) {
+        let commit = &commits[ix];
+        let next_commit = &commits[ix + 1];
+        let parent_ids = commit.parent_ids();
+        if parent_ids.len() != 1 || parent_ids[0].as_ref() != next_commit.id_str() {
+            return None;
         }
 
         rows.push(GraphRow {
-            lanes_now,
-            lanes_next,
+            lanes_now: single_lane_paints(if ix == 0 {
+                first_row_lane
+            } else {
+                continuing_lane
+            }),
+            lanes_next: single_lane_paints(next_lane),
             joins_in: GraphEdges::new(),
             edges_out: GraphEdges::new(),
             node_col: 0,
@@ -177,6 +186,18 @@ fn compute_linear_visible_history_fast_path<C: GraphCommitLike>(
         });
     }
 
+    if commits[commits.len() - 1].parent_ids().len() > 1 {
+        return None;
+    }
+
+    rows.push(GraphRow {
+        lanes_now: single_lane_paints(continuing_lane),
+        lanes_next: LanePaints::new(),
+        joins_in: GraphEdges::new(),
+        edges_out: GraphEdges::new(),
+        node_col: 0,
+        is_merge: false,
+    });
     Some(rows)
 }
 
@@ -190,27 +211,66 @@ where
     C: GraphCommitLike,
     I: IntoIterator<Item = &'a str>,
 {
-    let mut branch_heads = branch_heads.into_iter();
-    let first_branch_head = branch_heads.next();
-    let has_branch_heads = first_branch_head.is_some();
+    let branch_heads: SmallVec<[&str; 8]> = branch_heads.into_iter().collect();
+    let has_branch_heads = !branch_heads.is_empty();
     if let Some(graph) =
         compute_linear_visible_history_fast_path(commits, has_branch_heads, active_head_target)
     {
         return graph;
     }
 
-    let mut id_to_index: HashMap<&str, usize> =
-        HashMap::with_capacity_and_hasher(commits.len(), Default::default());
-    for (ix, commit) in commits.iter().enumerate() {
-        id_to_index.insert(commit.id_str(), ix);
+    let mut required_lookup_ids: HashSet<&str> = HashSet::with_capacity_and_hasher(
+        branch_heads.len() + usize::from(active_head_target.is_some()) + commits.len().min(256),
+        Default::default(),
+    );
+    if let Some(target) = active_head_target {
+        required_lookup_ids.insert(target);
     }
+    if has_branch_heads {
+        required_lookup_ids.extend(branch_heads.iter().copied());
+    }
+    for (commit_ix, commit) in commits.iter().enumerate() {
+        let parent_ids = commit.parent_ids();
+        if let Some(first_parent) = parent_ids.first() {
+            let next_ix = commit_ix + 1;
+            if next_ix >= commits.len() || commits[next_ix].id_str() != first_parent.as_ref() {
+                required_lookup_ids.insert(first_parent.as_ref());
+            }
+        }
+        for parent in parent_ids.iter().skip(1) {
+            required_lookup_ids.insert(parent.as_ref());
+        }
+    }
+
+    let id_to_index: HashMap<&str, usize> = if required_lookup_ids.is_empty() {
+        HashMap::default()
+    } else if required_lookup_ids.len().saturating_mul(2) < commits.len() {
+        let mut id_to_index =
+            HashMap::with_capacity_and_hasher(required_lookup_ids.len(), Default::default());
+        for (ix, commit) in commits.iter().enumerate() {
+            let id = commit.id_str();
+            if required_lookup_ids.remove(id) {
+                id_to_index.insert(id, ix);
+                if required_lookup_ids.is_empty() {
+                    break;
+                }
+            }
+        }
+        id_to_index
+    } else {
+        let mut id_to_index = HashMap::with_capacity_and_hasher(commits.len(), Default::default());
+        for (ix, commit) in commits.iter().enumerate() {
+            id_to_index.insert(commit.id_str(), ix);
+        }
+        id_to_index
+    };
     let main_target_ix = active_head_target
         .and_then(|id| id_to_index.get(id).copied())
         .or_else(|| (!commits.is_empty()).then_some(0));
     let mut branch_head_mask = Vec::new();
     if has_branch_heads {
         branch_head_mask.resize(commits.len(), false);
-        for branch_head in first_branch_head.into_iter().chain(branch_heads) {
+        for branch_head in branch_heads.iter().copied() {
             if let Some(&ix) = id_to_index.get(branch_head) {
                 branch_head_mask[ix] = true;
             }
@@ -273,7 +333,7 @@ where
             } else {
                 id_to_index.get(parent.as_ref()).copied()
             };
-            if let Some(parent_ix) = parent_ix {
+            if let Some(parent_ix) = parent_ix.filter(|&parent_ix| parent_ix > commit_ix) {
                 parent_ixs.push(parent_ix);
             }
         }
@@ -317,28 +377,35 @@ where
 
         let keep_main_lane_as_node = force_branch_head_lane && only_hit_is_main_lane;
         let mut swap_node_into_col: Option<usize> = None;
+        let mut row_only_branch_head_color_ix: Option<LaneColorIx> = None;
         if force_branch_head_lane {
-            let id = LaneId(next_id);
-            next_id += 1;
             let color_ix = pick_lane_color_ix(&lanes);
-            if !keep_main_lane_as_node {
+            if keep_main_lane_as_node {
+                // This split lane exists only to draw the branch-head fork on the current row.
+                // The main lane still owns the node and remains the only continuation below it.
+                row_only_branch_head_color_ix = Some(color_ix);
+            } else {
+                let id = LaneId(next_id);
+                next_id += 1;
                 swap_node_into_col = Some(node_col);
                 node_col = lanes.len();
+                lanes.push(LaneState {
+                    id,
+                    color_ix,
+                    target_ix: commit_ix,
+                    prev_col: None,
+                });
+                hits.push(lanes.len() - 1);
             }
-            lanes.push(LaneState {
-                id,
-                color_ix,
-                target_ix: commit_ix,
-                prev_col: None,
-            });
-            hits.push(lanes.len() - 1);
         }
 
         // Snapshot of lanes used for drawing this row.  The `incoming` flag on
         // each lane replaces the former separate `incoming_mask` Vec, saving one
         // heap allocation per row.
         let suppress_main_incoming = seeded_main_lane_pending && main_target_ix == Some(commit_ix);
-        let mut lanes_now = LanePaints::with_capacity(lanes.len());
+        let mut lanes_now = LanePaints::with_capacity(
+            lanes.len() + usize::from(row_only_branch_head_color_ix.is_some()),
+        );
         for (col, lane) in lanes.iter_mut().enumerate() {
             lane.prev_col = (col < incoming_lane_count).then(|| lane_col(col));
             let incoming = lane.prev_col.is_some()
@@ -346,6 +413,13 @@ where
             lanes_now.push(LanePaint {
                 color_ix: lane.color_ix,
                 incoming,
+                from_col: None,
+            });
+        }
+        if let Some(color_ix) = row_only_branch_head_color_ix {
+            lanes_now.push(LanePaint {
+                color_ix,
+                incoming: false,
                 from_col: None,
             });
         }
@@ -358,12 +432,21 @@ where
         node_col = hits.first().copied().unwrap_or(node_col);
 
         // Incoming join edges: other lanes that were targeting this commit join into the node.
-        let mut joins_in = GraphEdges::with_capacity(hits.len().saturating_sub(1));
+        let mut joins_in = GraphEdges::with_capacity(
+            hits.len().saturating_sub(1) + usize::from(row_only_branch_head_color_ix.is_some()),
+        );
         for &col in hits.iter().skip(1) {
             joins_in.push(GraphEdge {
                 from_col: lane_col(col),
                 to_col: lane_col(node_col),
                 color_ix: lanes[col].color_ix,
+            });
+        }
+        if let Some(color_ix) = row_only_branch_head_color_ix {
+            joins_in.push(GraphEdge {
+                from_col: lane_col(lanes.len()),
+                to_col: lane_col(node_col),
+                color_ix,
             });
         }
 
@@ -644,6 +727,19 @@ mod tests {
         assert_eq!(merge_row.lanes_next[0].from_col, Some(0));
         assert_eq!(merge_row.lanes_next[1].from_col, None);
         assert!(merge_row.edges_out.is_empty());
+    }
+
+    #[test]
+    fn parents_above_the_current_row_do_not_leave_dead_lanes() {
+        let theme = AppTheme::zed_ayu_dark();
+        let commits = vec![commit("base", Vec::new()), commit("tip", vec!["base"])];
+
+        let graph = compute_graph(&commits, theme, std::iter::empty::<&str>(), None);
+
+        assert_eq!(graph.len(), 2);
+        assert_eq!(graph[1].lanes_now.len(), 1);
+        assert!(graph[1].lanes_next.is_empty());
+        assert!(graph[1].edges_out.is_empty());
     }
 
     #[test]

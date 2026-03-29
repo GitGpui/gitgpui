@@ -931,7 +931,7 @@ where
     let total_rows = total_rows.max(window_rows);
     let max_start = total_rows.saturating_sub(window_rows);
 
-    let mut capture = FrameTimingCapture::new(frame_budget_ns.max(1));
+    let mut capture = FrameTimingCapture::with_expected_frames(frame_budget_ns.max(1), frames);
     let mut hash = 0u64;
     let mut start = 0usize;
 
@@ -1424,7 +1424,7 @@ fn bench_repo_switch(c: &mut Criterion) {
             for _ in 0..iters {
                 let mut state = refocus_same_repo.fresh_state();
                 let started_at = Instant::now();
-                let _ = refocus_same_repo.run_with_state(&mut state);
+                let _ = refocus_same_repo.run_with_state_hash_only(&mut state);
                 elapsed += started_at.elapsed();
             }
             let mut sidecar_state = refocus_same_repo.fresh_state();
@@ -1442,7 +1442,7 @@ fn bench_repo_switch(c: &mut Criterion) {
             for _ in 0..iters {
                 let mut state = two_hot_repos.fresh_state();
                 let started_at = Instant::now();
-                let _ = two_hot_repos.run_with_state(&mut state);
+                let _ = two_hot_repos.run_with_state_hash_only(&mut state);
                 elapsed += started_at.elapsed();
             }
             let mut sidecar_state = two_hot_repos.fresh_state();
@@ -1461,7 +1461,7 @@ fn bench_repo_switch(c: &mut Criterion) {
                 for _ in 0..iters {
                     let mut state = selected_commit_and_details.fresh_state();
                     let started_at = Instant::now();
-                    let _ = selected_commit_and_details.run_with_state(&mut state);
+                    let _ = selected_commit_and_details.run_with_state_hash_only(&mut state);
                     elapsed += started_at.elapsed();
                 }
                 let mut sidecar_state = selected_commit_and_details.fresh_state();
@@ -1480,7 +1480,7 @@ fn bench_repo_switch(c: &mut Criterion) {
             for _ in 0..iters {
                 let mut state = twenty_tabs.fresh_state();
                 let started_at = Instant::now();
-                let _ = twenty_tabs.run_with_state(&mut state);
+                let _ = twenty_tabs.run_with_state_hash_only(&mut state);
                 elapsed += started_at.elapsed();
             }
             let mut sidecar_state = twenty_tabs.fresh_state();
@@ -1497,7 +1497,7 @@ fn bench_repo_switch(c: &mut Criterion) {
             for _ in 0..iters {
                 let mut state = twenty_repos_all_hot.fresh_state();
                 let started_at = Instant::now();
-                let _ = twenty_repos_all_hot.run_with_state(&mut state);
+                let _ = twenty_repos_all_hot.run_with_state_hash_only(&mut state);
                 elapsed += started_at.elapsed();
             }
             let mut sidecar_state = twenty_repos_all_hot.fresh_state();
@@ -1515,7 +1515,7 @@ fn bench_repo_switch(c: &mut Criterion) {
             for _ in 0..iters {
                 let mut state = selected_diff_file.fresh_state();
                 let started_at = Instant::now();
-                let _ = selected_diff_file.run_with_state(&mut state);
+                let _ = selected_diff_file.run_with_state_hash_only(&mut state);
                 elapsed += started_at.elapsed();
             }
             let mut sidecar_state = selected_diff_file.fresh_state();
@@ -1535,7 +1535,7 @@ fn bench_repo_switch(c: &mut Criterion) {
                 for _ in 0..iters {
                     let mut state = selected_conflict_target.fresh_state();
                     let started_at = Instant::now();
-                    let _ = selected_conflict_target.run_with_state(&mut state);
+                    let _ = selected_conflict_target.run_with_state_hash_only(&mut state);
                     elapsed += started_at.elapsed();
                 }
                 let mut sidecar_state = selected_conflict_target.fresh_state();
@@ -1556,7 +1556,7 @@ fn bench_repo_switch(c: &mut Criterion) {
                 for _ in 0..iters {
                     let mut state = merge_active_with_draft_restore.fresh_state();
                     let started_at = Instant::now();
-                    let _ = merge_active_with_draft_restore.run_with_state(&mut state);
+                    let _ = merge_active_with_draft_restore.run_with_state_hash_only(&mut state);
                     elapsed += started_at.elapsed();
                 }
                 let mut sidecar_state = merge_active_with_draft_restore.fresh_state();

@@ -48,12 +48,10 @@ impl MainPaneView {
         key: usize,
         query: &str,
         syntax_epoch: u64,
-    ) -> Option<CachedDiffStyledText> {
+    ) -> Option<&CachedDiffStyledText> {
         let query = query.trim();
         if query.is_empty() {
-            return self
-                .diff_text_segments_cache_get(key, syntax_epoch)
-                .cloned();
+            return self.diff_text_segments_cache_get(key, syntax_epoch);
         }
 
         self.sync_diff_text_query_overlay_cache(query);
@@ -90,7 +88,6 @@ impl MainPaneView {
             syntax_epoch,
             query_generation,
         )
-        .cloned()
     }
 
     pub(in super::super) fn render_diff_rows(
@@ -174,12 +171,11 @@ impl MainPaneView {
                         this.diff_text_segments_cache_set(inline_ix, cache_epoch, styled);
                     }
 
-                    let cached_styled = this.diff_text_segments_cache_get_for_query(
+                    let styled = this.diff_text_segments_cache_get_for_query(
                         inline_ix,
                         query.as_ref(),
                         cache_epoch,
                     );
-                    let styled = cached_styled.as_ref();
                     debug_assert!(
                         styled.is_some(),
                         "diff text segment cache missing for inline row {inline_ix} after populate"
@@ -272,16 +268,6 @@ impl MainPaneView {
                     this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                 }
 
-                let styled = should_style
-                    .then(|| {
-                        this.diff_text_segments_cache_get_for_query(
-                            src_ix,
-                            query.as_ref(),
-                            cache_epoch,
-                        )
-                    })
-                    .flatten();
-
                 let Some(line) = this.patch_diff_row(src_ix) else {
                     return diff_placeholder_row(("diff_oob", visible_ix), theme);
                 };
@@ -298,6 +284,11 @@ impl MainPaneView {
                             format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                         active_context_menu_invoker.as_ref() == Some(&invoker)
                     });
+                let styled = if should_style {
+                    this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref(), cache_epoch)
+                } else {
+                    None
+                };
                 diff_row(
                     theme,
                     visible_ix,
@@ -308,7 +299,7 @@ impl MainPaneView {
                     &line,
                     file_stat,
                     header_display,
-                    styled.as_ref(),
+                    styled,
                     context_menu_active,
                     cx,
                 )
@@ -445,18 +436,19 @@ impl MainPaneView {
                     } else {
                         row.new.is_some()
                     };
-                    let cached_styled = if row_has_content {
-                        key.and_then(|k| {
+                    let styled = if row_has_content {
+                        if let Some(key) = key {
                             this.diff_text_segments_cache_get_for_query(
-                                k,
+                                key,
                                 query.as_ref(),
                                 cache_epoch,
                             )
-                        })
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     };
-                    let styled = cached_styled.as_ref();
                     debug_assert!(
                         !row_has_content || key.is_none() || styled.is_some(),
                         "diff text segment cache missing for split-{column:?} row {row_ix} after populate"
@@ -533,23 +525,18 @@ impl MainPaneView {
                             this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                         }
 
-                        let styled = src_ix.and_then(|src_ix| {
+                        let styled = if let Some(src_ix) = src_ix {
                             this.diff_text_segments_cache_get_for_query(
                                 src_ix,
                                 query.as_ref(),
                                 cache_epoch,
                             )
-                        });
+                        } else {
+                            None
+                        };
 
                         patch_split_column_row(
-                            theme,
-                            column,
-                            visible_ix,
-                            selected,
-                            min_width,
-                            &row,
-                            styled.as_ref(),
-                            cx,
+                            theme, column, visible_ix, selected, min_width, &row, styled, cx,
                         )
                     }
                     PatchSplitRow::Raw { src_ix, click_kind } => {
@@ -575,15 +562,6 @@ impl MainPaneView {
                             );
                             this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                         }
-                        let styled = should_style
-                            .then(|| {
-                                this.diff_text_segments_cache_get_for_query(
-                                    src_ix,
-                                    query.as_ref(),
-                                    cache_epoch,
-                                )
-                            })
-                            .flatten();
                         let Some(line) = this.patch_diff_row(src_ix) else {
                             return diff_placeholder_row((id_src_oob, visible_ix), theme);
                         };
@@ -599,6 +577,16 @@ impl MainPaneView {
                                     format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                                 this.active_context_menu_invoker.as_ref() == Some(&invoker)
                             });
+                        let header_display = this.diff_header_display_cache.get(&src_ix).cloned();
+                        let styled = if should_style {
+                            this.diff_text_segments_cache_get_for_query(
+                                src_ix,
+                                query.as_ref(),
+                                cache_epoch,
+                            )
+                        } else {
+                            None
+                        };
                         patch_split_header_row(
                             theme,
                             column,
@@ -608,8 +596,8 @@ impl MainPaneView {
                             min_width,
                             &line,
                             file_stat,
-                            this.diff_header_display_cache.get(&src_ix).cloned(),
-                            styled.as_ref(),
+                            header_display,
+                            styled,
                             context_menu_active,
                             cx,
                         )
@@ -645,7 +633,8 @@ fn diff_row(
     });
 
     if matches!(click_kind, DiffClickKind::FileHeader) {
-        let file = header_display.unwrap_or_else(|| line.text.clone().into());
+        let file =
+            header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
         let mut row = div()
             .id(("diff_file_hdr", visible_ix))
             .h(px(28.0))
@@ -686,7 +675,8 @@ fn diff_row(
     }
 
     if matches!(click_kind, DiffClickKind::HunkHeader) {
-        let display = header_display.unwrap_or_else(|| line.text.clone().into());
+        let display =
+            header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
 
         let mut row = div()
             .id(("diff_hunk_hdr", visible_ix))
@@ -890,7 +880,8 @@ fn patch_split_header_row(
 
     match click_kind {
         DiffClickKind::FileHeader => {
-            let display = header_display.unwrap_or_else(|| line.text.clone().into());
+            let display =
+                header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
             let mut row = div()
                 .id((
                     match column {
@@ -936,7 +927,8 @@ fn patch_split_header_row(
             row.into_any_element()
         }
         DiffClickKind::HunkHeader => {
-            let display = header_display.unwrap_or_else(|| line.text.clone().into());
+            let display =
+                header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
 
             let mut row = div()
                 .id((
@@ -1060,7 +1052,7 @@ fn patch_split_meta_row(
             DiffClickKind::Line,
             fg,
             None,
-            line.text.clone().into(),
+            SharedString::from(line.text.as_ref().to_owned()),
             cx,
         ))
         .on_click(on_click);

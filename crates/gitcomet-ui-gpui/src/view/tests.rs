@@ -55,6 +55,33 @@ fn toast_total_lifetime_includes_fade_in_and_out() {
 }
 
 #[test]
+fn next_pane_resize_drag_width_recomputes_bounds_when_window_changes() {
+    let state = PaneResizeState::new(
+        PaneResizeHandle::Sidebar,
+        px(0.0),
+        px(280.0),
+        px(420.0),
+        px(1280.0),
+        false,
+        false,
+    );
+    let current_x = px(320.0);
+    let total_w = px(900.0);
+    let width = next_pane_resize_drag_width(&state, current_x, total_w, false, false);
+    let (min_width, max_width) = pane_resize_drag_width_bounds(
+        PaneResizeHandle::Sidebar,
+        px(280.0),
+        px(420.0),
+        total_w,
+        false,
+        false,
+    );
+    let expected = (px(280.0) + current_x).max(min_width).min(max_width);
+
+    assert_eq!(width, expected);
+}
+
+#[test]
 fn restore_session_mode_does_not_seed_empty_session_from_initial_repository() {
     assert!(!should_seed_initial_repository_from_session(
         GitCometViewMode::Normal,
@@ -114,9 +141,11 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
         unstaged: vec![a.clone(), b.clone()],
         unstaged_anchor: Some(b),
         unstaged_anchor_index: None,
+        unstaged_anchor_status_rev: None,
         staged: vec![c.clone()],
         staged_anchor: Some(c),
         staged_anchor_index: None,
+        staged_anchor_status_rev: None,
     };
 
     reconcile_status_multi_selection(&mut selection, &status);

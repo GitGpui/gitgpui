@@ -1,5 +1,6 @@
 use gpui::SharedString;
 use memchr::memchr_iter;
+use std::borrow::Cow;
 use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -468,6 +469,86 @@ impl TextModelSnapshot {
         self.core.line_index.shared_starts()
     }
 
+    fn clamp_offset_to_char_boundary(&self, mut offset: usize) -> usize {
+        offset = offset.min(self.len());
+        while offset > 0 && !self.is_char_boundary(offset) {
+            offset = offset.saturating_sub(1);
+        }
+        offset
+    }
+
+    fn normalized_char_range(&self, range: Range<usize>) -> Range<usize> {
+        let start = self.clamp_offset_to_char_boundary(range.start.min(self.len()));
+        let end = self.clamp_offset_to_char_boundary(range.end.min(self.len()));
+        if end < start { end..start } else { start..end }
+    }
+
+    fn borrowed_slice_for_range(&self, range: Range<usize>) -> Option<&str> {
+        if range.is_empty() {
+            return Some("");
+        }
+
+        if let Some(text) = self.core.materialized.get() {
+            return Some(&text[range]);
+        }
+
+        let mut cursor = 0usize;
+        for piece in &self.core.pieces {
+            let piece_start = cursor;
+            let piece_end = cursor.saturating_add(piece.len);
+            if piece_end <= range.start {
+                cursor = piece_end;
+                continue;
+            }
+            if range.end <= piece_end {
+                let local_start = range.start.saturating_sub(piece_start);
+                let local_end = range.end.saturating_sub(piece_start);
+                let chunk = self.core.chunk_for_piece(piece);
+                let chunk_start = piece.start.saturating_add(local_start);
+                let chunk_end = piece.start.saturating_add(local_end);
+                return chunk.get(chunk_start..chunk_end);
+            }
+            break;
+        }
+        None
+    }
+
+    fn collect_range_to_string(&self, range: Range<usize>) -> String {
+        let mut out = String::with_capacity(range.end.saturating_sub(range.start));
+        let mut cursor = 0usize;
+        for piece in &self.core.pieces {
+            let piece_start = cursor;
+            let piece_end = cursor.saturating_add(piece.len);
+            if piece_end <= range.start {
+                cursor = piece_end;
+                continue;
+            }
+            if piece_start >= range.end {
+                break;
+            }
+
+            let local_start = range.start.saturating_sub(piece_start);
+            let local_end = range.end.min(piece_end).saturating_sub(piece_start);
+            if local_start < local_end {
+                let chunk = self.core.chunk_for_piece(piece);
+                let chunk_start = piece.start.saturating_add(local_start);
+                let chunk_end = piece.start.saturating_add(local_end);
+                if let Some(slice) = chunk.get(chunk_start..chunk_end) {
+                    out.push_str(slice);
+                }
+            }
+            cursor = piece_end;
+        }
+        out
+    }
+
+    pub fn slice(&self, range: Range<usize>) -> Cow<'_, str> {
+        let range = self.normalized_char_range(range);
+        self.borrowed_slice_for_range(range.clone())
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned(self.collect_range_to_string(range)))
+    }
+
     pub fn is_char_boundary(&self, offset: usize) -> bool {
         if offset == 0 || offset == self.core.len {
             return true;
@@ -500,54 +581,13 @@ impl TextModelSnapshot {
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
-    pub fn clamp_to_char_boundary(&self, mut offset: usize) -> usize {
-        offset = offset.min(self.len());
-        while offset > 0 && !self.is_char_boundary(offset) {
-            offset = offset.saturating_sub(1);
-        }
-        offset
+    pub fn clamp_to_char_boundary(&self, offset: usize) -> usize {
+        self.clamp_offset_to_char_boundary(offset)
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn slice_to_string(&self, range: Range<usize>) -> String {
-        let start = self.clamp_to_char_boundary(range.start.min(self.len()));
-        let end = self.clamp_to_char_boundary(range.end.min(self.len()));
-        let range = if end < start { end..start } else { start..end };
-        if range.is_empty() {
-            return String::new();
-        }
-
-        // Fast path: if the text is already materialized, slice directly.
-        if let Some(text) = self.core.materialized.get() {
-            return text[range].to_string();
-        }
-
-        let mut out = String::with_capacity(range.end.saturating_sub(range.start));
-        let mut cursor = 0usize;
-        for piece in &self.core.pieces {
-            let piece_start = cursor;
-            let piece_end = cursor.saturating_add(piece.len);
-            if piece_end <= range.start {
-                cursor = piece_end;
-                continue;
-            }
-            if piece_start >= range.end {
-                break;
-            }
-
-            let local_start = range.start.saturating_sub(piece_start);
-            let local_end = range.end.min(piece_end).saturating_sub(piece_start);
-            if local_start < local_end {
-                let chunk = self.core.chunk_for_piece(piece);
-                let chunk_start = piece.start.saturating_add(local_start);
-                let chunk_end = piece.start.saturating_add(local_end);
-                if let Some(slice) = chunk.get(chunk_start..chunk_end) {
-                    out.push_str(slice);
-                }
-            }
-            cursor = piece_end;
-        }
-        out
+        self.slice(range).into_owned()
     }
 }
 
@@ -834,6 +874,34 @@ mod tests {
         );
         assert_eq!(old_starts.as_ref(), &[0, 6, 11]);
         assert_eq!(new_starts.as_ref(), &[0, 6, 11, 17]);
+    }
+
+    #[test]
+    fn snapshot_slice_borrows_single_piece_ranges_without_materializing() {
+        let text = "a".repeat(LARGE_TEXT_CHUNK_BYTES + 32);
+        let snapshot = TextModel::from_large_text(text.as_str()).snapshot();
+
+        assert!(snapshot.core.materialized.get().is_none());
+        assert_eq!(snapshot.clamp_to_char_boundary(96), 96);
+        let prefix = snapshot.slice(0..96);
+
+        assert!(matches!(prefix, Cow::Borrowed(_)));
+        assert_eq!(prefix.as_ref(), &text[..96]);
+        assert!(snapshot.core.materialized.get().is_none());
+    }
+
+    #[test]
+    fn snapshot_slice_allocates_across_piece_boundaries_without_materializing() {
+        let text = "a".repeat(LARGE_TEXT_CHUNK_BYTES + 32);
+        let snapshot = TextModel::from_large_text(text.as_str()).snapshot();
+        let range = (LARGE_TEXT_CHUNK_BYTES - 8)..(LARGE_TEXT_CHUNK_BYTES + 8);
+
+        assert!(snapshot.core.materialized.get().is_none());
+        let slice = snapshot.slice(range.clone());
+
+        assert!(matches!(slice, Cow::Owned(_)));
+        assert_eq!(slice.as_ref(), &text[range]);
+        assert!(snapshot.core.materialized.get().is_none());
     }
 
     #[test]

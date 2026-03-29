@@ -1,3 +1,5 @@
+#[cfg(any(test, feature = "benchmarks"))]
+use smallvec::SmallVec;
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
@@ -301,12 +303,15 @@ fn row_stats(lane: ViewPerfRenderLane) -> &'static AtomicRowBatchStats {
 // Frame timing capture – Phase 0 benchmark infrastructure
 // ---------------------------------------------------------------------------
 
+#[cfg(any(test, feature = "benchmarks"))]
+type FrameTimingDurations = SmallVec<[u64; 256]>;
+
 /// Captures per-frame durations during a benchmark interaction loop and
 /// computes percentile statistics, dropped-frame counts, and budget violation
 /// rates.  Results can be emitted as sidecar JSON via [`FrameTimingStats::to_sidecar_metrics`].
 #[cfg(any(test, feature = "benchmarks"))]
 pub struct FrameTimingCapture {
-    frame_durations_ns: Vec<u64>,
+    frame_durations_ns: FrameTimingDurations,
     frame_budget_ns: u64,
     capture_start: Instant,
 }
@@ -317,8 +322,12 @@ impl FrameTimingCapture {
     pub const DEFAULT_FRAME_BUDGET_NS: u64 = 16_666_667;
 
     pub fn new(frame_budget_ns: u64) -> Self {
+        Self::with_expected_frames(frame_budget_ns, 0)
+    }
+
+    pub fn with_expected_frames(frame_budget_ns: u64, expected_frames: usize) -> Self {
         Self {
-            frame_durations_ns: Vec::new(),
+            frame_durations_ns: FrameTimingDurations::with_capacity(expected_frames),
             frame_budget_ns,
             capture_start: Instant::now(),
         }
@@ -349,7 +358,7 @@ impl FrameTimingCapture {
             .as_nanos()
             .min(u128::from(u64::MAX)) as u64;
         compute_frame_timing_stats(
-            &self.frame_durations_ns,
+            self.frame_durations_ns,
             self.frame_budget_ns,
             total_capture_ns,
         )
@@ -358,7 +367,7 @@ impl FrameTimingCapture {
     /// Finish with an explicit total duration (useful for deterministic tests).
     pub fn finish_with_duration(self, total_capture_ns: u64) -> FrameTimingStats {
         compute_frame_timing_stats(
-            &self.frame_durations_ns,
+            self.frame_durations_ns,
             self.frame_budget_ns,
             total_capture_ns,
         )
@@ -437,7 +446,7 @@ impl FrameTimingStats {
 
 #[cfg(any(test, feature = "benchmarks"))]
 fn compute_frame_timing_stats(
-    frame_durations_ns: &[u64],
+    mut frame_durations_ns: FrameTimingDurations,
     frame_budget_ns: u64,
     total_capture_ns: u64,
 ) -> FrameTimingStats {
@@ -455,16 +464,18 @@ fn compute_frame_timing_stats(
         };
     }
 
-    let mut sorted = frame_durations_ns.to_vec();
-    sorted.sort_unstable();
+    frame_durations_ns.sort_unstable();
 
-    let frame_count = sorted.len();
-    let p50_frame_ns = percentile_nearest_rank(&sorted, 50);
-    let p95_frame_ns = percentile_nearest_rank(&sorted, 95);
-    let p99_frame_ns = percentile_nearest_rank(&sorted, 99);
-    let max_frame_ns = sorted[frame_count - 1];
+    let frame_count = frame_durations_ns.len();
+    let p50_frame_ns = percentile_nearest_rank(&frame_durations_ns, 50);
+    let p95_frame_ns = percentile_nearest_rank(&frame_durations_ns, 95);
+    let p99_frame_ns = percentile_nearest_rank(&frame_durations_ns, 99);
+    let max_frame_ns = frame_durations_ns[frame_count - 1];
 
-    let dropped_frames = sorted.iter().filter(|&&d| d > frame_budget_ns).count();
+    let dropped_frames = frame_durations_ns
+        .iter()
+        .filter(|&&d| d > frame_budget_ns)
+        .count();
 
     let total_seconds = total_capture_ns as f64 / 1_000_000_000.0;
     let budget_violations_per_sec = if total_seconds > 0.0 {

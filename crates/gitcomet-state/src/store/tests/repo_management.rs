@@ -848,10 +848,9 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
-                target: DiffTarget::WorkingTree { path, .. },
                 load_file_text: true,
                 load_file_image: false,
-            } if *repo_id == repo1 && path == &PathBuf::from("src/lib.rs")
+            } if *repo_id == repo1
         )
     });
     let has_persist = effects
@@ -863,6 +862,17 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
     assert!(
         has_selected_diff_reload,
         "expected combined selected-diff reload on activation"
+    );
+    assert!(
+        matches!(
+            state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo1)
+                .and_then(|repo| repo.diff_state.diff_target.as_ref()),
+            Some(DiffTarget::WorkingTree { path, .. }) if path == &PathBuf::from("src/lib.rs")
+        ),
+        "expected the selected diff target to remain available on repo state for scheduling"
     );
     assert!(
         has_persist,
@@ -911,10 +921,9 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
         e,
         Effect::LoadSelectedDiff {
             repo_id,
-            target: DiffTarget::WorkingTree { path, .. },
             load_file_text: false,
             load_file_image: true,
-        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
+        } if *repo_id == repo1
     )));
 }
 
@@ -1090,11 +1099,10 @@ fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
     assert_eq!(repo1_state.conflict_state.conflict_rev, before_rev + 1);
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadConflictFile {
+        Effect::LoadSelectedConflictFile {
             repo_id,
-            path,
             mode: crate::model::ConflictFileLoadMode::CurrentOnly,
-        } if *repo_id == repo1 && path == &conflict_path
+        } if *repo_id == repo1
     )));
 }
 
@@ -1147,14 +1155,9 @@ fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
             .iter()
             .any(|effect| matches!(effect, Effect::LoadLog { repo_id, .. } if *repo_id == repo1))
     );
-    assert!(
-        effects.iter().any(
-            |effect| matches!(effect, Effect::LoadRebaseState { repo_id } if *repo_id == repo1)
-        )
-    );
     assert!(effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadMergeCommitMessage { repo_id } if *repo_id == repo1
+        Effect::LoadRebaseAndMergeState { repo_id } if *repo_id == repo1
     )));
 }
 
@@ -1365,8 +1368,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
             Effect::LoadRemoteTags { .. },
             Effect::LoadRemotes { .. },
             Effect::LoadRemoteBranches { .. },
-            Effect::LoadRebaseState { .. },
-            Effect::LoadMergeCommitMessage { .. },
+            Effect::LoadRebaseAndMergeState { .. },
         ]
     ));
 }

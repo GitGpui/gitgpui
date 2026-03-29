@@ -2,13 +2,14 @@ use super::{
     GixRepo,
     conflict_stages::{conflict_kind_from_stage_mask, gix_index_stage_blob_bytes_optional},
 };
-use crate::util::{git_command_failed_error, run_git_raw_output};
+use crate::util::{git_command_failed_error, run_git_parsed_stdout, run_git_raw_output};
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffTarget, FileConflictKind, FileDiffImage, FileDiffText,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{ConflictFileStages, Result, decode_utf8_optional};
+use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -58,8 +59,19 @@ impl GixRepo {
     }
 
     pub(super) fn diff_parsed_impl(&self, target: &DiffTarget) -> Result<Diff> {
-        let text = self.diff_unified_impl(target)?;
-        Ok(Diff::from_unified(target.clone(), &text))
+        let target = target.clone();
+        run_git_parsed_stdout(
+            self.build_unified_diff_command(&target),
+            "git diff",
+            true,
+            move |stdout| {
+                Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "git diff produced non-UTF-8 output: {err}"
+                    )))
+                })
+            },
+        )
     }
 
     pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {

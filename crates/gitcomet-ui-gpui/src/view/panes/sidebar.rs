@@ -1,9 +1,11 @@
 use super::super::caches::{
-    BranchSidebarFingerprint, branch_sidebar_cache_lookup, branch_sidebar_cache_lookup_by_source,
+    BranchSidebarFingerprint, branch_sidebar_cache_lookup,
+    branch_sidebar_cache_lookup_by_cached_source, branch_sidebar_cache_lookup_by_source,
     branch_sidebar_cache_store,
 };
 use super::super::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 pub(in super::super) struct SidebarPaneView {
     pub(in super::super) store: Arc<AppStore>,
@@ -165,37 +167,31 @@ impl SidebarPaneView {
 
     pub(in super::super) fn branch_sidebar_rows_cached(
         &mut self,
-    ) -> Option<Arc<[BranchSidebarRow]>> {
-        let repo = self.active_repo();
-        if repo.is_none() {
+    ) -> Option<Rc<[BranchSidebarRow]>> {
+        let Some(repo_id) = self.active_repo_id() else {
             self.branch_sidebar_cache = None;
             return None;
-        }
-
-        if let Some(repo) = repo {
-            let empty = BTreeSet::new();
-            let collapsed_items = self
-                .sidebar_collapsed_items_by_repo
-                .get(&repo.spec.workdir)
-                .unwrap_or(&empty);
-            let lazy_loads = pending_sidebar_lazy_loads(repo, collapsed_items);
-
-            if lazy_loads.worktrees {
-                self.store.dispatch(Msg::LoadWorktrees { repo_id: repo.id });
-            }
-            if lazy_loads.submodules {
-                self.store
-                    .dispatch(Msg::LoadSubmodules { repo_id: repo.id });
-            }
-            if lazy_loads.stashes {
-                self.store.dispatch(Msg::LoadStashes { repo_id: repo.id });
-            }
-        }
-
-        let (repo_id, fingerprint) = {
-            let repo = repo?;
-            (repo.id, BranchSidebarFingerprint::from_repo(repo))
         };
+        let repo = self.state.repos.iter().find(|repo| repo.id == repo_id)?;
+
+        let empty = BTreeSet::new();
+        let collapsed_items = self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo.spec.workdir)
+            .unwrap_or(&empty);
+        let lazy_loads = pending_sidebar_lazy_loads(repo, collapsed_items);
+
+        if lazy_loads.worktrees {
+            self.store.dispatch(Msg::LoadWorktrees { repo_id });
+        }
+        if lazy_loads.submodules {
+            self.store.dispatch(Msg::LoadSubmodules { repo_id });
+        }
+        if lazy_loads.stashes {
+            self.store.dispatch(Msg::LoadStashes { repo_id });
+        }
+
+        let fingerprint = BranchSidebarFingerprint::from_repo(repo);
 
         if let Some(rows) =
             branch_sidebar_cache_lookup(&mut self.branch_sidebar_cache, repo_id, fingerprint)
@@ -203,12 +199,19 @@ impl SidebarPaneView {
             return Some(rows);
         }
 
+        if let Some(rows) = branch_sidebar_cache_lookup_by_cached_source(
+            &mut self.branch_sidebar_cache,
+            repo,
+            fingerprint,
+        ) {
+            return Some(rows);
+        }
+
         let (source_fingerprint, source_parts) = {
-            let repo = self.active_repo()?;
             let cached_source_parts = self
                 .branch_sidebar_cache
                 .as_ref()
-                .filter(|cached| cached.repo_id == repo.id)
+                .filter(|cached| cached.repo_id == repo_id)
                 .map(|cached| &cached.source_parts);
             branch_sidebar::branch_sidebar_source_fingerprint(repo, cached_source_parts)
         };
@@ -223,15 +226,8 @@ impl SidebarPaneView {
             return Some(rows);
         }
 
-        let rows: Arc<[BranchSidebarRow]> = {
-            let repo = self.active_repo()?;
-            let empty = BTreeSet::new();
-            let collapsed_items = self
-                .sidebar_collapsed_items_by_repo
-                .get(&repo.spec.workdir)
-                .unwrap_or(&empty);
-            branch_sidebar::branch_sidebar_rows(repo, collapsed_items).into()
-        };
+        let rows: Rc<[BranchSidebarRow]> =
+            { branch_sidebar::branch_sidebar_rows(repo, collapsed_items).into() };
 
         branch_sidebar_cache_store(
             &mut self.branch_sidebar_cache,
@@ -239,7 +235,7 @@ impl SidebarPaneView {
             fingerprint,
             source_fingerprint,
             source_parts,
-            Arc::clone(&rows),
+            Rc::clone(&rows),
         );
         Some(rows)
     }

@@ -617,7 +617,10 @@ impl PopoverHost {
                     self.take_status_paths_for_action(repo_id, area, &path, cx);
                 if used_selection {
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::StagePaths { repo_id, paths });
+                    self.store.dispatch(Msg::StagePaths {
+                        repo_id,
+                        paths: paths.into(),
+                    });
                 } else {
                     self.store.dispatch(Msg::SelectDiff {
                         repo_id,
@@ -638,7 +641,10 @@ impl PopoverHost {
                     self.take_status_paths_for_action(repo_id, area, &path, cx);
                 if used_selection {
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::UnstagePaths { repo_id, paths });
+                    self.store.dispatch(Msg::UnstagePaths {
+                        repo_id,
+                        paths: paths.into(),
+                    });
                 } else {
                     self.store.dispatch(Msg::SelectDiff {
                         repo_id,

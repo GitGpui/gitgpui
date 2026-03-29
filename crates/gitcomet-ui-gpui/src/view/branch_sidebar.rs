@@ -1,5 +1,5 @@
 use super::*;
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashMap, FxHasher};
 use smallvec::SmallVec;
 use std::{
     cmp::Ordering,
@@ -15,6 +15,9 @@ const SUBMODULES_SECTION_KEY: &str = "section:submodules";
 const STASH_SECTION_KEY: &str = "section:stash";
 const EXPANDED_DEFAULT_SECTION_PREFIX: &str = "expanded:";
 const TRAILING_BOTTOM_SPACERS: usize = 3;
+const REMOTE_HEADER_GROUP_PREFIX: &str = "group:remote-header:";
+const LOCAL_GROUP_PREFIX: &str = "group:local:";
+const REMOTE_GROUP_PREFIX: &str = "group:remote:";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BranchSection {
@@ -45,15 +48,26 @@ pub(super) const fn stash_section_storage_key() -> &'static str {
 }
 
 pub(super) fn remote_header_storage_key(name: &str) -> String {
-    format!("group:remote-header:{name}")
+    let mut key = String::with_capacity(REMOTE_HEADER_GROUP_PREFIX.len() + name.len());
+    key.push_str(REMOTE_HEADER_GROUP_PREFIX);
+    key.push_str(name);
+    key
 }
 
 pub(super) fn local_group_storage_key(path: &str) -> String {
-    format!("group:local:{path}")
+    let mut key = String::with_capacity(LOCAL_GROUP_PREFIX.len() + path.len());
+    key.push_str(LOCAL_GROUP_PREFIX);
+    key.push_str(path);
+    key
 }
 
 pub(super) fn remote_group_storage_key(remote: &str, path: &str) -> String {
-    format!("group:remote:{remote}:{path}")
+    let mut key = String::with_capacity(REMOTE_GROUP_PREFIX.len() + remote.len() + 1 + path.len());
+    key.push_str(REMOTE_GROUP_PREFIX);
+    key.push_str(remote);
+    key.push(':');
+    key.push_str(path);
+    key
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -156,12 +170,35 @@ impl<'a> SlashTree<'a> {
 
     fn insert_with_leaf_meta_index(&mut self, name: &'a str, leaf_meta_index: Option<NonZeroU32>) {
         let mut node = self;
-        for part in name.split('/').filter(|part| !part.is_empty()) {
-            node = node.children.entry(part).or_default();
+        let bytes = name.as_bytes();
+        let mut segment_start = 0;
+        while segment_start < bytes.len() {
+            while segment_start < bytes.len() && bytes[segment_start] == b'/' {
+                segment_start += 1;
+            }
+            if segment_start >= bytes.len() {
+                break;
+            }
+
+            let mut segment_end = segment_start;
+            while segment_end < bytes.len() && bytes[segment_end] != b'/' {
+                segment_end += 1;
+            }
+
+            node = node
+                .children
+                .entry(&name[segment_start..segment_end])
+                .or_default();
+            segment_start = segment_end;
         }
         node.is_leaf = true;
         node.leaf_meta_index = leaf_meta_index;
     }
+}
+
+struct RemoteBranchGroup<'a> {
+    name: &'a str,
+    branches: Vec<&'a str>,
 }
 
 pub(in crate::view) fn branch_sidebar_branch_tooltip(
@@ -225,61 +262,89 @@ pub(in crate::view) struct BranchSidebarSourceFingerprint(u64);
 pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
     local_revs: (u64, u64),
     local_hash: u64,
+    local_reuse_key: u64,
     remote_revs: (u64, u64, u64, u64),
     remote_hash: u64,
+    remote_reuse_key: u64,
     worktree_rev: u64,
     worktree_hash: u64,
+    worktree_reuse_identity: fingerprint::LoadableArcIdentity,
     submodule_rev: u64,
     submodule_hash: u64,
+    submodule_reuse_identity: fingerprint::LoadableArcIdentity,
     stash_rev: u64,
     stash_hash: u64,
+    stash_reuse_identity: fingerprint::LoadableArcIdentity,
 }
 
 impl BranchSidebarSourceFingerprintParts {
     fn for_repo(repo: &RepoState, reuse: Option<&Self>) -> Self {
         let local_revs = (repo.head_branch_rev, repo.branches_rev);
+        let local_reuse_key = branch_sidebar_local_reuse_key(repo);
         let remote_revs = (
             repo.head_branch_rev,
             repo.branches_rev,
             repo.remotes_rev,
             repo.remote_branches_rev,
         );
+        let remote_reuse_key = branch_sidebar_remote_reuse_key(repo);
         let worktree_rev = repo.worktrees_rev;
+        let worktree_reuse_identity = fingerprint::loadable_arc_identity(&repo.worktrees);
         let submodule_rev = repo.submodules_rev;
+        let submodule_reuse_identity = fingerprint::loadable_arc_identity(&repo.submodules);
         let stash_rev = repo.stashes_rev;
+        let stash_reuse_identity = fingerprint::loadable_arc_identity(&repo.stashes);
 
         Self {
             local_revs,
+            local_reuse_key,
             local_hash: reuse
-                .filter(|parts| parts.local_revs == local_revs)
+                .filter(|parts| {
+                    parts.local_revs == local_revs || parts.local_reuse_key == local_reuse_key
+                })
                 .map_or_else(
                     || branch_sidebar_local_source_hash(repo),
                     |parts| parts.local_hash,
                 ),
             remote_revs,
+            remote_reuse_key,
             remote_hash: reuse
-                .filter(|parts| parts.remote_revs == remote_revs)
+                .filter(|parts| {
+                    parts.remote_revs == remote_revs || parts.remote_reuse_key == remote_reuse_key
+                })
                 .map_or_else(
                     || branch_sidebar_remote_source_hash(repo),
                     |parts| parts.remote_hash,
                 ),
             worktree_rev,
+            worktree_reuse_identity,
             worktree_hash: reuse
-                .filter(|parts| parts.worktree_rev == worktree_rev)
+                .filter(|parts| {
+                    parts.worktree_rev == worktree_rev
+                        || parts.worktree_reuse_identity == worktree_reuse_identity
+                })
                 .map_or_else(
                     || branch_sidebar_worktree_source_hash(repo),
                     |parts| parts.worktree_hash,
                 ),
             submodule_rev,
+            submodule_reuse_identity,
             submodule_hash: reuse
-                .filter(|parts| parts.submodule_rev == submodule_rev)
+                .filter(|parts| {
+                    parts.submodule_rev == submodule_rev
+                        || parts.submodule_reuse_identity == submodule_reuse_identity
+                })
                 .map_or_else(
                     || branch_sidebar_submodule_source_hash(repo),
                     |parts| parts.submodule_hash,
                 ),
             stash_rev,
+            stash_reuse_identity,
             stash_hash: reuse
-                .filter(|parts| parts.stash_rev == stash_rev)
+                .filter(|parts| {
+                    parts.stash_rev == stash_rev
+                        || parts.stash_reuse_identity == stash_reuse_identity
+                })
                 .map_or_else(
                     || branch_sidebar_stash_source_hash(repo),
                     |parts| parts.stash_hash,
@@ -314,6 +379,54 @@ pub(in crate::view) fn branch_sidebar_source_fingerprint(
     (parts.fingerprint(), parts)
 }
 
+#[inline]
+pub(in crate::view) fn branch_sidebar_source_matches_cached(
+    repo: &RepoState,
+    cached: &BranchSidebarSourceFingerprintParts,
+) -> bool {
+    let local_revs = (repo.head_branch_rev, repo.branches_rev);
+    if cached.local_revs != local_revs
+        && cached.local_reuse_key != branch_sidebar_local_reuse_key(repo)
+    {
+        return false;
+    }
+
+    let remote_revs = (
+        repo.head_branch_rev,
+        repo.branches_rev,
+        repo.remotes_rev,
+        repo.remote_branches_rev,
+    );
+    if cached.remote_revs != remote_revs
+        && cached.remote_reuse_key != branch_sidebar_remote_reuse_key(repo)
+    {
+        return false;
+    }
+
+    let worktree_rev = repo.worktrees_rev;
+    if cached.worktree_rev != worktree_rev
+        && cached.worktree_reuse_identity != fingerprint::loadable_arc_identity(&repo.worktrees)
+    {
+        return false;
+    }
+
+    let submodule_rev = repo.submodules_rev;
+    if cached.submodule_rev != submodule_rev
+        && cached.submodule_reuse_identity != fingerprint::loadable_arc_identity(&repo.submodules)
+    {
+        return false;
+    }
+
+    let stash_rev = repo.stashes_rev;
+    if cached.stash_rev != stash_rev
+        && cached.stash_reuse_identity != fingerprint::loadable_arc_identity(&repo.stashes)
+    {
+        return false;
+    }
+
+    true
+}
+
 fn hash_branch_sidebar_local_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
     fingerprint::hash_loadable_kind(&repo.head_branch, hasher);
     if let Loadable::Ready(head_branch) = &repo.head_branch {
@@ -339,6 +452,24 @@ fn hash_branch_sidebar_local_source<H: Hasher>(repo: &RepoState, hasher: &mut H)
 fn branch_sidebar_local_source_hash(repo: &RepoState) -> u64 {
     let mut hasher = FxHasher::default();
     hash_branch_sidebar_local_source(repo, &mut hasher);
+    hasher.finish()
+}
+
+fn branch_sidebar_head_reuse_key(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    fingerprint::hash_loadable_kind(&repo.head_branch, &mut hasher);
+    if let Loadable::Ready(head_branch) = &repo.head_branch {
+        head_branch.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+// Branch/ref collections are treated as immutable Arc snapshots in the store, so
+// their pointer identities are a valid no-change signal for cache-source reuse.
+fn branch_sidebar_local_reuse_key(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    branch_sidebar_head_reuse_key(repo).hash(&mut hasher);
+    fingerprint::hash_loadable_arc(&repo.branches, &mut hasher);
     hasher.finish()
 }
 
@@ -382,6 +513,15 @@ fn hash_branch_sidebar_remote_source<H: Hasher>(repo: &RepoState, hasher: &mut H
 fn branch_sidebar_remote_source_hash(repo: &RepoState) -> u64 {
     let mut hasher = FxHasher::default();
     hash_branch_sidebar_remote_source(repo, &mut hasher);
+    hasher.finish()
+}
+
+fn branch_sidebar_remote_reuse_key(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    branch_sidebar_head_reuse_key(repo).hash(&mut hasher);
+    fingerprint::hash_loadable_arc(&repo.branches, &mut hasher);
+    fingerprint::hash_loadable_arc(&repo.remotes, &mut hasher);
+    fingerprint::hash_loadable_arc(&repo.remote_branches, &mut hasher);
     hasher.finish()
 }
 
@@ -483,6 +623,10 @@ pub(super) fn expanded_default_section_storage_key(collapse_key: &str) -> Option
 }
 
 pub(super) fn is_collapsed(collapsed_items: &BTreeSet<String>, collapse_key: &str) -> bool {
+    if collapsed_items.is_empty() {
+        return defaults_to_collapsed(collapse_key);
+    }
+
     if let Some(expanded_key) = expanded_default_section_storage_key(collapse_key) {
         return !collapsed_items.contains(expanded_key.as_str());
     }
@@ -508,6 +652,10 @@ pub(super) fn branch_sidebar_rows(
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
 ) -> Vec<BranchSidebarRow> {
+    let head = match &repo.head_branch {
+        Loadable::Ready(head) => Some(head.as_str()),
+        _ => None,
+    };
     let local_collapsed = is_collapsed(collapsed_items, local_section_storage_key());
     let remote_collapsed = is_collapsed(collapsed_items, remote_section_storage_key());
     let worktrees_collapsed = is_collapsed(collapsed_items, worktrees_section_storage_key());
@@ -551,21 +699,21 @@ pub(super) fn branch_sidebar_rows(
     };
     let approx_rows = 16 + visible_rows + visible_rows / 8;
     let mut rows = Vec::with_capacity(approx_rows);
-    let head_upstream_full = match (&repo.branches, &repo.head_branch) {
-        (Loadable::Ready(branches), Loadable::Ready(head)) => branches
-            .iter()
-            .find(|branch| branch.name == *head)
-            .and_then(|branch| branch.upstream.as_ref())
-            .map(|upstream| {
-                let mut full =
-                    String::with_capacity(upstream.remote.len() + 1 + upstream.branch.len());
-                full.push_str(&upstream.remote);
-                full.push('/');
-                full.push_str(&upstream.branch);
-                full
-            }),
-        _ => None,
-    };
+    let mut head_upstream_full = None;
+    let mut local_upstreams: SmallVec<[(&str, &str); 4]> = SmallVec::new();
+
+    if local_collapsed {
+        if let Loadable::Ready(branches) = &repo.branches {
+            for branch in branches.iter() {
+                record_local_branch_sidebar_metadata(
+                    branch,
+                    head,
+                    &mut local_upstreams,
+                    &mut head_upstream_full,
+                );
+            }
+        }
+    }
 
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Local,
@@ -583,13 +731,15 @@ pub(super) fn branch_sidebar_rows(
                 });
             }
             Loadable::Ready(branches) => {
-                let head = match &repo.head_branch {
-                    Loadable::Ready(head) => Some(head.as_str()),
-                    _ => None,
-                };
                 let mut tree = SlashTree::default();
                 let mut local_leaf_meta = Vec::with_capacity(branches.len());
                 for branch in branches.iter() {
+                    record_local_branch_sidebar_metadata(
+                        branch,
+                        head,
+                        &mut local_upstreams,
+                        &mut head_upstream_full,
+                    );
                     local_leaf_meta.push(SlashTreeLeafMeta {
                         divergence: branch.divergence,
                         is_head: head.is_some_and(|current| current == branch.name.as_str()),
@@ -643,15 +793,28 @@ pub(super) fn branch_sidebar_rows(
     });
 
     if !remote_collapsed {
-        let mut remotes: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        let known_remote_count = match &repo.remotes {
+            Loadable::Ready(remotes) => remotes.len(),
+            _ => 0,
+        };
+        let mut remotes = Vec::with_capacity(known_remote_count.max(1));
+        let mut remote_indexes =
+            FxHashMap::with_capacity_and_hasher(known_remote_count.max(1), Default::default());
+        let mut remote_names_need_sort = false;
         let mut remote_section_is_loading_or_error = false;
         match &repo.remote_branches {
             Loadable::Ready(branches) => {
                 for branch in branches.iter() {
-                    remotes
-                        .entry(branch.remote.as_str())
-                        .or_default()
-                        .push(branch.name.as_str());
+                    let inserted = push_remote_group_branch(
+                        &mut remotes,
+                        &mut remote_indexes,
+                        branch.remote.as_str(),
+                        branch.name.as_str(),
+                    );
+                    if inserted {
+                        remote_names_need_sort |=
+                            slash_tree_label_needs_sort(branch.remote.as_str());
+                    }
                 }
             }
             Loadable::Loading => {
@@ -672,20 +835,16 @@ pub(super) fn branch_sidebar_rows(
         }
 
         if !remote_section_is_loading_or_error {
-            if let Loadable::Ready(local_branches) = &repo.branches {
-                for local in local_branches.iter() {
-                    if let Some(upstream) = &local.upstream {
-                        remotes
-                            .entry(upstream.remote.as_str())
-                            .or_default()
-                            .push(upstream.branch.as_str());
-                    }
+            for (remote, branch) in local_upstreams.iter().copied() {
+                if push_remote_group_branch(&mut remotes, &mut remote_indexes, remote, branch) {
+                    remote_names_need_sort |= slash_tree_label_needs_sort(remote);
                 }
             }
 
             if let Loadable::Ready(known) = &repo.remotes {
                 for remote in known.iter() {
-                    remotes.entry(remote.name.as_str()).or_default();
+                    remote_names_need_sort |= slash_tree_label_needs_sort(remote.name.as_str());
+                    ensure_remote_group(&mut remotes, &mut remote_indexes, remote.name.as_str());
                 }
             }
 
@@ -695,45 +854,20 @@ pub(super) fn branch_sidebar_rows(
                     message: "No remotes".into(),
                 });
             } else {
-                let mut remotes = remotes.into_iter().collect::<Vec<_>>();
-                remotes.sort_unstable_by(|(left, _), (right, _)| {
-                    cmp_case_insensitive_then_case_sensitive(left, right)
-                });
-
-                for (remote, branches) in remotes {
-                    let remote_collapse_key = remote_header_storage_key(remote);
-                    let remote_is_collapsed = is_collapsed(collapsed_items, &remote_collapse_key);
-                    rows.push(BranchSidebarRow::RemoteHeader {
-                        name: SharedString::new(remote),
-                        collapsed: remote_is_collapsed,
-                        collapse_key: remote_collapse_key.into(),
+                if remote_names_need_sort {
+                    remotes.sort_unstable_by(|left, right| {
+                        cmp_case_insensitive_then_case_sensitive(left.name, right.name)
                     });
-                    if branches.is_empty() || remote_is_collapsed {
-                        continue;
-                    }
+                } else {
+                    remotes.sort_unstable_by(|left, right| left.name.cmp(right.name));
+                }
 
-                    let mut tree = SlashTree::default();
-                    // `push_slash_tree_rows()` sorts each fanout level, so sorting the flat
-                    // branch list here would only duplicate work.
-                    for branch in branches {
-                        tree.insert(branch);
-                    }
-
-                    let mut name_prefix = String::with_capacity(remote.len() + 1);
-                    name_prefix.push_str(remote);
-                    name_prefix.push('/');
-                    let mut group_path_prefix = String::new();
-                    push_slash_tree_rows(
-                        &tree,
+                for remote in remotes {
+                    push_remote_branch_sidebar_rows(
+                        remote.name,
+                        remote.branches,
                         &mut rows,
-                        None,
                         head_upstream_full.as_deref(),
-                        1,
-                        true,
-                        BranchSection::Remote,
-                        &mut name_prefix,
-                        &mut group_path_prefix,
-                        Some(remote),
                         collapsed_items,
                     );
                 }
@@ -881,6 +1015,26 @@ fn push_slash_tree_rows(
     remote_name: Option<&str>,
     collapsed_items: &BTreeSet<String>,
 ) {
+    if let Some((label, node)) = tree.children.first_key_value() {
+        if tree.children.len() == 1 {
+            push_slash_tree_child_rows(
+                label,
+                node,
+                out,
+                local_leaf_meta,
+                upstream_full,
+                depth,
+                muted,
+                section,
+                name_prefix,
+                group_path_prefix,
+                remote_name,
+                collapsed_items,
+            );
+            return;
+        }
+    }
+
     let mut has_group = false;
     let mut has_leaf = false;
     let mut needs_sort = false;
@@ -989,6 +1143,281 @@ fn slash_tree_label_needs_sort(label: &str) -> bool {
             .any(|byte| byte.is_ascii_uppercase())
 }
 
+fn slash_tree_segments<'a>(name: &'a str) -> SmallVec<[&'a str; 8]> {
+    let bytes = name.as_bytes();
+    let mut segment_start = 0;
+    let mut segments = SmallVec::new();
+    while segment_start < bytes.len() {
+        while segment_start < bytes.len() && bytes[segment_start] == b'/' {
+            segment_start += 1;
+        }
+        if segment_start >= bytes.len() {
+            break;
+        }
+
+        let mut segment_end = segment_start;
+        while segment_end < bytes.len() && bytes[segment_end] != b'/' {
+            segment_end += 1;
+        }
+        segments.push(&name[segment_start..segment_end]);
+        segment_start = segment_end;
+    }
+    segments
+}
+
+fn remote_branch_linear_chain<'a>(
+    branches: &[&'a str],
+) -> Option<(SmallVec<[&'a str; 8]>, Vec<&'a str>)> {
+    let first = *branches.first()?;
+    let first_segments = slash_tree_segments(first);
+    if first_segments.len() <= 1 {
+        return None;
+    }
+
+    let chain_len = first_segments.len() - 1;
+    let chain_segments: SmallVec<[&'a str; 8]> =
+        first_segments[..chain_len].iter().copied().collect();
+    let mut leaf_labels = Vec::with_capacity(branches.len());
+    leaf_labels.push(first_segments[chain_len]);
+
+    for branch in branches.iter().copied().skip(1) {
+        let leaf = slash_tree_leaf_after_chain(branch, chain_segments.as_slice())?;
+        leaf_labels.push(leaf);
+    }
+
+    Some((chain_segments, leaf_labels))
+}
+
+fn slash_tree_leaf_after_chain<'a>(name: &'a str, chain_segments: &[&str]) -> Option<&'a str> {
+    let bytes = name.as_bytes();
+    let mut segment_start = 0;
+
+    for expected in chain_segments {
+        while segment_start < bytes.len() && bytes[segment_start] == b'/' {
+            segment_start += 1;
+        }
+        if segment_start >= bytes.len() {
+            return None;
+        }
+
+        let mut segment_end = segment_start;
+        while segment_end < bytes.len() && bytes[segment_end] != b'/' {
+            segment_end += 1;
+        }
+        if &name[segment_start..segment_end] != *expected {
+            return None;
+        }
+        segment_start = segment_end;
+    }
+
+    while segment_start < bytes.len() && bytes[segment_start] == b'/' {
+        segment_start += 1;
+    }
+    if segment_start >= bytes.len() {
+        return None;
+    }
+
+    let leaf_start = segment_start;
+    while segment_start < bytes.len() && bytes[segment_start] != b'/' {
+        segment_start += 1;
+    }
+    let leaf_end = segment_start;
+    while segment_start < bytes.len() {
+        if bytes[segment_start] != b'/' {
+            return None;
+        }
+        segment_start += 1;
+        if segment_start < bytes.len() && bytes[segment_start] != b'/' {
+            return None;
+        }
+    }
+
+    Some(&name[leaf_start..leaf_end])
+}
+
+fn record_local_branch_sidebar_metadata<'a>(
+    branch: &'a Branch,
+    head: Option<&str>,
+    local_upstreams: &mut SmallVec<[(&'a str, &'a str); 4]>,
+    head_upstream_full: &mut Option<String>,
+) {
+    let Some(upstream) = branch.upstream.as_ref() else {
+        return;
+    };
+
+    local_upstreams.push((upstream.remote.as_str(), upstream.branch.as_str()));
+    if head_upstream_full.is_none() && head.is_some_and(|current| current == branch.name.as_str()) {
+        let mut full = String::with_capacity(upstream.remote.len() + 1 + upstream.branch.len());
+        full.push_str(&upstream.remote);
+        full.push('/');
+        full.push_str(&upstream.branch);
+        *head_upstream_full = Some(full);
+    }
+}
+
+fn push_remote_group_branch<'a>(
+    remotes: &mut Vec<RemoteBranchGroup<'a>>,
+    remote_indexes: &mut FxHashMap<&'a str, usize>,
+    remote: &'a str,
+    branch: &'a str,
+) -> bool {
+    if let Some(&index) = remote_indexes.get(remote) {
+        remotes[index].branches.push(branch);
+        return false;
+    }
+
+    remote_indexes.insert(remote, remotes.len());
+    remotes.push(RemoteBranchGroup {
+        name: remote,
+        branches: vec![branch],
+    });
+    true
+}
+
+fn ensure_remote_group<'a>(
+    remotes: &mut Vec<RemoteBranchGroup<'a>>,
+    remote_indexes: &mut FxHashMap<&'a str, usize>,
+    remote: &'a str,
+) {
+    if remote_indexes.contains_key(remote) {
+        return;
+    }
+
+    remote_indexes.insert(remote, remotes.len());
+    remotes.push(RemoteBranchGroup {
+        name: remote,
+        branches: Vec::new(),
+    });
+}
+
+fn push_remote_branch_sidebar_rows(
+    remote: &str,
+    branches: Vec<&str>,
+    out: &mut Vec<BranchSidebarRow>,
+    upstream_full: Option<&str>,
+    collapsed_items: &BTreeSet<String>,
+) {
+    let remote_collapse_key = remote_header_storage_key(remote);
+    let remote_is_collapsed = is_collapsed(collapsed_items, &remote_collapse_key);
+    out.push(BranchSidebarRow::RemoteHeader {
+        name: SharedString::new(remote),
+        collapsed: remote_is_collapsed,
+        collapse_key: remote_collapse_key.into(),
+    });
+    if branches.is_empty() || remote_is_collapsed {
+        return;
+    }
+
+    if let Some((chain_segments, mut leaf_labels)) = remote_branch_linear_chain(branches.as_slice())
+    {
+        push_remote_linear_chain_rows(
+            remote,
+            chain_segments.as_slice(),
+            &mut leaf_labels,
+            out,
+            upstream_full,
+            collapsed_items,
+        );
+        return;
+    }
+
+    let mut tree = SlashTree::default();
+    // `push_slash_tree_rows()` sorts each fanout level, so sorting the flat
+    // branch list here would only duplicate work.
+    for branch in branches {
+        tree.insert(branch);
+    }
+
+    let mut name_prefix = String::with_capacity(remote.len() + 1);
+    name_prefix.push_str(remote);
+    name_prefix.push('/');
+    let mut group_path_prefix = String::new();
+    push_slash_tree_rows(
+        &tree,
+        out,
+        None,
+        upstream_full,
+        1,
+        true,
+        BranchSection::Remote,
+        &mut name_prefix,
+        &mut group_path_prefix,
+        Some(remote),
+        collapsed_items,
+    );
+}
+
+fn push_remote_linear_chain_rows(
+    remote: &str,
+    chain_segments: &[&str],
+    leaf_labels: &mut Vec<&str>,
+    out: &mut Vec<BranchSidebarRow>,
+    upstream_full: Option<&str>,
+    collapsed_items: &BTreeSet<String>,
+) {
+    let mut name_prefix = String::with_capacity(
+        remote.len()
+            + 1
+            + chain_segments
+                .iter()
+                .map(|segment| segment.len() + 1)
+                .sum::<usize>(),
+    );
+    name_prefix.push_str(remote);
+    name_prefix.push('/');
+    let mut group_path_prefix = String::new();
+    let mut depth = 1;
+
+    for segment in chain_segments.iter().copied() {
+        group_path_prefix.push_str(segment);
+        let collapse_key = remote_group_storage_key(remote, group_path_prefix.as_str());
+        let group_collapsed = is_collapsed(collapsed_items, &collapse_key);
+        let mut group_label = String::with_capacity(segment.len() + 1);
+        group_label.push_str(segment);
+        group_label.push('/');
+        out.push(BranchSidebarRow::GroupHeader {
+            label: group_label.into(),
+            section: BranchSection::Remote,
+            depth: branch_sidebar_depth(depth),
+            collapsed: group_collapsed,
+            collapse_key: collapse_key.into(),
+        });
+        if group_collapsed {
+            return;
+        }
+
+        name_prefix.push_str(segment);
+        name_prefix.push('/');
+        group_path_prefix.push('/');
+        depth += 1;
+    }
+
+    if leaf_labels.len() > 1 {
+        if leaf_labels.iter().copied().any(slash_tree_label_needs_sort) {
+            leaf_labels.sort_unstable_by(|left, right| {
+                cmp_case_insensitive_then_case_sensitive(left, right)
+            });
+        } else {
+            leaf_labels.sort_unstable();
+        }
+        leaf_labels.dedup();
+    }
+
+    for label in leaf_labels.iter().copied() {
+        push_branch_sidebar_branch_row(
+            out,
+            label,
+            &mut name_prefix,
+            None,
+            None,
+            upstream_full,
+            BranchSection::Remote,
+            depth,
+            true,
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_slash_tree_child_rows(
     label: &str,
@@ -1030,8 +1459,11 @@ fn push_slash_tree_child_rows(
         }
     };
     let group_collapsed = is_collapsed(collapsed_items, &collapse_key);
+    let mut group_label = String::with_capacity(label.len() + 1);
+    group_label.push_str(label);
+    group_label.push('/');
     out.push(BranchSidebarRow::GroupHeader {
-        label: format!("{label}/").into(),
+        label: group_label.into(),
         section,
         depth: branch_sidebar_depth(depth),
         collapsed: group_collapsed,
@@ -1245,6 +1677,26 @@ mod tests {
         assert_eq!(after_parts.local_hash, before_parts.local_hash);
         assert_eq!(after_parts.remote_hash, before_parts.remote_hash);
         assert_ne!(after_parts.worktree_hash, before_parts.worktree_hash);
+        assert_eq!(after_parts.submodule_hash, before_parts.submodule_hash);
+        assert_eq!(after_parts.stash_hash, before_parts.stash_hash);
+    }
+
+    #[test]
+    fn source_fingerprint_reuses_branch_partition_hashes_when_revs_bump_without_snapshot_change() {
+        let mut repo = populated_repo();
+        let (before_fingerprint, before_parts) = branch_sidebar_source_fingerprint(&repo, None);
+
+        repo.branches_rev = repo.branches_rev.wrapping_add(1);
+
+        let (after_fingerprint, after_parts) =
+            branch_sidebar_source_fingerprint(&repo, Some(&before_parts));
+
+        assert_eq!(after_fingerprint, before_fingerprint);
+        assert_ne!(after_parts.local_revs, before_parts.local_revs);
+        assert_ne!(after_parts.remote_revs, before_parts.remote_revs);
+        assert_eq!(after_parts.local_hash, before_parts.local_hash);
+        assert_eq!(after_parts.remote_hash, before_parts.remote_hash);
+        assert_eq!(after_parts.worktree_hash, before_parts.worktree_hash);
         assert_eq!(after_parts.submodule_hash, before_parts.submodule_hash);
         assert_eq!(after_parts.stash_hash, before_parts.stash_hash);
     }

@@ -1,10 +1,10 @@
 use super::util::{
-    append_refresh_full_effects, append_refresh_primary_effects,
-    append_start_conflict_target_reload, clear_banner_error_for_repo, dedup_paths_in_order,
-    diff_target_is_svg, diff_target_wants_image_preview, format_failure_summary,
-    handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
-    refresh_full_effect_capacity, refresh_full_effects, refresh_primary_effect_capacity,
-    selected_conflict_target_path,
+    SelectedConflictTarget, append_refresh_full_effects, append_refresh_primary_effects,
+    append_start_conflict_target_reload, append_start_current_conflict_target_reload,
+    clear_banner_error_for_repo, dedup_paths_in_order, diff_target_preview_flags,
+    format_failure_summary, handle_session_persist_result, normalize_repo_path, push_diagnostic,
+    push_notification, refresh_full_effect_capacity, refresh_full_effects,
+    refresh_primary_effect_capacity, selected_conflict_target,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
@@ -16,12 +16,15 @@ use gitcomet_core::domain::{DiffTarget, RepoSpec};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, GitRepository};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use smallvec::SmallVec;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 const HOT_REPO_SWITCH_SECONDARY_REFRESH_WINDOW: Duration = Duration::from_secs(5);
+pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 16;
+pub(crate) type SetActiveRepoEffects = SmallVec<[Effect; SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY]>;
 
 fn repo_switch_secondary_metadata_ready(repo_state: &RepoState) -> bool {
     matches!(repo_state.branches, Loadable::Ready(_))
@@ -50,15 +53,11 @@ fn is_missing_repo_error(error: &Error) -> bool {
 }
 
 fn persist_session_effect(
-    state: &AppState,
+    _state: &AppState,
     repo_id: Option<RepoId>,
     action: &'static str,
 ) -> Effect {
-    Effect::PersistSession {
-        snapshot: session::snapshot_repos_from_state(state),
-        repo_id,
-        action,
-    }
+    Effect::PersistSession { repo_id, action }
 }
 
 pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBuf) -> Vec<Effect> {
@@ -226,17 +225,29 @@ pub(super) fn close_repo(
 }
 
 pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let mut effects = SetActiveRepoEffects::new();
+    fill_set_active_repo_inline(state, repo_id, &mut effects);
+    effects.into_vec()
+}
+
+pub(super) fn fill_set_active_repo_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    effects: &mut SetActiveRepoEffects,
+) {
     enum SelectedDiffReload {
         Conflict(PathBuf),
+        ConflictCurrent,
         Diff {
-            target: DiffTarget,
             load_file_text: bool,
             load_file_image: bool,
         },
     }
 
+    effects.clear();
+
     let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
-        return Vec::new();
+        return;
     };
 
     let now = SystemTime::now();
@@ -252,18 +263,22 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
     let selected_diff_reload = if changed {
         repo_state.diff_state.diff_target.as_ref().map(|target| {
-            if let Some(conflict_path) = selected_conflict_target_path(repo_state, target) {
-                SelectedDiffReload::Conflict(conflict_path)
+            if let Some(conflict_target) = selected_conflict_target(repo_state, target) {
+                match conflict_target {
+                    SelectedConflictTarget::Current => SelectedDiffReload::ConflictCurrent,
+                    SelectedConflictTarget::Path(path) => {
+                        SelectedDiffReload::Conflict(path.to_path_buf())
+                    }
+                }
             } else {
                 let supports_file = matches!(
                     target,
                     DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
                 );
-                let wants_image = supports_file && diff_target_wants_image_preview(target);
-                let load_file_image = supports_file && wants_image;
-                let load_file_text = supports_file && (!wants_image || diff_target_is_svg(target));
+                let preview = diff_target_preview_flags(target);
+                let load_file_image = supports_file && preview.wants_image;
+                let load_file_text = supports_file && (!preview.wants_image || preview.is_svg);
                 SelectedDiffReload::Diff {
-                    target: target.clone(),
                     load_file_text,
                     load_file_image,
                 }
@@ -283,27 +298,30 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     } else {
         refresh_primary_effect_capacity()
     };
-    let mut effects = Vec::with_capacity(base_effect_capacity + extra_effect_capacity);
+    debug_assert!(
+        base_effect_capacity + extra_effect_capacity <= SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY
+    );
     if use_full_refresh {
-        append_refresh_full_effects(repo_state, &mut effects);
+        append_refresh_full_effects(repo_state, effects);
     } else {
-        append_refresh_primary_effects(repo_state, &mut effects);
+        append_refresh_primary_effects(repo_state, effects);
     }
     repo_state.last_active_at = Some(now);
 
     if let Some(selected_diff_reload) = selected_diff_reload {
         match selected_diff_reload {
+            SelectedDiffReload::ConflictCurrent => {
+                append_start_current_conflict_target_reload(effects, repo_state);
+            }
             SelectedDiffReload::Conflict(conflict_path) => {
-                append_start_conflict_target_reload(&mut effects, repo_state, conflict_path);
+                append_start_conflict_target_reload(effects, repo_state, &conflict_path);
             }
             SelectedDiffReload::Diff {
-                target,
                 load_file_text,
                 load_file_image,
             } => {
                 effects.push(Effect::LoadSelectedDiff {
                     repo_id,
-                    target,
                     load_file_text,
                     load_file_image,
                 });
@@ -313,7 +331,6 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     if let Some(effect) = persist_effect {
         effects.push(effect);
     }
-    effects
 }
 
 pub(super) fn set_fetch_prune_deleted_remote_tracking_branches(

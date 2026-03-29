@@ -160,13 +160,20 @@ impl HistoryView {
         let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
         let offset = usize::from(show_working_tree_summary_row);
 
-        let (selected_commit, page) = match self.active_repo() {
+        let (selected_commit, page, log_rev, stashes_rev, history_scope) = match self.active_repo()
+        {
             Some(repo) => {
                 let page = match &repo.log {
                     Loadable::Ready(page) => Arc::clone(page),
                     _ => return false,
                 };
-                (repo.history_state.selected_commit.clone(), page)
+                (
+                    repo.history_state.selected_commit.clone(),
+                    page,
+                    repo.log_rev,
+                    repo.stashes_rev,
+                    repo.history_state.history_scope,
+                )
             }
             None => return false,
         };
@@ -186,21 +193,17 @@ impl HistoryView {
 
         let list_len = total_commits + offset;
 
-        let current_list_ix = if show_working_tree_summary_row && selected_commit.is_none() {
-            Some(0)
-        } else if let Some(selected_id) = selected_commit.as_ref() {
-            cache
-                .visible_indices
-                .iter()
-                .position(|&commit_ix| {
-                    page.commits
-                        .get(commit_ix)
-                        .is_some_and(|c| &c.id == selected_id)
-                })
-                .map(|ix| ix + offset)
-        } else {
-            None
-        };
+        let current_list_ix = super::resolve_history_selected_list_index(
+            &mut self.history_selected_list_index_cache,
+            repo_id,
+            log_rev,
+            stashes_rev,
+            history_scope,
+            show_working_tree_summary_row,
+            selected_commit.as_ref(),
+            &cache.visible_indices,
+            &page.commits,
+        );
 
         let next_list_ix = match (current_list_ix, direction.is_negative()) {
             (Some(current_list_ix), true) => current_list_ix.saturating_sub(1),
@@ -223,13 +226,23 @@ impl HistoryView {
         if show_working_tree_summary_row && next_list_ix == 0 {
             self.store.dispatch(Msg::ClearCommitSelection { repo_id });
             self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            super::set_history_selected_list_index_cache(
+                &mut self.history_selected_list_index_cache,
+                repo_id,
+                log_rev,
+                stashes_rev,
+                history_scope,
+                show_working_tree_summary_row,
+                None,
+                0,
+            );
             self.history_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
             return true;
         }
 
         let visible_ix = next_list_ix.saturating_sub(offset);
-        let Some(&commit_ix) = cache.visible_indices.get(visible_ix) else {
+        let Some(commit_ix) = cache.visible_indices.get(visible_ix) else {
             return false;
         };
         let Some(commit) = page.commits.get(commit_ix) else {
@@ -240,6 +253,16 @@ impl HistoryView {
             repo_id,
             commit_id: commit.id.clone(),
         });
+        super::set_history_selected_list_index_cache(
+            &mut self.history_selected_list_index_cache,
+            repo_id,
+            log_rev,
+            stashes_rev,
+            history_scope,
+            show_working_tree_summary_row,
+            Some(commit.id.clone()),
+            next_list_ix,
+        );
         self.history_scroll
             .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
         true

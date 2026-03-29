@@ -1376,7 +1376,7 @@ impl HistoryView {
                 let page = page?;
                 let cache = cache?;
 
-                let commit_ix = cache.visible_indices.get(visible_ix).copied()?;
+                let commit_ix = cache.visible_indices.get(visible_ix)?;
                 let commit = page.commits.get(commit_ix)?;
                 cache.graph_rows.get(visible_ix)?;
                 let row_vm = cache.commit_row_vms.get(visible_ix)?;

@@ -2271,7 +2271,10 @@ impl MergeOpenBootstrapFixture {
         });
 
         if !base_text.is_empty() {
-            conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
+            conflict_resolver::populate_block_bases_from_shared_ancestor(
+                &mut marker_segments,
+                Arc::clone(&self.base_text),
+            );
         }
         let conflict_region_indices =
             conflict_resolver::sequential_conflict_region_indices(&marker_segments);
@@ -2283,10 +2286,14 @@ impl MergeOpenBootstrapFixture {
                 conflict_resolver::ResolvedOutputProjection::from_segments(&marker_segments),
             )
         } else {
-            MergeOpenBootstrapResolvedOutput::Text {
-                line_count: trace_line_count(current_text),
-                text: current_text.to_string(),
-            }
+            MergeOpenBootstrapResolvedOutput::Text(
+                conflict_resolver::bootstrap_resolved_output_text(
+                    &marker_segments,
+                    Some(&self.current_text),
+                    Some(&self.ours_text),
+                    Some(&self.theirs_text),
+                ),
+            )
         };
         let resolved_output_line_count = resolved_output.line_count();
         mergetool_trace::record_with(|| {
@@ -2508,14 +2515,14 @@ fn trace_stage_ms(
 
 enum MergeOpenBootstrapResolvedOutput {
     Projection(conflict_resolver::ResolvedOutputProjection),
-    Text { text: String, line_count: usize },
+    Text(conflict_resolver::ResolvedOutputText),
 }
 
 impl MergeOpenBootstrapResolvedOutput {
     fn line_count(&self) -> usize {
         match self {
             Self::Projection(projection) => projection.len(),
-            Self::Text { line_count, .. } => *line_count,
+            Self::Text(text) => text.line_count(),
         }
     }
 }
@@ -2542,9 +2549,9 @@ fn hash_merge_open_bootstrap_state(
             projection.len().hash(&mut h);
             projection.output_hash().hash(&mut h);
         }
-        MergeOpenBootstrapResolvedOutput::Text { text, line_count } => {
-            let bytes = text.as_bytes();
-            line_count.hash(&mut h);
+        MergeOpenBootstrapResolvedOutput::Text(text) => {
+            let bytes = text.as_str().as_bytes();
+            text.line_count().hash(&mut h);
             bytes.len().hash(&mut h);
             for byte_ix in sampled_indices(bytes.len()) {
                 bytes.get(byte_ix).copied().hash(&mut h);

@@ -46,8 +46,8 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_details_delay_seq: u64,
 
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
-    commit_file_path_labels:
-        std::cell::RefCell<crate::view::rows::CommitFilePathLabelsCache<(RepoId, u64)>>,
+    commit_file_rows:
+        std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -326,8 +326,8 @@ impl DetailsPaneView {
             commit_details_delay: None,
             commit_details_delay_seq: 0,
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
-            commit_file_path_labels: std::cell::RefCell::new(
-                crate::view::rows::CommitFilePathLabelsCache::default(),
+            commit_file_rows: std::cell::RefCell::new(
+                crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
         };
         pane.set_theme(theme, cx);
@@ -409,14 +409,14 @@ impl DetailsPaneView {
         path_display::cached_path_display(&mut cache, path)
     }
 
-    pub(in super::super) fn cached_commit_file_path_labels(
+    pub(in super::super) fn cached_commit_file_rows(
         &self,
         repo_id: RepoId,
         commit_details_rev: u64,
         files: &[gitcomet_core::domain::CommitFileChange],
-    ) -> Arc<[SharedString]> {
-        let mut cache = self.commit_file_path_labels.borrow_mut();
-        cache.labels_for(&(repo_id, commit_details_rev), files)
+    ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
+        let mut cache = self.commit_file_rows.borrow_mut();
+        cache.rows_for(&(repo_id, commit_details_rev), files)
     }
 
     fn apply_state_snapshot(&mut self, next: Arc<AppState>, cx: &mut gpui::Context<Self>) {

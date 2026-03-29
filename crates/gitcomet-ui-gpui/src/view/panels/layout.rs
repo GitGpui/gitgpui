@@ -821,7 +821,7 @@ impl DetailsPaneView {
                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 this.store.dispatch(Msg::StagePaths {
                     repo_id,
-                    paths: Vec::new(),
+                    paths: Default::default(),
                 });
                 cx.notify();
             })
@@ -857,7 +857,10 @@ impl DetailsPaneView {
                 return;
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths { repo_id, paths });
+            this.store.dispatch(Msg::StagePaths {
+                repo_id,
+                paths: paths.into(),
+            });
             cx.notify();
         });
 
@@ -892,7 +895,8 @@ impl DetailsPaneView {
             cx.notify();
         });
 
-        let untracked_paths_for_stage_all = untracked_paths.clone();
+        let untracked_paths_for_stage_all =
+            gitcomet_state::msg::RepoPathList::from(untracked_paths.clone());
         let stage_all_untracked = components::Button::new("stage_all_untracked", "Stage all")
             .style(components::ButtonStyle::Subtle)
             .disabled(local_actions_in_flight || untracked_paths_for_stage_all.is_empty())
@@ -931,7 +935,10 @@ impl DetailsPaneView {
                 return;
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths { repo_id, paths });
+            this.store.dispatch(Msg::StagePaths {
+                repo_id,
+                paths: paths.into(),
+            });
             cx.notify();
         });
 
@@ -966,7 +973,8 @@ impl DetailsPaneView {
             cx.notify();
         });
 
-        let split_unstaged_paths_for_stage_all = split_unstaged_paths.clone();
+        let split_unstaged_paths_for_stage_all =
+            gitcomet_state::msg::RepoPathList::from(split_unstaged_paths.clone());
         let stage_all_split_unstaged =
             components::Button::new("stage_all_split_unstaged", "Stage all")
                 .style(components::ButtonStyle::Subtle)
@@ -1006,7 +1014,10 @@ impl DetailsPaneView {
                 return;
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths { repo_id, paths });
+            this.store.dispatch(Msg::StagePaths {
+                repo_id,
+                paths: paths.into(),
+            });
             cx.notify();
         });
 
@@ -1052,7 +1063,7 @@ impl DetailsPaneView {
                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 this.store.dispatch(Msg::UnstagePaths {
                     repo_id,
-                    paths: Vec::new(),
+                    paths: Default::default(),
                 });
                 cx.notify();
             })
@@ -1086,7 +1097,10 @@ impl DetailsPaneView {
                         return;
                     }
                     this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    this.store.dispatch(Msg::UnstagePaths { repo_id, paths });
+                    this.store.dispatch(Msg::UnstagePaths {
+                        repo_id,
+                        paths: paths.into(),
+                    });
                     cx.notify();
                 });
 

@@ -37,6 +37,12 @@ impl RepoLoadsInFlight {
     pub const LOG: u32 = 1 << 10;
     pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 11;
     pub const REMOTE_TAGS: u32 = 1 << 12;
+    const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
+        | Self::UPSTREAM_DIVERGENCE
+        | Self::REBASE_STATE
+        | Self::MERGE_COMMIT_MESSAGE
+        | Self::STATUS
+        | Self::LOG;
 
     pub fn is_in_flight(&self, flag: u32) -> bool {
         (self.in_flight & flag) != 0
@@ -44,6 +50,17 @@ impl RepoLoadsInFlight {
 
     pub fn any_in_flight(&self) -> bool {
         self.in_flight != 0
+    }
+
+    /// Starts the common primary-refresh batch immediately when no work is already queued or
+    /// running. Callers fall back to per-load request coalescing when this returns `false`.
+    pub fn request_primary_refresh_batch(&mut self) -> bool {
+        if self.in_flight == 0 && self.pending == 0 && self.pending_log.is_none() {
+            self.in_flight |= Self::PRIMARY_REFRESH_FLAGS;
+            true
+        } else {
+            false
+        }
     }
 
     /// For non-log loads: starts immediately if not in flight, otherwise coalesces by remembering
@@ -238,6 +255,7 @@ pub struct PendingCommitRetry {
 pub struct HistoryState {
     pub history_scope: LogScope,
     pub log: Loadable<Shared<LogPage>>,
+    pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
     pub log_rev: u64,
     pub file_history_path: Option<PathBuf>,
@@ -256,6 +274,7 @@ impl Default for HistoryState {
         Self {
             history_scope: LogScope::CurrentBranch,
             log: Loadable::NotLoaded,
+            retained_log_while_loading: None,
             log_loading_more: false,
             log_rev: 0,
             file_history_path: None,
@@ -600,9 +619,22 @@ impl RepoState {
         if self.history_state.log == log && self.log == log {
             return;
         }
+        if !matches!(log, Loadable::Loading) {
+            self.history_state.retained_log_while_loading = None;
+        }
         self.history_state.log = log.clone();
         self.log = log;
         self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn retain_log_while_loading(&mut self) {
+        if self.history_state.retained_log_while_loading.is_some() {
+            return;
+        }
+
+        if let Loadable::Ready(page) = &self.log {
+            self.history_state.retained_log_while_loading = Some(Arc::clone(page));
+        }
     }
 
     pub(crate) fn set_log_loading_more(&mut self, v: bool) {
@@ -833,6 +865,30 @@ mod tests {
     }
 
     #[test]
+    fn request_primary_refresh_batch_marks_all_primary_loads_when_idle() {
+        let mut loads = RepoLoadsInFlight::default();
+
+        assert!(loads.request_primary_refresh_batch());
+        assert!(loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::UPSTREAM_DIVERGENCE));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::REBASE_STATE));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::LOG));
+    }
+
+    #[test]
+    fn request_primary_refresh_batch_skips_when_any_load_is_already_in_flight() {
+        let mut loads = RepoLoadsInFlight::default();
+        assert!(loads.request(RepoLoadsInFlight::STATUS));
+
+        assert!(!loads.request_primary_refresh_batch());
+        assert!(!loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::STATUS));
+        assert!(!loads.is_in_flight(RepoLoadsInFlight::LOG));
+    }
+
+    #[test]
     fn set_spec_refreshes_session_workdir_key() {
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -868,6 +924,39 @@ mod tests {
         let before = repo.history_state.log_rev;
         repo.set_log(Loadable::Loading);
         assert_eq!(repo.history_state.log_rev, before + 1);
+    }
+
+    #[test]
+    fn retain_log_while_loading_keeps_ready_log_alive_until_next_log_state() {
+        let mut repo = new_repo();
+        let page = Arc::new(LogPage {
+            commits: vec![Commit {
+                id: CommitId("c1".into()),
+                parent_ids: Vec::new(),
+                summary: "s1".into(),
+                author: "a".into(),
+                time: SystemTime::UNIX_EPOCH,
+            }],
+            next_cursor: None,
+        });
+        repo.set_log(Loadable::Ready(Arc::clone(&page)));
+
+        repo.retain_log_while_loading();
+        repo.set_log(Loadable::Loading);
+
+        let retained = repo
+            .history_state
+            .retained_log_while_loading
+            .as_ref()
+            .expect("ready log should stay retained while loading");
+        assert!(Arc::ptr_eq(retained, &page));
+
+        repo.set_log(Loadable::Ready(Arc::new(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })));
+
+        assert!(repo.history_state.retained_log_while_loading.is_none());
     }
 
     #[test]

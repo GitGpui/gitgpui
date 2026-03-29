@@ -1,6 +1,6 @@
 use super::*;
 use std::cell::RefCell;
-use std::hash::BuildHasherDefault;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::num::NonZeroUsize;
 
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
@@ -103,36 +103,175 @@ pub(in crate::view) fn new_fx_lru_cache<K: std::hash::Hash + Eq, V>(
     InstrumentedLruCache::with_hasher(cap, BuildHasherDefault::default())
 }
 
-#[derive(Debug)]
-pub(in crate::view) struct CommitFilePathLabelsCache<K: Eq + Clone> {
-    cached: Option<(K, Arc<[SharedString]>)>,
+#[derive(Clone, Debug)]
+pub(in crate::view) struct CommitFileRowPresentation {
+    pub(in crate::view) label: SharedString,
+    pub(in crate::view) visuals: CommitFileKindVisuals,
 }
 
-impl<K: Eq + Clone> Default for CommitFilePathLabelsCache<K> {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CommitFileRowPresentationSignature {
+    file_count: usize,
+    total_path_bytes: usize,
+    primary_hash: u64,
+    secondary_hash: u64,
+}
+
+fn commit_file_row_presentation_signature(
+    files: &[gitcomet_core::domain::CommitFileChange],
+) -> CommitFileRowPresentationSignature {
+    let mut primary = rustc_hash::FxHasher::default();
+    let mut secondary = rustc_hash::FxHasher::default();
+    0x9e37_79b9_7f4a_7c15u64.hash(&mut secondary);
+
+    let mut total_path_bytes = 0usize;
+    for (ix, file) in files.iter().enumerate() {
+        let path_bytes = file.path.as_os_str().as_encoded_bytes();
+        let kind_key = commit_file_kind_visuals(file.kind).kind_key;
+
+        total_path_bytes = total_path_bytes.saturating_add(path_bytes.len());
+
+        ix.hash(&mut primary);
+        kind_key.hash(&mut primary);
+        path_bytes.hash(&mut primary);
+
+        kind_key.hash(&mut secondary);
+        ix.hash(&mut secondary);
+        path_bytes.len().hash(&mut secondary);
+        path_bytes.hash(&mut secondary);
+    }
+
+    files.len().hash(&mut primary);
+    total_path_bytes.hash(&mut primary);
+    files.len().hash(&mut secondary);
+    total_path_bytes.hash(&mut secondary);
+
+    CommitFileRowPresentationSignature {
+        file_count: files.len(),
+        total_path_bytes,
+        primary_hash: primary.finish(),
+        secondary_hash: secondary.finish(),
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn hash_commit_file_row_presentations(rows: &[CommitFileRowPresentation]) -> u64 {
+    let mut hasher = rustc_hash::FxHasher::default();
+    rows.len().hash(&mut hasher);
+    for row in rows {
+        row.visuals.kind_key.hash(&mut hasher);
+        let label = row.label.as_ref();
+        label.as_ptr().hash(&mut hasher);
+        label.len().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+#[derive(Clone, Debug)]
+struct CommitFileRowPresentationCacheEntry<K: Eq + Clone> {
+    key: K,
+    signature: CommitFileRowPresentationSignature,
+    rows: Arc<[CommitFileRowPresentation]>,
+    #[cfg(any(test, feature = "benchmarks"))]
+    row_hash: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct CommitFileRowPresentationCache<K: Eq + Clone> {
+    cached: Option<CommitFileRowPresentationCacheEntry<K>>,
+}
+
+impl<K: Eq + Clone> Default for CommitFileRowPresentationCache<K> {
     fn default() -> Self {
         Self { cached: None }
     }
 }
 
-impl<K: Eq + Clone> CommitFilePathLabelsCache<K> {
-    pub(in crate::view) fn labels_for(
+impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
+    fn build_entry(
+        key: &K,
+        files: &[gitcomet_core::domain::CommitFileChange],
+        signature: CommitFileRowPresentationSignature,
+    ) -> CommitFileRowPresentationCacheEntry<K> {
+        let rows: Arc<[CommitFileRowPresentation]> = files
+            .iter()
+            .map(|file| CommitFileRowPresentation {
+                label: super::path_display::path_display_shared_fast(&file.path),
+                visuals: commit_file_kind_visuals(file.kind),
+            })
+            .collect::<Vec<_>>()
+            .into();
+
+        CommitFileRowPresentationCacheEntry {
+            key: key.clone(),
+            signature,
+            #[cfg(any(test, feature = "benchmarks"))]
+            row_hash: hash_commit_file_row_presentations(&rows),
+            rows,
+        }
+    }
+
+    pub(in crate::view) fn rows_for(
         &mut self,
         key: &K,
         files: &[gitcomet_core::domain::CommitFileChange],
-    ) -> Arc<[SharedString]> {
-        if let Some((cached_key, labels)) = &self.cached
-            && cached_key == key
-        {
-            return labels.clone();
+    ) -> Arc<[CommitFileRowPresentation]> {
+        let signature = commit_file_row_presentation_signature(files);
+        if let Some(reused_rows) = self.cached.as_ref().and_then(|entry| {
+            if entry.key == *key || entry.signature == signature {
+                Some(entry.rows.clone())
+            } else {
+                None
+            }
+        }) {
+            self.cached = Some(CommitFileRowPresentationCacheEntry {
+                key: key.clone(),
+                signature,
+                #[cfg(any(test, feature = "benchmarks"))]
+                row_hash: self
+                    .cached
+                    .as_ref()
+                    .map(|entry| entry.row_hash)
+                    .unwrap_or_default(),
+                rows: reused_rows.clone(),
+            });
+            return reused_rows;
         }
 
-        let labels: Arc<[SharedString]> = files
-            .iter()
-            .map(|file| super::path_display::path_display_shared_fast(&file.path))
-            .collect::<Vec<_>>()
-            .into();
-        self.cached = Some((key.clone(), labels.clone()));
-        labels
+        let entry = Self::build_entry(key, files, signature);
+        let rows = entry.rows.clone();
+        self.cached = Some(entry);
+        rows
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn bench_row_hash_for(
+        &mut self,
+        key: &K,
+        files: &[gitcomet_core::domain::CommitFileChange],
+    ) -> u64 {
+        let signature = commit_file_row_presentation_signature(files);
+        if let Some(reused_hash) = self.cached.as_ref().and_then(|entry| {
+            if entry.key == *key || entry.signature == signature {
+                Some((entry.rows.clone(), entry.row_hash))
+            } else {
+                None
+            }
+        }) {
+            let (rows, row_hash) = reused_hash;
+            self.cached = Some(CommitFileRowPresentationCacheEntry {
+                key: key.clone(),
+                signature,
+                row_hash,
+                rows,
+            });
+            return row_hash;
+        }
+
+        let entry = Self::build_entry(key, files, signature);
+        let row_hash = entry.row_hash;
+        self.cached = Some(entry);
+        row_hash
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -428,8 +567,9 @@ mod tests {
     }
 
     #[test]
-    fn commit_file_path_labels_cache_reuses_same_key_and_invalidates_on_new_key() {
-        let mut cache: CommitFilePathLabelsCache<u64> = CommitFilePathLabelsCache::default();
+    fn commit_file_row_presentation_cache_reuses_same_key_and_invalidates_on_new_key() {
+        let mut cache: CommitFileRowPresentationCache<u64> =
+            CommitFileRowPresentationCache::default();
         let files = vec![
             CommitFileChange {
                 path: PathBuf::from("src/lib.rs"),
@@ -441,8 +581,8 @@ mod tests {
             },
         ];
 
-        let first = cache.labels_for(&7, &files);
-        let reused = cache.labels_for(
+        let first = cache.rows_for(&7, &files);
+        let reused = cache.rows_for(
             &7,
             &[CommitFileChange {
                 path: PathBuf::from("should/not/appear.rs"),
@@ -452,11 +592,22 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &reused));
         assert_eq!(
-            first.iter().map(SharedString::as_ref).collect::<Vec<_>>(),
+            first
+                .iter()
+                .map(|row| row.label.as_ref())
+                .collect::<Vec<_>>(),
             vec!["src/lib.rs", "README.md"]
         );
+        assert_eq!(
+            first[0].visuals,
+            commit_file_kind_visuals(FileStatusKind::Modified)
+        );
+        assert_eq!(
+            first[1].visuals,
+            commit_file_kind_visuals(FileStatusKind::Added)
+        );
 
-        let replacement = cache.labels_for(
+        let replacement = cache.rows_for(
             &8,
             &[CommitFileChange {
                 path: PathBuf::from("docs/guide.md"),
@@ -468,18 +619,51 @@ mod tests {
         assert_eq!(
             replacement
                 .iter()
-                .map(SharedString::as_ref)
+                .map(|row| row.label.as_ref())
                 .collect::<Vec<_>>(),
             vec!["docs/guide.md"]
+        );
+        assert_eq!(
+            replacement[0].visuals,
+            commit_file_kind_visuals(FileStatusKind::Renamed)
         );
     }
 
     #[test]
-    fn commit_file_path_labels_cache_handles_empty_file_lists() {
-        let mut cache: CommitFilePathLabelsCache<u64> = CommitFilePathLabelsCache::default();
+    fn commit_file_row_presentation_cache_reuses_identical_files_across_new_keys() {
+        let mut cache: CommitFileRowPresentationCache<u64> =
+            CommitFileRowPresentationCache::default();
+        let files = vec![
+            CommitFileChange {
+                path: PathBuf::from("src/lib.rs"),
+                kind: FileStatusKind::Modified,
+            },
+            CommitFileChange {
+                path: PathBuf::from("README.md"),
+                kind: FileStatusKind::Added,
+            },
+        ];
 
-        let first = cache.labels_for(&1, &[]);
-        let second = cache.labels_for(&1, &[]);
+        let first = cache.rows_for(&7, &files);
+        let reused = cache.rows_for(&8, &files);
+
+        assert!(Arc::ptr_eq(&first, &reused));
+        assert_eq!(
+            reused
+                .iter()
+                .map(|row| row.label.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["src/lib.rs", "README.md"]
+        );
+    }
+
+    #[test]
+    fn commit_file_row_presentation_cache_handles_empty_file_lists() {
+        let mut cache: CommitFileRowPresentationCache<u64> =
+            CommitFileRowPresentationCache::default();
+
+        let first = cache.rows_for(&1, &[]);
+        let second = cache.rows_for(&1, &[]);
 
         assert!(first.is_empty());
         assert!(Arc::ptr_eq(&first, &second));

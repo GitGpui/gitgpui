@@ -1755,31 +1755,31 @@ mod tests {
         let diff = vec![
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Header,
-                text: Arc::from("diff --git a/docs/table.md b/docs/table.md"),
+                text: "diff --git a/docs/table.md b/docs/table.md".into(),
                 old_line: None,
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Header,
-                text: Arc::from("deleted file mode 100644"),
+                text: "deleted file mode 100644".into(),
                 old_line: None,
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| **Header Bold** | B |"),
+                text: "-| **Header Bold** | B |".into(),
                 old_line: Some(1),
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| --- | --- |"),
+                text: "-| --- | --- |".into(),
                 old_line: Some(2),
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| [link](https://example.com) | plain |"),
+                text: "-| [link](https://example.com) | plain |".into(),
                 old_line: Some(3),
                 new_line: None,
             },

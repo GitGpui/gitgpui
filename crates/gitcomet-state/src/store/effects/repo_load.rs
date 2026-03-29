@@ -735,6 +735,52 @@ pub(super) fn schedule_load_rebase_state(
     );
 }
 
+pub(super) fn schedule_load_rebase_and_merge_state(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
+                    repo_id,
+                    result: repo.rebase_in_progress(),
+                }),
+            );
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
+                    repo_id,
+                    result: repo.merge_commit_message(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_merge_commit_message(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -856,11 +902,11 @@ pub(super) fn schedule_load_selected_diff(
     load_file_text: bool,
     load_file_image: bool,
 ) {
-    schedule_load_diff(executor, repos, msg_tx.clone(), repo_id, target.clone());
     if load_file_image {
         schedule_load_diff_file_image(executor, repos, msg_tx.clone(), repo_id, target.clone());
     }
     if load_file_text {
-        schedule_load_diff_file(executor, repos, msg_tx, repo_id, target);
+        schedule_load_diff_file(executor, repos, msg_tx.clone(), repo_id, target.clone());
     }
+    schedule_load_diff(executor, repos, msg_tx, repo_id, target);
 }

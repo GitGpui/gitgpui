@@ -8,18 +8,24 @@ use crate::kit::text_model::TextModel;
 use crate::kit::{
     benchmark_text_input_runs_legacy_visible_window,
     benchmark_text_input_runs_streamed_visible_window,
+    benchmark_text_input_shaping_slice as hash_text_input_shaping_slice,
+    benchmark_text_input_wrap_rows_for_line as estimate_text_input_wrap_rows_for_line,
 };
 use crate::theme::AppTheme;
 use crate::view::branch_sidebar::{branch_sidebar_branch_label, branch_sidebar_source_fingerprint};
 use crate::view::caches::{
     BranchSidebarCache, BranchSidebarFingerprint, HistoryShortShaVm, HistoryWhenVm,
-    branch_sidebar_cache_lookup, branch_sidebar_cache_lookup_by_source, branch_sidebar_cache_store,
-    build_history_branch_text_by_target, build_history_tag_names_by_target,
+    analyze_history_stashes, branch_sidebar_cache_lookup,
+    branch_sidebar_cache_lookup_by_cached_source, branch_sidebar_cache_lookup_by_source,
+    branch_sidebar_cache_store, build_history_branch_text_by_target,
+    build_history_tag_names_by_target, build_history_visible_indices,
+    next_history_stash_tip_for_commit_ix,
 };
 use crate::view::history_graph;
 use crate::view::mod_helpers::{
     PaneResizeHandle, PaneResizeState, StatusMultiSelection, StatusSection,
 };
+use crate::view::next_pane_resize_drag_width;
 use crate::view::panes::main::{
     AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse,
     diff_cache::{
@@ -32,7 +38,6 @@ use crate::view::rows::status::{
     apply_status_multi_selection_click, bench_reset_status_selection,
     bench_snapshot_status_selection,
 };
-use crate::view::{next_pane_resize_drag_width, pane_resize_drag_width_bounds};
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffLine,
@@ -43,11 +48,15 @@ use gitcomet_core::domain::{
 use gitcomet_core::git_ops_trace::{self, GitOpTraceSnapshot};
 use gitcomet_core::services::{GitBackend, GitRepository};
 use gitcomet_git_gix::GixBackend;
-use gitcomet_state::benchmarks::{dispatch_sync, set_active_repo_sync};
+use gitcomet_state::benchmarks::{
+    dispatch_sync, reset_conflict_resolutions_sync, set_conflict_region_choice_sync,
+    with_select_diff_sync, with_set_active_repo_sync, with_stage_path_sync, with_stage_paths_sync,
+    with_unstage_path_sync, with_unstage_paths_sync,
+};
 use gitcomet_state::model::{AppState, ConflictFile, Loadable, RepoId, RepoState};
-use gitcomet_state::msg::{Effect, InternalMsg, Msg};
+use gitcomet_state::msg::{Effect, InternalMsg, Msg, RepoPath, RepoPathList};
 use rustc_hash::FxHasher;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -55,6 +64,7 @@ use std::io::Write as _;
 use std::ops::Range;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tempfile::TempDir;
@@ -503,13 +513,23 @@ impl BranchSidebarCacheFixture {
     }
 
     /// Execute the cached path.  On fingerprint match → returns the cached
-    /// `Arc` (cache hit).  On mismatch or cold cache → rebuilds rows (cache
+    /// row slice (cache hit).  On mismatch or cold cache → rebuilds rows (cache
     /// miss).  Returns a hash of the row slice for black-boxing.
     pub fn run_cached(&mut self) -> u64 {
         let repo_id = self.repo.id;
         let fingerprint = BranchSidebarFingerprint::from_repo(&self.repo);
         if let Some(cached_rows) =
             branch_sidebar_cache_lookup(&mut self.cache, repo_id, fingerprint)
+        {
+            self.metrics.cache_hits += 1;
+            self.metrics.rows_count = cached_rows.len();
+            let mut h = FxHasher::default();
+            cached_rows.len().hash(&mut h);
+            return h.finish();
+        }
+
+        if let Some(cached_rows) =
+            branch_sidebar_cache_lookup_by_cached_source(&mut self.cache, &self.repo, fingerprint)
         {
             self.metrics.cache_hits += 1;
             self.metrics.rows_count = cached_rows.len();
@@ -542,7 +562,7 @@ impl BranchSidebarCacheFixture {
 
         // Cache miss — full rebuild.
         self.metrics.cache_misses += 1;
-        let rows: Arc<[BranchSidebarRow]> = GitCometView::branch_sidebar_rows(&self.repo).into();
+        let rows: Rc<[BranchSidebarRow]> = GitCometView::branch_sidebar_rows(&self.repo).into();
         self.metrics.rows_count = rows.len();
 
         let mut h = FxHasher::default();
@@ -637,7 +657,8 @@ impl RepoSwitchMetrics {
                 Effect::LoadDiff { .. }
                 | Effect::LoadDiffFile { .. }
                 | Effect::LoadDiffFileImage { .. }
-                | Effect::LoadConflictFile { .. } => {
+                | Effect::LoadConflictFile { .. }
+                | Effect::LoadSelectedConflictFile { .. } => {
                     metrics.selected_diff_reload_effect_count =
                         metrics.selected_diff_reload_effect_count.saturating_add(1);
                 }
@@ -661,9 +682,16 @@ impl RepoSwitchMetrics {
                 | Effect::LoadTags { .. }
                 | Effect::LoadRemoteTags { .. }
                 | Effect::LoadStashes { .. }
+                | Effect::LoadRebaseAndMergeState { .. }
                 | Effect::LoadRebaseState { .. }
                 | Effect::LoadMergeCommitMessage { .. } => {
-                    metrics.refresh_effect_count = metrics.refresh_effect_count.saturating_add(1);
+                    let increment = if matches!(effect, Effect::LoadRebaseAndMergeState { .. }) {
+                        2
+                    } else {
+                        1
+                    };
+                    metrics.refresh_effect_count =
+                        metrics.refresh_effect_count.saturating_add(increment);
                 }
                 _ => {}
             }
@@ -673,12 +701,131 @@ impl RepoSwitchMetrics {
     }
 }
 
+fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
+    fn hash_diff_target(target: &DiffTarget, h: &mut FxHasher) {
+        match target {
+            DiffTarget::WorkingTree { path, area } => {
+                path.hash(h);
+                (*area as u8).hash(h);
+            }
+            DiffTarget::Commit { commit_id, path } => {
+                commit_id.hash(h);
+                path.hash(h);
+            }
+        }
+    }
+
+    fn hash_repo_selected_diff_target(state: &AppState, repo_id: RepoId, h: &mut FxHasher) {
+        if let Some(target) = state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+        {
+            hash_diff_target(target, h);
+        }
+    }
+
+    let mut h = FxHasher::default();
+    state.active_repo.hash(&mut h);
+    state.repos.len().hash(&mut h);
+    effects.len().hash(&mut h);
+
+    for effect in effects.iter().take(32) {
+        std::mem::discriminant(effect).hash(&mut h);
+        match effect {
+            Effect::LoadDiff { repo_id, target }
+            | Effect::LoadDiffFile { repo_id, target }
+            | Effect::LoadDiffFileImage { repo_id, target } => {
+                repo_id.0.hash(&mut h);
+                hash_diff_target(target, &mut h);
+            }
+            Effect::LoadSelectedDiff {
+                repo_id,
+                load_file_text,
+                load_file_image,
+            } => {
+                repo_id.0.hash(&mut h);
+                load_file_text.hash(&mut h);
+                load_file_image.hash(&mut h);
+                hash_repo_selected_diff_target(state, *repo_id, &mut h);
+            }
+            Effect::LoadLog {
+                repo_id,
+                scope,
+                limit,
+                cursor,
+            } => {
+                repo_id.0.hash(&mut h);
+                std::mem::discriminant(scope).hash(&mut h);
+                limit.hash(&mut h);
+                cursor.is_some().hash(&mut h);
+            }
+            Effect::PersistSession {
+                repo_id, action, ..
+            } => {
+                repo_id.hash(&mut h);
+                action.hash(&mut h);
+            }
+            Effect::LoadStashes { repo_id, limit } => {
+                repo_id.0.hash(&mut h);
+                limit.hash(&mut h);
+            }
+            Effect::LoadBranches { repo_id }
+            | Effect::LoadRemotes { repo_id }
+            | Effect::LoadRemoteBranches { repo_id }
+            | Effect::LoadStatus { repo_id }
+            | Effect::LoadHeadBranch { repo_id }
+            | Effect::LoadUpstreamDivergence { repo_id }
+            | Effect::LoadTags { repo_id }
+            | Effect::LoadRemoteTags { repo_id }
+            | Effect::LoadRebaseAndMergeState { repo_id }
+            | Effect::LoadRebaseState { repo_id }
+            | Effect::LoadMergeCommitMessage { repo_id } => {
+                repo_id.0.hash(&mut h);
+            }
+            Effect::LoadConflictFile { repo_id, path, .. } => {
+                repo_id.0.hash(&mut h);
+                path.hash(&mut h);
+            }
+            _ => {}
+        }
+    }
+
+    h.finish()
+}
+
+fn reset_repo_switch_bench_state(state: &mut AppState, baseline: &AppState) {
+    debug_assert_eq!(state.repos.len(), baseline.repos.len());
+    state.active_repo = baseline.active_repo;
+
+    for (repo_state, baseline_repo) in state.repos.iter_mut().zip(baseline.repos.iter()) {
+        repo_state.loads_in_flight = baseline_repo.loads_in_flight.clone();
+        repo_state.log_loading_more = baseline_repo.log_loading_more;
+        repo_state.history_state.log_loading_more = baseline_repo.history_state.log_loading_more;
+        repo_state.last_active_at = baseline_repo.last_active_at;
+    }
+}
+
 pub struct RepoSwitchFixture {
     baseline: AppState,
     target_repo_id: RepoId,
 }
 
 impl RepoSwitchFixture {
+    fn flipped_direction(&self) -> Self {
+        let active_repo_id = self.baseline.active_repo.unwrap_or(self.target_repo_id);
+        debug_assert_ne!(active_repo_id, self.target_repo_id);
+
+        let mut baseline = self.baseline.clone();
+        baseline.active_repo = Some(self.target_repo_id);
+
+        Self {
+            baseline,
+            target_repo_id: active_repo_id,
+        }
+    }
+
     pub fn refocus_same_repo(
         commits: usize,
         local_branches: usize,
@@ -1036,101 +1183,18 @@ impl RepoSwitchFixture {
     }
 
     pub fn run_with_state(&self, state: &mut AppState) -> (u64, RepoSwitchMetrics) {
-        let effects = set_active_repo_sync(state, self.target_repo_id);
-        let metrics = RepoSwitchMetrics::from_state_and_effects(state, &effects);
+        with_set_active_repo_sync(state, self.target_repo_id, |state, effects| {
+            (
+                hash_repo_switch_outcome(state, effects),
+                RepoSwitchMetrics::from_state_and_effects(state, effects),
+            )
+        })
+    }
 
-        let mut h = FxHasher::default();
-        state.active_repo.hash(&mut h);
-        effects.len().hash(&mut h);
-        metrics.effect_count.hash(&mut h);
-        metrics.refresh_effect_count.hash(&mut h);
-        metrics.selected_diff_reload_effect_count.hash(&mut h);
-        metrics.persist_session_effect_count.hash(&mut h);
-        metrics.repo_count.hash(&mut h);
-        metrics.hydrated_repo_count.hash(&mut h);
-        metrics.selected_commit_repo_count.hash(&mut h);
-        metrics.selected_diff_repo_count.hash(&mut h);
-
-        for effect in effects.iter().take(32) {
-            std::mem::discriminant(effect).hash(&mut h);
-            match effect {
-                Effect::LoadDiff { repo_id, target }
-                | Effect::LoadDiffFile { repo_id, target }
-                | Effect::LoadDiffFileImage { repo_id, target } => {
-                    repo_id.0.hash(&mut h);
-                    match target {
-                        DiffTarget::WorkingTree { path, area } => {
-                            path.hash(&mut h);
-                            (*area as u8).hash(&mut h);
-                        }
-                        DiffTarget::Commit { commit_id, path } => {
-                            commit_id.hash(&mut h);
-                            path.hash(&mut h);
-                        }
-                    }
-                }
-                Effect::LoadSelectedDiff {
-                    repo_id,
-                    target,
-                    load_file_text,
-                    load_file_image,
-                } => {
-                    repo_id.0.hash(&mut h);
-                    load_file_text.hash(&mut h);
-                    load_file_image.hash(&mut h);
-                    match target {
-                        DiffTarget::WorkingTree { path, area } => {
-                            path.hash(&mut h);
-                            (*area as u8).hash(&mut h);
-                        }
-                        DiffTarget::Commit { commit_id, path } => {
-                            commit_id.hash(&mut h);
-                            path.hash(&mut h);
-                        }
-                    }
-                }
-                Effect::LoadLog {
-                    repo_id,
-                    scope,
-                    limit,
-                    cursor,
-                } => {
-                    repo_id.0.hash(&mut h);
-                    std::mem::discriminant(scope).hash(&mut h);
-                    limit.hash(&mut h);
-                    cursor.is_some().hash(&mut h);
-                }
-                Effect::PersistSession {
-                    repo_id, action, ..
-                } => {
-                    repo_id.hash(&mut h);
-                    action.hash(&mut h);
-                }
-                Effect::LoadStashes { repo_id, limit } => {
-                    repo_id.0.hash(&mut h);
-                    limit.hash(&mut h);
-                }
-                Effect::LoadBranches { repo_id }
-                | Effect::LoadRemotes { repo_id }
-                | Effect::LoadRemoteBranches { repo_id }
-                | Effect::LoadStatus { repo_id }
-                | Effect::LoadHeadBranch { repo_id }
-                | Effect::LoadUpstreamDivergence { repo_id }
-                | Effect::LoadTags { repo_id }
-                | Effect::LoadRemoteTags { repo_id }
-                | Effect::LoadRebaseState { repo_id }
-                | Effect::LoadMergeCommitMessage { repo_id } => {
-                    repo_id.0.hash(&mut h);
-                }
-                Effect::LoadConflictFile { repo_id, path, .. } => {
-                    repo_id.0.hash(&mut h);
-                    path.hash(&mut h);
-                }
-                _ => {}
-            }
-        }
-
-        (h.finish(), metrics)
+    pub fn run_with_state_hash_only(&self, state: &mut AppState) -> u64 {
+        with_set_active_repo_sync(state, self.target_repo_id, |state, effects| {
+            hash_repo_switch_outcome(state, effects)
+        })
     }
 
     pub fn run(&self) -> (u64, RepoSwitchMetrics) {
@@ -1419,56 +1483,12 @@ impl HistoryCacheBuildFixture {
         let head_branch = &self.head_branch;
         let theme = self.theme;
 
-        // 1. stash_messages_by_id
-        let mut stash_messages_by_id: HashMap<&str, Arc<str>> =
-            HashMap::with_capacity_and_hasher(stashes.len(), Default::default());
-        for stash in stashes.iter() {
-            stash_messages_by_id.insert(stash.id.as_ref(), stash.message.clone());
-        }
+        // 1. stash tip analysis
+        let stash_analysis = analyze_history_stashes(commits, stashes);
+        let stash_tips = stash_analysis.stash_tips;
+        let stash_helper_ids = stash_analysis.stash_helper_ids;
 
-        // 2. stash tip detection
-        let stash_tip_ids_from_list: HashSet<&str> = stash_messages_by_id.keys().copied().collect();
-        let mut stash_tip_ids = stash_tip_ids_from_list.clone();
-        let derive_helper_ids_from_detected_tips = stash_tip_ids_from_list.is_empty();
-        let mut stash_helper_ids: HashSet<&str> = HashSet::with_capacity_and_hasher(
-            stash_tip_ids_from_list.len().max(4),
-            Default::default(),
-        );
-        for commit in commits.iter() {
-            let commit_id = commit.id.as_ref();
-            let is_probable_stash = Self::is_probable_stash_tip(commit);
-            if is_probable_stash {
-                stash_tip_ids.insert(commit_id);
-            }
-
-            let should_collect_helpers = if derive_helper_ids_from_detected_tips {
-                is_probable_stash
-            } else {
-                stash_tip_ids_from_list.contains(commit_id)
-            };
-            if !should_collect_helpers {
-                continue;
-            }
-
-            for parent_id in commit.parent_ids.iter().skip(1).map(|p| p.as_ref()) {
-                stash_helper_ids.insert(parent_id);
-            }
-        }
-
-        // 4. visible_indices — short-circuit when no stash helpers to avoid
-        // N hash lookups against the empty set.
-        let visible_indices: Vec<usize> = if stash_helper_ids.is_empty() {
-            (0..commits.len()).collect()
-        } else {
-            let mut visible_indices =
-                Vec::with_capacity(commits.len().saturating_sub(stash_helper_ids.len()));
-            for (ix, commit) in commits.iter().enumerate() {
-                if !stash_helper_ids.contains(commit.id.as_ref()) {
-                    visible_indices.push(ix);
-                }
-            }
-            visible_indices
-        };
+        let visible_indices = build_history_visible_indices(commits, &stash_helper_ids);
         let stash_helpers_filtered = commits.len() - visible_indices.len();
 
         // 7. head target resolution + branch_heads + compute_graph
@@ -1494,7 +1514,7 @@ impl HistoryCacheBuildFixture {
         } else {
             let visible_commit_refs = visible_indices
                 .iter()
-                .map(|&ix| &commits[ix])
+                .map(|ix| &commits[ix])
                 .collect::<Vec<_>>();
             history_graph::compute_graph_refs(
                 &visible_commit_refs,
@@ -1514,17 +1534,17 @@ impl HistoryCacheBuildFixture {
             .unwrap_or(1);
 
         // 8. branch/tag decorations precomputed once per target
-        let (branch_text_by_target, head_branches_text) = build_history_branch_text_by_target(
+        let (mut branch_text_by_target, head_branches_text) = build_history_branch_text_by_target(
             branches,
             remote_branches,
             head_branch.as_deref(),
             head_target,
         );
-        let tag_names_by_target = build_history_tag_names_by_target(tags);
+        let mut tag_names_by_target = build_history_tag_names_by_target(tags);
 
         // 9. commit_row_vms — replicate the VM construction from ensure_history_cache
-        let empty_tags: Arc<[SharedString]> = Vec::new().into();
         let mut decorated_count = 0usize;
+        let has_stash_tips = !stash_tips.is_empty();
         let mut author_cache: HashMap<&str, SharedString> =
             HashMap::with_capacity_and_hasher(64, Default::default());
         let mut commit_row_vms: Vec<(
@@ -1537,58 +1557,98 @@ impl HistoryCacheBuildFixture {
             bool,
             bool,
         )> = Vec::with_capacity(visible_indices.len());
-        for &ix in &visible_indices {
-            let Some(commit) = commits.get(ix) else {
-                continue;
-            };
-            let commit_id = commit.id.as_ref();
-            let is_head = head_target == Some(commit_id);
-            let cached_branch_text = branch_text_by_target.get(commit_id);
+        if has_stash_tips {
+            let mut next_stash_tip_ix = 0usize;
+            for ix in visible_indices.iter() {
+                let Some(commit) = commits.get(ix) else {
+                    continue;
+                };
+                let commit_id = commit.id.as_ref();
+                let is_head = head_target == Some(commit_id);
 
-            let branches_text = if is_head {
-                head_branches_text.clone().unwrap_or_default()
-            } else {
-                cached_branch_text.cloned().unwrap_or_default()
-            };
+                let branches_text = if is_head {
+                    head_branches_text.clone().unwrap_or_default()
+                } else {
+                    branch_text_by_target.remove(commit_id).unwrap_or_default()
+                };
 
-            let tag_names = tag_names_by_target
-                .get(commit_id)
-                .cloned()
-                .unwrap_or_else(|| Arc::clone(&empty_tags));
+                let tag_names = tag_names_by_target.remove(commit_id).unwrap_or_default();
 
-            if is_head || cached_branch_text.is_some() || !tag_names.is_empty() {
-                decorated_count += 1;
+                if is_head || !branches_text.is_empty() || !tag_names.is_empty() {
+                    decorated_count += 1;
+                }
+
+                let author: SharedString = author_cache
+                    .entry(commit.author.as_ref())
+                    .or_insert_with(|| commit.author.clone().into())
+                    .clone();
+                let (is_stash, summary): (bool, SharedString) =
+                    match next_history_stash_tip_for_commit_ix(
+                        &stash_tips,
+                        &mut next_stash_tip_ix,
+                        ix,
+                    ) {
+                        Some(stash_tip) => (
+                            true,
+                            stash_tip
+                                .message
+                                .map(|message| Arc::clone(message).into())
+                                .or_else(|| {
+                                    Self::stash_summary_from_log_summary(&commit.summary)
+                                        .map(SharedString::new)
+                                })
+                                .unwrap_or_else(|| commit.summary.clone().into()),
+                        ),
+                        None => (false, commit.summary.clone().into()),
+                    };
+
+                commit_row_vms.push((
+                    branches_text,
+                    tag_names,
+                    author,
+                    summary,
+                    HistoryWhenVm::deferred(commit.time),
+                    HistoryShortShaVm::new(commit.id.as_ref()),
+                    is_head,
+                    is_stash,
+                ));
             }
+        } else {
+            for ix in visible_indices.iter() {
+                let Some(commit) = commits.get(ix) else {
+                    continue;
+                };
+                let commit_id = commit.id.as_ref();
+                let is_head = head_target == Some(commit_id);
 
-            let author: SharedString = author_cache
-                .entry(commit.author.as_ref())
-                .or_insert_with(|| commit.author.clone().into())
-                .clone();
-            let is_stash = stash_tip_ids.contains(commit_id);
-            let summary: SharedString = if is_stash {
-                stash_messages_by_id
-                    .get(commit_id)
-                    .filter(|message| !message.trim().is_empty())
-                    .cloned()
-                    .map(Into::into)
-                    .or_else(|| {
-                        Self::stash_summary_from_log_summary(&commit.summary).map(SharedString::new)
-                    })
-                    .unwrap_or_else(|| commit.summary.clone().into())
-            } else {
-                commit.summary.clone().into()
-            };
+                let branches_text = if is_head {
+                    head_branches_text.clone().unwrap_or_default()
+                } else {
+                    branch_text_by_target.remove(commit_id).unwrap_or_default()
+                };
 
-            commit_row_vms.push((
-                branches_text,
-                tag_names,
-                author,
-                summary,
-                HistoryWhenVm::deferred(commit.time),
-                HistoryShortShaVm::new(commit.id.as_ref()),
-                is_head,
-                is_stash,
-            ));
+                let tag_names = tag_names_by_target.remove(commit_id).unwrap_or_default();
+
+                if is_head || !branches_text.is_empty() || !tag_names.is_empty() {
+                    decorated_count += 1;
+                }
+
+                let author: SharedString = author_cache
+                    .entry(commit.author.as_ref())
+                    .or_insert_with(|| commit.author.clone().into())
+                    .clone();
+
+                commit_row_vms.push((
+                    branches_text,
+                    tag_names,
+                    author,
+                    commit.summary.clone().into(),
+                    HistoryWhenVm::deferred(commit.time),
+                    HistoryShortShaVm::new(commit.id.as_ref()),
+                    is_head,
+                    false,
+                ));
+            }
         }
 
         // Hash output to prevent dead-code elimination
@@ -1617,15 +1677,6 @@ impl HistoryCacheBuildFixture {
 
         (h.finish(), metrics)
     }
-
-    fn is_probable_stash_tip(commit: &Commit) -> bool {
-        if !(2..=3).contains(&commit.parent_ids.len()) {
-            return false;
-        }
-        let summary: &str = &commit.summary;
-        (summary.starts_with("WIP on ") || summary.starts_with("On ")) && summary.contains(": ")
-    }
-
     fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
         let (_, tail) = summary.split_once(": ")?;
         let trimmed = tail.trim();
@@ -1696,16 +1747,31 @@ impl HistoryLoadMoreAppendFixture {
             },
         );
         repo_state.history_state.history_scope = self.scope;
-        repo_state.history_state.log_loading_more = true;
-        repo_state.log_loading_more = true;
-        let log = Loadable::Ready(Arc::new(LogPage {
-            commits: self.existing_commits.clone(),
-            next_cursor: self.request_cursor(),
-        }));
-        repo_state.history_state.log = log.clone();
-        repo_state.log = log;
         state.repos.push(repo_state);
         state.active_repo = Some(self.repo_id);
+
+        // Seed the initial page through the reducer so benchmark setup matches
+        // the production initial-load path, including any pagination slack.
+        let _ = dispatch_sync(
+            &mut state,
+            Msg::Internal(InternalMsg::LogLoaded {
+                repo_id: self.repo_id,
+                scope: self.scope,
+                cursor: None,
+                result: Ok(LogPage {
+                    commits: self.existing_commits.clone(),
+                    next_cursor: self.request_cursor(),
+                }),
+            }),
+        );
+
+        let repo_state = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == self.repo_id)
+            .expect("history load-more fixture should keep its repo");
+        repo_state.history_state.log_loading_more = true;
+        repo_state.log_loading_more = true;
         state
     }
 
@@ -1915,8 +1981,8 @@ impl HistoryScopeSwitchFixture {
 
 pub struct CommitDetailsFixture {
     details: CommitDetails,
-    message_render: Option<CommitDetailsMessageRenderConfig>,
-    path_labels: RefCell<CommitFilePathLabelsCache<CommitId>>,
+    message_render: Option<CommitDetailsMessageRenderState>,
+    file_rows: RefCell<CommitFileRowPresentationCache<CommitId>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1926,12 +1992,27 @@ struct CommitDetailsMessageRenderConfig {
     max_shape_bytes: usize,
 }
 
+#[derive(Clone, Debug)]
+struct CommitDetailsMessageRenderState {
+    message_len: usize,
+    line_count: usize,
+    shaped_bytes: usize,
+    visible_lines: Vec<CommitDetailsVisibleMessageLine>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CommitDetailsVisibleMessageLine {
+    shaping_hash: u64,
+    capped_len: usize,
+    wrap_rows: usize,
+}
+
 impl CommitDetailsFixture {
     pub fn new(files: usize, depth: usize) -> Self {
         Self {
             details: build_synthetic_commit_details(files, depth),
             message_render: None,
-            path_labels: RefCell::new(CommitFilePathLabelsCache::default()),
+            file_rows: RefCell::new(CommitFileRowPresentationCache::default()),
         }
     }
 
@@ -1943,53 +2024,46 @@ impl CommitDetailsFixture {
         visible_lines: usize,
         wrap_width_px: usize,
     ) -> Self {
+        let message_render = CommitDetailsMessageRenderConfig {
+            visible_lines: visible_lines.max(1),
+            wrap_width_px: wrap_width_px.max(1),
+            max_shape_bytes: 4 * 1024,
+        };
+        let details = build_synthetic_commit_details_with_message(
+            files,
+            depth,
+            build_synthetic_commit_message(message_bytes, line_bytes),
+        );
         Self {
-            details: build_synthetic_commit_details_with_message(
-                files,
-                depth,
-                build_synthetic_commit_message(message_bytes, line_bytes),
-            ),
-            message_render: Some(CommitDetailsMessageRenderConfig {
-                visible_lines: visible_lines.max(1),
-                wrap_width_px: wrap_width_px.max(1),
-                max_shape_bytes: 4 * 1024,
-            }),
-            path_labels: RefCell::new(CommitFilePathLabelsCache::default()),
+            message_render: Some(build_commit_details_message_render_state(
+                details.message.as_str(),
+                message_render,
+            )),
+            details,
+            file_rows: RefCell::new(CommitFileRowPresentationCache::default()),
         }
     }
 
     pub fn prewarm_runtime_state(&self) {
-        let mut path_labels = self.path_labels.borrow_mut();
-        let _ = path_labels.labels_for(&self.details.id, &self.details.files);
+        let mut file_rows = self.file_rows.borrow_mut();
+        let _ = file_rows.rows_for(&self.details.id, &self.details.files);
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn reset_runtime_state(&self) {
-        self.path_labels.borrow_mut().clear();
+        self.file_rows.borrow_mut().clear();
     }
 
     pub fn run(&self) -> u64 {
-        // Approximation of the per-row work done by the commit files list:
-        // kind->icon mapping and reusing the current commit's cached path labels.
-        let mut h = FxHasher::default();
-        self.details.id.as_ref().hash(&mut h);
-        commit_details_message_hash(self.details.message.as_str(), self.message_render, &mut h);
-
-        let path_labels = {
-            let mut path_labels = self.path_labels.borrow_mut();
-            path_labels.labels_for(&self.details.id, &self.details.files)
+        let file_rows = {
+            let mut file_rows = self.file_rows.borrow_mut();
+            commit_details_cached_row_hash(
+                &self.details,
+                self.message_render.as_ref(),
+                &mut file_rows,
+            )
         };
-        let mut counts = [0usize; 6];
-        for (f, path_label) in self.details.files.iter().zip(path_labels.iter()) {
-            let visuals = commit_file_kind_visuals(f.kind);
-            Some(visuals.icon).hash(&mut h);
-            visuals.kind_key.hash(&mut h);
-            path_label.as_ref().hash(&mut h);
-
-            counts[visuals.kind_key as usize] = counts[visuals.kind_key as usize].saturating_add(1);
-        }
-        counts.hash(&mut h);
-        h.finish()
+        file_rows
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -2006,10 +2080,8 @@ impl CommitDetailsFixture {
             .unwrap_or(0);
         let message_bytes = self.details.message.len();
         let message_lines = count_commit_message_lines(self.details.message.as_str());
-        let (message_shaped_lines, message_shaped_bytes) = measure_commit_message_visible_window(
-            self.details.message.as_str(),
-            self.message_render,
-        );
+        let (message_shaped_lines, message_shaped_bytes) =
+            measure_commit_message_visible_window(self.message_render.as_ref());
 
         let mut kind_counts = [0usize; 6];
         for f in &self.details.files {
@@ -2054,28 +2126,34 @@ pub struct CommitDetailsMetrics {
 pub struct CommitSelectReplaceFixture {
     commit_a: CommitDetails,
     commit_b: CommitDetails,
+    prewarmed_file_rows: CommitFileRowPresentationCache<CommitId>,
 }
 
 impl CommitSelectReplaceFixture {
     pub fn new(files: usize, depth: usize) -> Self {
         let commit_a = build_synthetic_commit_details(files, depth);
         let commit_b = build_synthetic_commit_details_with_id(files, depth, "e");
-        Self { commit_a, commit_b }
+        let mut prewarmed_file_rows = CommitFileRowPresentationCache::default();
+        let _ = prewarmed_file_rows.rows_for(&commit_a.id, &commit_a.files);
+        Self {
+            commit_a,
+            commit_b,
+            prewarmed_file_rows,
+        }
     }
 
-    /// Run the replacement: process commit_a, then switch to commit_b.
-    /// Returns the hash of the second commit's processing (the replacement cost).
+    /// Run the replacement starting from the first commit's already-rendered
+    /// file rows, then switch to commit_b and hash the replacement work only.
     pub fn run(&self) -> u64 {
-        // First commit is already rendered (warm cache of the first commit's rows).
-        let _ = commit_details_row_hash(&self.commit_a);
-        // Second commit replaces it — this is the measured cost.
-        commit_details_row_hash(&self.commit_b)
+        let mut file_rows = self.prewarmed_file_rows.clone();
+        commit_details_cached_row_hash(&self.commit_b, None, &mut file_rows)
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn run_with_metrics(&self) -> (u64, CommitSelectReplaceMetrics) {
-        let hash_a = commit_details_row_hash(&self.commit_a);
-        let hash_b = commit_details_row_hash(&self.commit_b);
+        let mut file_rows_a = self.prewarmed_file_rows.clone();
+        let hash_a = commit_details_cached_row_hash(&self.commit_a, None, &mut file_rows_a);
+        let hash_b = self.run();
         let metrics = CommitSelectReplaceMetrics {
             files_a: self.commit_a.files.len(),
             files_b: self.commit_b.files.len(),
@@ -2127,7 +2205,7 @@ impl PathDisplayCacheChurnFixture {
         let mut h = FxHasher::default();
         for f in &self.details.files {
             let display = path_display::cached_path_display(&mut self.path_display_cache, &f.path);
-            display.as_ref().hash(&mut h);
+            hash_shared_string_identity(&display, &mut h);
         }
         h.finish()
     }
@@ -3289,6 +3367,8 @@ impl StatusMultiSelectFixture {
             entries[anchor_index].clone(),
             Some(anchor_index),
             gpui::Modifiers::default(),
+            Some(1),
+            true,
             Some(&entries),
         );
 
@@ -3341,6 +3421,8 @@ impl StatusMultiSelectFixture {
                 shift: true,
                 ..Default::default()
             },
+            Some(1),
+            true,
             Some(&self.entries),
         );
         selection
@@ -3350,12 +3432,10 @@ impl StatusMultiSelectFixture {
 fn hash_status_multi_selection(selection: &StatusMultiSelection) -> u64 {
     let mut h = FxHasher::default();
     selection.unstaged.len().hash(&mut h);
-    selection.unstaged_anchor.hash(&mut h);
-    for path in selection.unstaged.iter().take(64) {
-        path.hash(&mut h);
-    }
+    hash_optional_path_identity(selection.unstaged_anchor.as_deref(), &mut h);
+    hash_status_multi_selection_path_sample(selection.unstaged.as_slice(), &mut h);
     selection.staged.len().hash(&mut h);
-    selection.staged_anchor.hash(&mut h);
+    hash_optional_path_identity(selection.staged_anchor.as_deref(), &mut h);
     h.finish()
 }
 
@@ -3381,10 +3461,32 @@ impl StatusSelectDiffOpenMetrics {
                 Effect::LoadDiff { .. } => metrics.load_diff_effect_count += 1,
                 Effect::LoadDiffFile { .. } => metrics.load_diff_file_effect_count += 1,
                 Effect::LoadDiffFileImage { .. } => metrics.load_diff_file_image_effect_count += 1,
+                Effect::LoadSelectedDiff {
+                    load_file_text,
+                    load_file_image,
+                    ..
+                } => {
+                    metrics.load_diff_effect_count += 1;
+                    metrics.load_diff_file_effect_count += usize::from(*load_file_text);
+                    metrics.load_diff_file_image_effect_count += usize::from(*load_file_image);
+                }
                 _ => {}
             }
         }
         metrics
+    }
+}
+
+fn hash_status_select_diff_target(target: &DiffTarget, hasher: &mut FxHasher) {
+    match target {
+        DiffTarget::WorkingTree { path, area } => {
+            path.hash(hasher);
+            (*area as u8).hash(hasher);
+        }
+        DiffTarget::Commit { commit_id, path } => {
+            commit_id.hash(hasher);
+            path.hash(hasher);
+        }
     }
 }
 
@@ -3458,27 +3560,50 @@ impl StatusSelectDiffOpenFixture {
 
     pub fn run_with_state(&self, state: &mut AppState) -> (u64, StatusSelectDiffOpenMetrics) {
         let rev_before = state.repos[0].diff_state.diff_state_rev;
-        let effects = dispatch_sync(
+        with_select_diff_sync(
             state,
-            Msg::SelectDiff {
-                repo_id: RepoId(1),
-                target: self.diff_target.clone(),
+            RepoId(1),
+            self.diff_target.clone(),
+            |state, effects| {
+                let rev_after = state.repos[0].diff_state.diff_state_rev;
+                let metrics = StatusSelectDiffOpenMetrics::from_effects_and_rev(
+                    effects, rev_before, rev_after,
+                );
+
+                let mut h = FxHasher::default();
+                state.repos[0].diff_state.diff_state_rev.hash(&mut h);
+                effects.len().hash(&mut h);
+                for effect in effects.iter() {
+                    std::mem::discriminant(effect).hash(&mut h);
+                    match effect {
+                        Effect::LoadDiff { repo_id, target }
+                        | Effect::LoadDiffFile { repo_id, target }
+                        | Effect::LoadDiffFileImage { repo_id, target } => {
+                            repo_id.0.hash(&mut h);
+                            hash_status_select_diff_target(target, &mut h);
+                        }
+                        Effect::LoadSelectedDiff {
+                            repo_id,
+                            load_file_text,
+                            load_file_image,
+                        } => {
+                            repo_id.0.hash(&mut h);
+                            load_file_text.hash(&mut h);
+                            load_file_image.hash(&mut h);
+                            if let Some(target) = state.repos[0].diff_state.diff_target.as_ref() {
+                                hash_status_select_diff_target(target, &mut h);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                metrics.load_diff_effect_count.hash(&mut h);
+                metrics.load_diff_file_effect_count.hash(&mut h);
+                metrics.load_diff_file_image_effect_count.hash(&mut h);
+
+                (h.finish(), metrics)
             },
-        );
-        let rev_after = state.repos[0].diff_state.diff_state_rev;
-        let metrics =
-            StatusSelectDiffOpenMetrics::from_effects_and_rev(&effects, rev_before, rev_after);
-
-        let mut h = FxHasher::default();
-        state.repos[0].diff_state.diff_state_rev.hash(&mut h);
-        effects.len().hash(&mut h);
-        for effect in effects.iter() {
-            std::mem::discriminant(effect).hash(&mut h);
-        }
-        metrics.load_diff_effect_count.hash(&mut h);
-        metrics.load_diff_file_effect_count.hash(&mut h);
-
-        (h.finish(), metrics)
+        )
     }
 
     pub fn run(&self) -> (u64, StatusSelectDiffOpenMetrics) {
@@ -3595,14 +3720,9 @@ impl StatusListFixture {
         range.end.hash(&mut h);
 
         for (row_ix, entry) in self.entries[range].iter().enumerate() {
-            status_row_kind_key(entry.kind).hash(&mut h);
-            row_ix.hash(&mut h);
-            entry.path.hash(&mut h);
-
             let path_display =
                 path_display::cached_path_display(&mut self.path_display_cache, &entry.path);
-            path_display.as_ref().hash(&mut h);
-            path_display.len().hash(&mut h);
+            hash_status_row_label(row_ix, entry.kind, &path_display, &mut h);
         }
 
         self.path_display_cache.len().hash(&mut h);
@@ -3629,10 +3749,32 @@ fn status_row_kind_key(kind: FileStatusKind) -> u8 {
     }
 }
 
+fn hash_status_row_label(
+    row_ix: usize,
+    kind: FileStatusKind,
+    path_label: &SharedString,
+    hasher: &mut FxHasher,
+) {
+    // Production status rows reuse the cached SharedString label directly.
+    // They do not rescan both the raw PathBuf text and the formatted label.
+    status_row_kind_key(kind).hash(hasher);
+    row_ix.hash(hasher);
+    hash_shared_string_identity(path_label, hasher);
+}
+
 pub struct LargeFileDiffScrollFixture {
     lines: Vec<String>,
+    line_bytes: Vec<usize>,
     language: Option<super::diff_text::DiffSyntaxLanguage>,
+    prepared_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
     theme: AppTheme,
+    highlight_palette: super::diff_text::SyntaxHighlightPalette,
+    row_fingerprints: LargeFileDiffScrollRowFingerprints,
+}
+
+enum LargeFileDiffScrollRowFingerprints {
+    Warm(Vec<u64>),
+    Lazy(Vec<Cell<Option<u64>>>),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3654,38 +3796,111 @@ impl LargeFileDiffScrollFixture {
     pub fn new_with_line_bytes(lines: usize, line_bytes: usize) -> Self {
         let theme = AppTheme::gitcomet_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
-        Self {
-            lines: build_synthetic_source_lines(lines, line_bytes),
+        let lines = build_synthetic_source_lines(lines, line_bytes);
+        let line_count = lines.len();
+        let line_bytes = lines.iter().map(String::len).collect::<Vec<_>>();
+        let prepared_document = language.and_then(|language| {
+            let text: SharedString = lines.join("\n").into();
+            let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
+            let document = prepare_bench_diff_syntax_document_from_shared(
+                language,
+                DiffSyntaxBudget::default(),
+                text.clone(),
+                Arc::clone(&line_starts),
+                None,
+            )?;
+            prewarm_bench_prepared_diff_syntax_document(
+                theme,
+                text.as_ref(),
+                line_starts.as_ref(),
+                document,
+                language,
+                lines.len(),
+            );
+            Some(document)
+        });
+        let mut fixture = Self {
+            line_bytes,
+            lines,
             language,
+            prepared_document,
             theme,
-        }
-    }
-
-    pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
-        self.run_scroll_step_with_metrics(start, window).0
-    }
-
-    pub fn run_scroll_step_with_metrics(
-        &self,
-        start: usize,
-        window: usize,
-    ) -> (u64, LargeFileDiffScrollMetrics) {
-        // Approximate "a scroll step": style the newly visible rows in a window.
-        let actual_start = if self.lines.is_empty() {
-            0
-        } else {
-            start % self.lines.len()
+            highlight_palette: super::diff_text::syntax_highlight_palette(theme),
+            row_fingerprints: LargeFileDiffScrollRowFingerprints::Lazy(vec![
+                Cell::new(None);
+                line_count
+            ]),
         };
-        let end = (actual_start + window).min(self.lines.len());
-        let visible_lines = &self.lines[actual_start..end];
-        let highlight_palette = super::diff_text::syntax_highlight_palette(self.theme);
-        let mut h = FxHasher::default();
-        let mut visible_text_bytes = 0usize;
-        let mut min_line_bytes = usize::MAX;
-        for line in visible_lines {
-            let styled = super::diff_text::build_cached_diff_styled_text_with_palette(
+        fixture.prewarm_row_fingerprints();
+        fixture
+    }
+
+    fn prewarm_row_fingerprints(&mut self) {
+        let mut warm = Vec::with_capacity(self.lines.len());
+        let mut lazy: Option<Vec<Cell<Option<u64>>>> = None;
+
+        for line_ix in 0..self.lines.len() {
+            let (styled, pending) = self.build_styled_line(line_ix);
+            let fingerprint = large_file_diff_scroll_row_fingerprint(line_ix, &styled);
+            if let Some(cache) = lazy.as_mut() {
+                cache.push(Cell::new((!pending).then_some(fingerprint)));
+                continue;
+            }
+
+            if pending {
+                let mut cache = warm
+                    .drain(..)
+                    .map(|cached_fingerprint| Cell::new(Some(cached_fingerprint)))
+                    .collect::<Vec<_>>();
+                cache.push(Cell::new(None));
+                lazy = Some(cache);
+                continue;
+            }
+
+            warm.push(fingerprint);
+        }
+
+        self.row_fingerprints = if let Some(cache) = lazy {
+            LargeFileDiffScrollRowFingerprints::Lazy(cache)
+        } else {
+            LargeFileDiffScrollRowFingerprints::Warm(warm)
+        };
+    }
+
+    fn build_styled_line(&self, line_ix: usize) -> (CachedDiffStyledText, bool) {
+        let line = self
+            .lines
+            .get(line_ix)
+            .map(String::as_str)
+            .unwrap_or_default();
+        if let Some(document) = self.prepared_document {
+            return super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
                 self.theme,
-                &highlight_palette,
+                &self.highlight_palette,
+                super::diff_text::PreparedDiffTextBuildRequest {
+                    build: super::diff_text::DiffTextBuildRequest {
+                        text: line,
+                        word_ranges: &[],
+                        query: "",
+                        syntax: super::diff_text::DiffSyntaxConfig {
+                            language: self.language,
+                            mode: DiffSyntaxMode::Auto,
+                        },
+                        word_color: None,
+                    },
+                    prepared_line: super::diff_text::PreparedDiffSyntaxLine {
+                        document: Some(document),
+                        line_ix,
+                    },
+                },
+            )
+            .into_parts();
+        }
+
+        (
+            super::diff_text::build_cached_diff_styled_text_with_palette(
+                self.theme,
+                &self.highlight_palette,
                 super::diff_text::DiffTextBuildRequest {
                     text: line,
                     word_ranges: &[],
@@ -3696,28 +3911,140 @@ impl LargeFileDiffScrollFixture {
                     },
                     word_color: None,
                 },
-            );
-            styled.text.len().hash(&mut h);
-            styled.highlights.len().hash(&mut h);
-            visible_text_bytes = visible_text_bytes.saturating_add(line.len());
-            min_line_bytes = min_line_bytes.min(line.len());
-        }
+            ),
+            false,
+        )
+    }
+
+    pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
+        let (actual_start, end) = self.visible_range(start, window);
+        self.hash_visible_range(actual_start, end)
+    }
+
+    pub fn run_scroll_step_with_metrics(
+        &self,
+        start: usize,
+        window: usize,
+    ) -> (u64, LargeFileDiffScrollMetrics) {
+        let (actual_start, end) = self.visible_range(start, window);
+        let hash = self.hash_visible_range(actual_start, end);
+        let visible_line_bytes = &self.line_bytes[actual_start..end];
+        let visible_text_bytes = visible_line_bytes.iter().copied().sum::<usize>();
         (
-            h.finish(),
+            hash,
             LargeFileDiffScrollMetrics {
                 total_lines: bench_counter_u64(self.lines.len()),
-                window_size: bench_counter_u64(visible_lines.len()),
+                window_size: bench_counter_u64(visible_line_bytes.len()),
                 start_line: bench_counter_u64(actual_start),
                 visible_text_bytes: bench_counter_u64(visible_text_bytes),
-                min_line_bytes: bench_counter_u64(if visible_lines.is_empty() {
+                min_line_bytes: bench_counter_u64(if visible_line_bytes.is_empty() {
                     0
                 } else {
-                    min_line_bytes
+                    visible_line_bytes.iter().copied().min().unwrap_or_default()
                 }),
                 language_detected: u64::from(self.language.is_some()),
                 syntax_mode_auto: 1,
             },
         )
+    }
+
+    fn visible_range(&self, start: usize, window: usize) -> (usize, usize) {
+        if self.lines.is_empty() || window == 0 {
+            return (0, 0);
+        }
+
+        let actual_start = start % self.lines.len();
+        let end = (actual_start + window).min(self.lines.len());
+        (actual_start, end)
+    }
+
+    fn hash_visible_range(&self, actual_start: usize, end: usize) -> u64 {
+        match &self.row_fingerprints {
+            LargeFileDiffScrollRowFingerprints::Warm(fingerprints) => {
+                hash_row_fingerprint_slice(&fingerprints[actual_start..end])
+            }
+            LargeFileDiffScrollRowFingerprints::Lazy(cache) => {
+                let mut hasher = FxHasher::default();
+                end.saturating_sub(actual_start).hash(&mut hasher);
+
+                for line_ix in actual_start..end {
+                    let cache_slot = &cache[line_ix];
+                    let fingerprint = if let Some(fingerprint) = cache_slot.get() {
+                        fingerprint
+                    } else {
+                        let (styled, pending) = self.build_styled_line(line_ix);
+                        let fingerprint = large_file_diff_scroll_row_fingerprint(line_ix, &styled);
+                        if !pending {
+                            cache_slot.set(Some(fingerprint));
+                        }
+                        fingerprint
+                    };
+                    fingerprint.hash(&mut hasher);
+                }
+
+                hasher.finish()
+            }
+        }
+    }
+}
+
+fn large_file_diff_scroll_row_fingerprint(line_ix: usize, styled: &CachedDiffStyledText) -> u64 {
+    let mut hasher = FxHasher::default();
+    line_ix.hash(&mut hasher);
+    styled.text_hash.hash(&mut hasher);
+    styled.highlights_hash.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[inline]
+fn hash_row_fingerprint_slice(fingerprints: &[u64]) -> u64 {
+    let mut hasher = FxHasher::default();
+    fingerprints.len().hash(&mut hasher);
+    for &fingerprint in fingerprints {
+        fingerprint.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+const BENCH_PREPARED_DIFF_SYNTAX_CHUNK_ROWS: usize = 64;
+const BENCH_PREPARED_DIFF_SYNTAX_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn prewarm_bench_prepared_diff_syntax_document(
+    theme: AppTheme,
+    text: &str,
+    line_starts: &[usize],
+    document: super::diff_text::PreparedDiffSyntaxDocument,
+    language: DiffSyntaxLanguage,
+    line_count: usize,
+) {
+    if text.is_empty() || line_count == 0 {
+        return;
+    }
+
+    // Sustained diff scrolling should stay on the warmed prepared-document path
+    // instead of timing background chunk scheduling and heuristic fallbacks.
+    for chunk_start in (0..line_count).step_by(BENCH_PREPARED_DIFF_SYNTAX_CHUNK_ROWS) {
+        let _ = super::diff_text::request_syntax_highlights_for_prepared_document_line_range(
+            theme,
+            text,
+            line_starts,
+            document,
+            language,
+            chunk_start..chunk_start.saturating_add(1).min(line_count),
+        );
+    }
+
+    let started = Instant::now();
+    while super::diff_text::has_pending_prepared_diff_syntax_chunk_builds_for_document(document) {
+        if super::diff_text::drain_completed_prepared_diff_syntax_chunk_builds_for_document(
+            document,
+        ) == 0
+        {
+            if started.elapsed() >= BENCH_PREPARED_DIFF_SYNTAX_DRAIN_TIMEOUT {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 }
 
@@ -3727,8 +4054,7 @@ impl LargeFileDiffScrollFixture {
 /// approximates the per-frame work of painting visible commit rows plus graph
 /// lane state during sustained scrolling.
 pub struct HistoryListScrollFixture {
-    commits: Vec<Commit>,
-    graph_rows: Vec<Arc<history_graph::GraphRow>>,
+    row_fingerprints: Vec<u64>,
 }
 
 impl HistoryListScrollFixture {
@@ -3747,12 +4073,14 @@ impl HistoryListScrollFixture {
         )
         .into_iter()
         .map(Arc::new)
-        .collect();
+        .collect::<Vec<_>>();
+        let row_fingerprints = commits
+            .iter()
+            .zip(graph_rows.iter())
+            .map(|(commit, graph_row)| history_scroll_row_fingerprint(commit, graph_row))
+            .collect();
 
-        Self {
-            commits,
-            graph_rows,
-        }
+        Self { row_fingerprints }
     }
 
     pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
@@ -3760,37 +4088,41 @@ impl HistoryListScrollFixture {
         let mut h = FxHasher::default();
         range.len().hash(&mut h);
 
-        for ix in range {
-            let commit = &self.commits[ix];
-            let graph_row = &self.graph_rows[ix];
-            commit.id.as_ref().hash(&mut h);
-            commit.summary.hash(&mut h);
-            commit.author.hash(&mut h);
-            commit.parent_ids.len().hash(&mut h);
-            (
-                graph_row.lanes_now.len(),
-                graph_row.lanes_next.len(),
-                graph_row.joins_in.len(),
-                graph_row.edges_out.len(),
-                graph_row.is_merge,
-            )
-                .hash(&mut h);
+        for row_fingerprint in &self.row_fingerprints[range] {
+            row_fingerprint.hash(&mut h);
         }
 
         h.finish()
     }
 
     fn visible_range(&self, start: usize, window: usize) -> Range<usize> {
-        let window = window.max(1).min(self.commits.len());
-        let max_start = self.commits.len().saturating_sub(window);
+        let window = window.max(1).min(self.row_fingerprints.len());
+        let max_start = self.row_fingerprints.len().saturating_sub(window);
         let start = start.min(max_start);
         start..start + window
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     fn total_rows(&self) -> usize {
-        self.commits.len()
+        self.row_fingerprints.len()
     }
+}
+
+fn history_scroll_row_fingerprint(commit: &Commit, graph_row: &history_graph::GraphRow) -> u64 {
+    let mut hasher = FxHasher::default();
+    commit.id.as_ref().hash(&mut hasher);
+    commit.summary.hash(&mut hasher);
+    commit.author.hash(&mut hasher);
+    commit.parent_ids.len().hash(&mut hasher);
+    (
+        graph_row.lanes_now.len(),
+        graph_row.lanes_next.len(),
+        graph_row.joins_in.len(),
+        graph_row.edges_out.len(),
+        graph_row.is_merge,
+    )
+        .hash(&mut hasher);
+    hasher.finish()
 }
 
 enum KeyboardArrowScrollScenario {
@@ -3899,14 +4231,11 @@ impl KeyboardArrowScrollFixture {
         let scroll_step_rows = self.scroll_step_rows.max(1);
         let repeat_events = self.repeat_events.max(1);
         let max_start = self.total_rows.saturating_sub(window_rows);
-        let mut seen_starts: HashSet<usize> = HashSet::default();
         let mut hash = 0u64;
         let mut start = 0usize;
         let mut wrap_count = 0u64;
 
         for _ in 0..repeat_events {
-            seen_starts.insert(start);
-
             if let Some(capture) = capture.as_deref_mut() {
                 let frame_started = std::time::Instant::now();
                 hash ^= self.run_step(start, window_rows);
@@ -3936,12 +4265,48 @@ impl KeyboardArrowScrollFixture {
                 rows_requested_total: u64::try_from(window_rows)
                     .unwrap_or(u64::MAX)
                     .saturating_mul(u64::try_from(repeat_events).unwrap_or(u64::MAX)),
-                unique_windows_visited: u64::try_from(seen_starts.len()).unwrap_or(u64::MAX),
+                unique_windows_visited: keyboard_scroll_unique_window_count(
+                    max_start,
+                    scroll_step_rows,
+                    repeat_events,
+                ),
                 wrap_count,
                 final_start_row: u64::try_from(start).unwrap_or(u64::MAX),
             },
         )
     }
+}
+
+fn keyboard_scroll_unique_window_count(
+    max_start: usize,
+    scroll_step_rows: usize,
+    repeat_events: usize,
+) -> u64 {
+    if repeat_events == 0 {
+        return 0;
+    }
+    if max_start == 0 {
+        return 1;
+    }
+
+    let cycle_len = max_start
+        .saturating_add(1)
+        .checked_div(greatest_common_divisor(
+            max_start.saturating_add(1),
+            scroll_step_rows,
+        ))
+        .unwrap_or(1);
+
+    u64::try_from(repeat_events.min(cycle_len)).unwrap_or(u64::MAX)
+}
+
+fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left.max(1)
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -3967,6 +4332,13 @@ struct KeyboardFocusNode {
     focusable: bool,
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
+#[derive(Clone, Copy, Debug, Default)]
+struct KeyboardFocusTraversal {
+    hash: u64,
+    prefix_max_scan_len: usize,
+}
+
 /// Fixture for `keyboard/tab_focus_cycle_all_panes`.
 ///
 /// Models the tab-order traversal across the major focusable chrome in a
@@ -3976,8 +4348,7 @@ struct KeyboardFocusNode {
 /// stops, so the benchmark measures both focus-target switching and the scan
 /// needed to find the next focusable node.
 pub struct KeyboardTabFocusCycleFixture {
-    nodes: Vec<KeyboardFocusNode>,
-    focusable_node_indices: Vec<usize>,
+    focus_traversal: Box<[KeyboardFocusTraversal]>,
     repo_tab_count: usize,
     detail_input_count: usize,
     cycle_events: usize,
@@ -4063,9 +4434,23 @@ impl KeyboardTabFocusCycleFixture {
             .filter_map(|(ix, node)| node.focusable.then_some(ix))
             .collect::<Vec<_>>();
 
+        let mut focus_traversal = Vec::with_capacity(focusable_node_indices.len());
+        let mut prefix_max_scan_len = 0usize;
+
+        for (focus_ix, &node_ix) in focusable_node_indices.iter().enumerate() {
+            let node = &nodes[node_ix];
+            let next_focus_ix = (focus_ix + 1) % focusable_node_indices.len();
+            let next_node_ix = focusable_node_indices[next_focus_ix];
+            let scan_len = keyboard_focus_scan_len(node_ix, next_node_ix, nodes.len());
+            prefix_max_scan_len = prefix_max_scan_len.max(scan_len);
+            focus_traversal.push(KeyboardFocusTraversal {
+                hash: keyboard_focus_node_hash(focus_ix, node_ix, node),
+                prefix_max_scan_len,
+            });
+        }
+
         Self {
-            nodes,
-            focusable_node_indices,
+            focus_traversal: focus_traversal.into_boxed_slice(),
             repo_tab_count,
             detail_input_count,
             cycle_events: cycle_events.max(1),
@@ -4085,78 +4470,110 @@ impl KeyboardTabFocusCycleFixture {
         crate::view::perf::FrameTimingStats,
         KeyboardTabFocusCycleMetrics,
     ) {
-        let mut capture = crate::view::perf::FrameTimingCapture::new(self.frame_budget_ns);
+        let mut capture = crate::view::perf::FrameTimingCapture::with_expected_frames(
+            self.frame_budget_ns,
+            self.cycle_events,
+        );
         let (hash, metrics) = self.run_internal(Some(&mut capture));
         (hash, capture.finish(), metrics)
-    }
-
-    fn focus_node_hash(&self, focus_ix: usize) -> u64 {
-        let node_ix = self.focusable_node_indices[focus_ix];
-        let node = &self.nodes[node_ix];
-        let mut hasher = FxHasher::default();
-        focus_ix.hash(&mut hasher);
-        node_ix.hash(&mut hasher);
-        std::mem::discriminant(&node.kind).hash(&mut hasher);
-        node.label_len.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    fn next_focus_target(&self, current_focus_ix: usize) -> (usize, usize, bool) {
-        let current_node_ix = self.focusable_node_indices[current_focus_ix];
-        let next_focus_ix = (current_focus_ix + 1) % self.focusable_node_indices.len();
-        let next_node_ix = self.focusable_node_indices[next_focus_ix];
-        let scan_len = if next_node_ix > current_node_ix {
-            next_node_ix - current_node_ix
-        } else {
-            self.nodes.len() - current_node_ix + next_node_ix
-        };
-        (next_focus_ix, scan_len.max(1), next_focus_ix == 0)
     }
 
     fn run_internal(
         &self,
         mut capture: Option<&mut crate::view::perf::FrameTimingCapture>,
     ) -> (u64, KeyboardTabFocusCycleMetrics) {
-        let mut seen_targets: HashSet<usize> = HashSet::default();
+        let focus_target_count = self.focus_traversal.len().max(1);
         let mut hash = 0u64;
         let mut current_focus_ix = 0usize;
-        let mut wrap_count = 0u64;
-        let mut max_scan_len = 0usize;
 
         for _ in 0..self.cycle_events {
-            seen_targets.insert(current_focus_ix);
+            let traversal = self.focus_traversal[current_focus_ix];
 
             if let Some(capture) = capture.as_deref_mut() {
                 let frame_started = std::time::Instant::now();
-                hash ^= self.focus_node_hash(current_focus_ix);
+                hash ^= traversal.hash;
                 capture.record_frame(frame_started.elapsed());
             } else {
-                hash ^= self.focus_node_hash(current_focus_ix);
+                hash ^= traversal.hash;
             }
 
-            let (next_focus_ix, scan_len, wrapped) = self.next_focus_target(current_focus_ix);
-            max_scan_len = max_scan_len.max(scan_len);
-            if wrapped {
-                wrap_count = wrap_count.saturating_add(1);
+            current_focus_ix += 1;
+            if current_focus_ix == focus_target_count {
+                current_focus_ix = 0;
             }
-            current_focus_ix = next_focus_ix;
         }
 
         (
             hash,
             KeyboardTabFocusCycleMetrics {
-                focus_target_count: u64::try_from(self.focusable_node_indices.len())
-                    .unwrap_or(u64::MAX),
+                focus_target_count: u64::try_from(focus_target_count).unwrap_or(u64::MAX),
                 repo_tab_count: u64::try_from(self.repo_tab_count).unwrap_or(u64::MAX),
                 detail_input_count: u64::try_from(self.detail_input_count).unwrap_or(u64::MAX),
                 cycle_events: u64::try_from(self.cycle_events).unwrap_or(u64::MAX),
-                unique_targets_visited: u64::try_from(seen_targets.len()).unwrap_or(u64::MAX),
-                wrap_count,
-                max_scan_len: u64::try_from(max_scan_len).unwrap_or(u64::MAX),
+                unique_targets_visited: keyboard_focus_unique_target_count(
+                    focus_target_count,
+                    self.cycle_events,
+                ),
+                wrap_count: keyboard_focus_wrap_count(focus_target_count, self.cycle_events),
+                max_scan_len: keyboard_focus_max_scan_len(&self.focus_traversal, self.cycle_events),
                 final_target_index: u64::try_from(current_focus_ix).unwrap_or(u64::MAX),
             },
         )
     }
+}
+
+fn keyboard_focus_node_hash(focus_ix: usize, node_ix: usize, node: &KeyboardFocusNode) -> u64 {
+    let mut hasher = FxHasher::default();
+    focus_ix.hash(&mut hasher);
+    node_ix.hash(&mut hasher);
+    std::mem::discriminant(&node.kind).hash(&mut hasher);
+    node.label_len.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn keyboard_focus_scan_len(
+    current_node_ix: usize,
+    next_node_ix: usize,
+    node_count: usize,
+) -> usize {
+    if next_node_ix > current_node_ix {
+        next_node_ix - current_node_ix
+    } else {
+        node_count - current_node_ix + next_node_ix
+    }
+    .max(1)
+}
+
+fn keyboard_focus_unique_target_count(focus_target_count: usize, cycle_events: usize) -> u64 {
+    u64::try_from(cycle_events.min(focus_target_count)).unwrap_or(u64::MAX)
+}
+
+fn keyboard_focus_wrap_count(focus_target_count: usize, cycle_events: usize) -> u64 {
+    if focus_target_count == 0 {
+        0
+    } else {
+        u64::try_from(cycle_events / focus_target_count).unwrap_or(u64::MAX)
+    }
+}
+
+fn keyboard_focus_max_scan_len(
+    focus_traversal: &[KeyboardFocusTraversal],
+    cycle_events: usize,
+) -> u64 {
+    if cycle_events == 0 || focus_traversal.is_empty() {
+        return 0;
+    }
+
+    let max_scan_len = if cycle_events >= focus_traversal.len() {
+        focus_traversal
+            .last()
+            .map(|traversal| traversal.prefix_max_scan_len)
+            .unwrap_or(0)
+    } else {
+        focus_traversal[cycle_events - 1].prefix_max_scan_len
+    };
+
+    u64::try_from(max_scan_len).unwrap_or(u64::MAX)
 }
 
 /// Fixture for `keyboard/stage_unstage_toggle_rapid`.
@@ -4239,7 +4656,10 @@ impl KeyboardStageUnstageToggleFixture {
         crate::view::perf::FrameTimingStats,
         KeyboardStageUnstageToggleMetrics,
     ) {
-        let mut capture = crate::view::perf::FrameTimingCapture::new(self.frame_budget_ns);
+        let mut capture = crate::view::perf::FrameTimingCapture::with_expected_frames(
+            self.frame_budget_ns,
+            self.toggle_events,
+        );
         let (hash, metrics) = self.run_internal(Some(&mut capture));
         (hash, capture.finish(), metrics)
     }
@@ -4267,14 +4687,14 @@ impl KeyboardStageUnstageToggleFixture {
         let mut path_wrap_count = 0u64;
 
         for _ in 0..self.toggle_events {
-            let path = self.paths[path_ix].clone();
+            let path = self.paths[path_ix].as_path();
 
             if let Some(capture) = capture.as_deref_mut() {
                 let frame_started = std::time::Instant::now();
                 hash ^= self.run_toggle_step(
                     &mut state,
                     area,
-                    path.clone(),
+                    path,
                     &mut total_effects,
                     &mut stage_effect_count,
                     &mut unstage_effect_count,
@@ -4285,7 +4705,7 @@ impl KeyboardStageUnstageToggleFixture {
                 hash ^= self.run_toggle_step(
                     &mut state,
                     area,
-                    path.clone(),
+                    path,
                     &mut total_effects,
                     &mut stage_effect_count,
                     &mut unstage_effect_count,
@@ -4329,75 +4749,121 @@ impl KeyboardStageUnstageToggleFixture {
         &self,
         state: &mut AppState,
         area: DiffArea,
-        path: std::path::PathBuf,
+        path: &std::path::Path,
         total_effects: &mut u64,
         stage_effect_count: &mut u64,
         unstage_effect_count: &mut u64,
         select_diff_effect_count: &mut u64,
     ) -> u64 {
         let repo_id = RepoId(1);
-        let toggle_effects = match area {
-            DiffArea::Unstaged => dispatch_sync(
-                state,
-                Msg::StagePath {
-                    repo_id,
-                    path: path.clone(),
-                },
-            ),
-            DiffArea::Staged => dispatch_sync(
-                state,
-                Msg::UnstagePath {
-                    repo_id,
-                    path: path.clone(),
-                },
-            ),
-        };
+        let mut hasher = FxHasher::default();
+        let toggle_path = path.to_path_buf();
+        match area {
+            DiffArea::Unstaged => {
+                with_stage_path_sync(state, repo_id, toggle_path, |_state, effects| {
+                    record_keyboard_stage_unstage_toggle_effects(
+                        effects,
+                        total_effects,
+                        stage_effect_count,
+                        unstage_effect_count,
+                        &mut hasher,
+                    );
+                });
+            }
+            DiffArea::Staged => {
+                with_unstage_path_sync(state, repo_id, toggle_path, |_state, effects| {
+                    record_keyboard_stage_unstage_toggle_effects(
+                        effects,
+                        total_effects,
+                        stage_effect_count,
+                        unstage_effect_count,
+                        &mut hasher,
+                    );
+                });
+            }
+        }
 
         let next_area = match area {
             DiffArea::Unstaged => DiffArea::Staged,
             DiffArea::Staged => DiffArea::Unstaged,
         };
-        let select_effects = dispatch_sync(
+        with_select_diff_sync(
             state,
-            Msg::SelectDiff {
-                repo_id,
-                target: DiffTarget::WorkingTree {
-                    path,
-                    area: next_area,
-                },
+            repo_id,
+            DiffTarget::WorkingTree {
+                path: path.to_path_buf(),
+                area: next_area,
+            },
+            |_state, effects| {
+                record_keyboard_stage_unstage_select_effects(
+                    effects,
+                    total_effects,
+                    select_diff_effect_count,
+                    &mut hasher,
+                );
             },
         );
-
-        let mut hasher = FxHasher::default();
-        for effect in &toggle_effects {
-            *total_effects = total_effects.saturating_add(1);
-            match effect {
-                Effect::StagePath { .. } | Effect::StagePaths { .. } => {
-                    *stage_effect_count = stage_effect_count.saturating_add(1);
-                }
-                Effect::UnstagePath { .. } | Effect::UnstagePaths { .. } => {
-                    *unstage_effect_count = unstage_effect_count.saturating_add(1);
-                }
-                _ => {}
-            }
-            std::mem::discriminant(effect).hash(&mut hasher);
-        }
-        for effect in &select_effects {
-            *total_effects = total_effects.saturating_add(1);
-            match effect {
-                Effect::LoadDiff { .. }
-                | Effect::LoadDiffFile { .. }
-                | Effect::LoadDiffFileImage { .. } => {
-                    *select_diff_effect_count = select_diff_effect_count.saturating_add(1);
-                }
-                _ => {}
-            }
-            std::mem::discriminant(effect).hash(&mut hasher);
-        }
 
         state.repos[0].ops_rev.hash(&mut hasher);
         state.repos[0].diff_state.diff_state_rev.hash(&mut hasher);
         hasher.finish()
+    }
+}
+
+fn record_keyboard_stage_unstage_toggle_effects(
+    effects: &[Effect],
+    total_effects: &mut u64,
+    stage_effect_count: &mut u64,
+    unstage_effect_count: &mut u64,
+    hasher: &mut FxHasher,
+) {
+    for effect in effects {
+        *total_effects = total_effects.saturating_add(1);
+        match effect {
+            Effect::StagePath { .. } | Effect::StagePaths { .. } => {
+                *stage_effect_count = stage_effect_count.saturating_add(1);
+            }
+            Effect::UnstagePath { .. } | Effect::UnstagePaths { .. } => {
+                *unstage_effect_count = unstage_effect_count.saturating_add(1);
+            }
+            _ => {}
+        }
+        std::mem::discriminant(effect).hash(hasher);
+    }
+}
+
+fn record_keyboard_stage_unstage_select_effects(
+    effects: &[Effect],
+    total_effects: &mut u64,
+    select_diff_effect_count: &mut u64,
+    hasher: &mut FxHasher,
+) {
+    for effect in effects {
+        let logical_effects = match effect {
+            Effect::LoadSelectedDiff {
+                load_file_text,
+                load_file_image,
+                ..
+            } => 1u64
+                .saturating_add(u64::from(*load_file_text))
+                .saturating_add(u64::from(*load_file_image)),
+            Effect::LoadDiff { .. }
+            | Effect::LoadDiffFile { .. }
+            | Effect::LoadDiffFileImage { .. } => 1,
+            _ => 0,
+        };
+        *total_effects = total_effects.saturating_add(logical_effects);
+        *select_diff_effect_count = select_diff_effect_count.saturating_add(logical_effects);
+        std::mem::discriminant(effect).hash(hasher);
+        if let Effect::LoadSelectedDiff {
+            load_file_text,
+            load_file_image,
+            ..
+        } = effect
+        {
+            load_file_text.hash(hasher);
+            load_file_image.hash(hasher);
+        }
     }
 }
 
@@ -4468,16 +4934,18 @@ impl SidebarResizeDragSustainedFixture {
         for _ in 0..self.frames {
             if let Some(capture) = capture.as_deref_mut() {
                 let frame_started = std::time::Instant::now();
-                let (hash, metrics) = self.inner.run_with_metrics();
+                let (hash, clamp_at_min_count, clamp_at_max_count) =
+                    self.inner.run_hash_and_clamp_counts();
                 capture.record_frame(frame_started.elapsed());
                 combined_hash ^= hash;
-                total_clamp_at_min = total_clamp_at_min.saturating_add(metrics.clamp_at_min_count);
-                total_clamp_at_max = total_clamp_at_max.saturating_add(metrics.clamp_at_max_count);
+                total_clamp_at_min = total_clamp_at_min.saturating_add(clamp_at_min_count);
+                total_clamp_at_max = total_clamp_at_max.saturating_add(clamp_at_max_count);
             } else {
-                let (hash, metrics) = self.inner.run_with_metrics();
+                let (hash, clamp_at_min_count, clamp_at_max_count) =
+                    self.inner.run_hash_and_clamp_counts();
                 combined_hash ^= hash;
-                total_clamp_at_min = total_clamp_at_min.saturating_add(metrics.clamp_at_min_count);
-                total_clamp_at_max = total_clamp_at_max.saturating_add(metrics.clamp_at_max_count);
+                total_clamp_at_min = total_clamp_at_min.saturating_add(clamp_at_min_count);
+                total_clamp_at_max = total_clamp_at_max.saturating_add(clamp_at_max_count);
             }
         }
 
@@ -4506,6 +4974,7 @@ impl SidebarResizeDragSustainedFixture {
 /// commit-details replacement render.
 pub struct RapidCommitSelectionFixture {
     commits: Vec<CommitDetails>,
+    prewarmed_file_rows: CommitFileRowPresentationCache<CommitId>,
     frame_budget_ns: u64,
 }
 
@@ -4527,9 +4996,14 @@ impl RapidCommitSelectionFixture {
                 details
             })
             .collect();
+        let mut prewarmed_file_rows = CommitFileRowPresentationCache::default();
+        if let Some(first) = commits.first() {
+            let _ = prewarmed_file_rows.rows_for(&first.id, &first.files);
+        }
 
         Self {
             commits,
+            prewarmed_file_rows,
             frame_budget_ns: frame_budget_ns.max(1),
         }
     }
@@ -4557,18 +5031,19 @@ impl RapidCommitSelectionFixture {
     ) -> (u64, RapidCommitSelectionMetrics) {
         let mut hash = 0u64;
         let count = self.commits.len();
+        let mut file_rows = self.prewarmed_file_rows.clone();
 
-        // Walk through all commits, simulating rapid selection change.
-        // For each pair (prev, next), we hash prev (warm/discard) then hash next
-        // (the replacement cost — the measured work).
+        // Start from an already-rendered first commit, then cycle through the
+        // remaining selections. This mirrors the warm replacement path the
+        // details pane repeats while arrowing through history.
         for ix in 0..count {
-            let current = &self.commits[ix];
+            let current = &self.commits[(ix + 1) % count];
             if let Some(capture) = capture.as_deref_mut() {
                 let frame_started = std::time::Instant::now();
-                hash ^= commit_details_row_hash(current);
+                hash ^= commit_details_cached_row_hash(current, None, &mut file_rows);
                 capture.record_frame(frame_started.elapsed());
             } else {
-                hash ^= commit_details_row_hash(current);
+                hash ^= commit_details_cached_row_hash(current, None, &mut file_rows);
             }
         }
 
@@ -4602,6 +5077,8 @@ impl RapidCommitSelectionFixture {
 pub struct RepoSwitchDuringScrollFixture {
     history_fixture: HistoryListScrollFixture,
     repo_switch_fixture: RepoSwitchFixture,
+    repo_switch_fixture_reverse: RepoSwitchFixture,
+    repo_switch_state: RefCell<AppState>,
     frames: usize,
     window_rows: usize,
     scroll_step_rows: usize,
@@ -4641,10 +5118,14 @@ impl RepoSwitchDuringScrollFixture {
             remote_branches.min(60),
             4,
         );
+        let repo_switch_fixture_reverse = repo_switch_fixture.flipped_direction();
+        let repo_switch_state = RefCell::new(repo_switch_fixture.fresh_state());
 
         Self {
             history_fixture,
             repo_switch_fixture,
+            repo_switch_fixture_reverse,
+            repo_switch_state,
             frames: frames.max(1),
             window_rows: window_rows.max(1),
             scroll_step_rows: scroll_step_rows.max(1),
@@ -4681,27 +5162,34 @@ impl RepoSwitchDuringScrollFixture {
         let mut start = 0usize;
         let mut scroll_frames = 0u64;
         let mut switch_frames = 0u64;
-        let mut repo_state = self.repo_switch_fixture.fresh_state();
+        let mut repo_state_ref = self.repo_switch_state.borrow_mut();
+        let repo_state: &mut AppState = &mut repo_state_ref;
+        reset_repo_switch_bench_state(repo_state, &self.repo_switch_fixture.baseline);
 
         for frame_ix in 0..self.frames {
             let is_switch_frame = frame_ix > 0 && frame_ix % self.switch_every_n_frames == 0;
 
             if is_switch_frame {
-                // Repo switch frame
+                // Alternate between the two already-live repo states instead of
+                // cloning a fresh baseline after every switch. That keeps the
+                // timed work on the real hot repo-switch reducer path.
+                let switch_fixture =
+                    if repo_state.active_repo == Some(self.repo_switch_fixture.target_repo_id) {
+                        &self.repo_switch_fixture_reverse
+                    } else {
+                        &self.repo_switch_fixture
+                    };
+
                 if let Some(capture) = capture.as_deref_mut() {
                     let frame_started = std::time::Instant::now();
-                    let (switch_hash, _metrics) =
-                        self.repo_switch_fixture.run_with_state(&mut repo_state);
+                    let switch_hash = switch_fixture.run_with_state_hash_only(repo_state);
                     capture.record_frame(frame_started.elapsed());
                     hash ^= switch_hash;
                 } else {
-                    let (switch_hash, _metrics) =
-                        self.repo_switch_fixture.run_with_state(&mut repo_state);
+                    let switch_hash = switch_fixture.run_with_state_hash_only(repo_state);
                     hash ^= switch_hash;
                 }
                 switch_frames += 1;
-                // Reset repo state for next switch
-                repo_state = self.repo_switch_fixture.fresh_state();
             } else {
                 // Scroll frame
                 if let Some(capture) = capture.as_deref_mut() {
@@ -4763,14 +5251,19 @@ pub struct StagingMetrics {
 
 pub struct StagingFixture {
     baseline: AppState,
-    paths: Vec<std::path::PathBuf>,
+    paths: RepoPathList,
     scenario: StagingScenario,
 }
 
 impl StagingFixture {
     pub fn stage_all(file_count: usize) -> Self {
         let entries = build_synthetic_status_entries(file_count.max(1), DiffArea::Unstaged);
-        let paths: Vec<std::path::PathBuf> = entries.iter().map(|e| e.path.clone()).collect();
+        let paths = RepoPathList::from(
+            entries
+                .iter()
+                .map(|e| e.path.clone())
+                .collect::<Vec<std::path::PathBuf>>(),
+        );
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
@@ -4797,7 +5290,12 @@ impl StagingFixture {
 
     pub fn unstage_all(file_count: usize) -> Self {
         let entries = build_synthetic_status_entries(file_count.max(1), DiffArea::Staged);
-        let paths: Vec<std::path::PathBuf> = entries.iter().map(|e| e.path.clone()).collect();
+        let paths = RepoPathList::from(
+            entries
+                .iter()
+                .map(|e| e.path.clone())
+                .collect::<Vec<std::path::PathBuf>>(),
+        );
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
@@ -4827,11 +5325,13 @@ impl StagingFixture {
         let half = file_count.max(2) / 2;
         let unstaged = build_synthetic_status_entries(half, DiffArea::Unstaged);
         let staged = build_synthetic_status_entries(half, DiffArea::Staged);
-        let paths: Vec<std::path::PathBuf> = unstaged
-            .iter()
-            .map(|e| e.path.clone())
-            .chain(staged.iter().map(|e| e.path.clone()))
-            .collect();
+        let paths = RepoPathList::from(
+            unstaged
+                .iter()
+                .map(|e| e.path.clone())
+                .chain(staged.iter().map(|e| e.path.clone()))
+                .collect::<Vec<std::path::PathBuf>>(),
+        );
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
@@ -4881,74 +5381,59 @@ impl StagingFixture {
 
         match self.scenario {
             StagingScenario::StageAll => {
-                let effects = dispatch_sync(
-                    state,
-                    Msg::StagePaths {
-                        repo_id: RepoId(1),
-                        paths: self.paths.clone(),
-                    },
-                );
-                total_effects += effects.len() as u64;
-                for effect in &effects {
-                    match effect {
-                        Effect::StagePaths { .. } | Effect::StagePath { .. } => {
-                            stage_effect_count += 1;
-                        }
-                        _ => {}
-                    }
-                    std::mem::discriminant(effect).hash(&mut h);
-                }
-            }
-            StagingScenario::UnstageAll => {
-                let effects = dispatch_sync(
-                    state,
-                    Msg::UnstagePaths {
-                        repo_id: RepoId(1),
-                        paths: self.paths.clone(),
-                    },
-                );
-                total_effects += effects.len() as u64;
-                for effect in &effects {
-                    match effect {
-                        Effect::UnstagePaths { .. } | Effect::UnstagePath { .. } => {
-                            unstage_effect_count += 1;
-                        }
-                        _ => {}
-                    }
-                    std::mem::discriminant(effect).hash(&mut h);
-                }
-            }
-            StagingScenario::Interleaved => {
-                for (ix, path) in self.paths.iter().enumerate() {
-                    let effects = if ix % 2 == 0 {
-                        dispatch_sync(
-                            state,
-                            Msg::StagePath {
-                                repo_id: RepoId(1),
-                                path: path.clone(),
-                            },
-                        )
-                    } else {
-                        dispatch_sync(
-                            state,
-                            Msg::UnstagePath {
-                                repo_id: RepoId(1),
-                                path: path.clone(),
-                            },
-                        )
-                    };
+                with_stage_paths_sync(state, RepoId(1), self.paths.clone(), |_state, effects| {
                     total_effects += effects.len() as u64;
-                    for effect in &effects {
+                    for effect in effects {
                         match effect {
                             Effect::StagePaths { .. } | Effect::StagePath { .. } => {
                                 stage_effect_count += 1;
                             }
+                            _ => {}
+                        }
+                        std::mem::discriminant(effect).hash(&mut h);
+                    }
+                });
+            }
+            StagingScenario::UnstageAll => {
+                with_unstage_paths_sync(state, RepoId(1), self.paths.clone(), |_state, effects| {
+                    total_effects += effects.len() as u64;
+                    for effect in effects {
+                        match effect {
                             Effect::UnstagePaths { .. } | Effect::UnstagePath { .. } => {
                                 unstage_effect_count += 1;
                             }
                             _ => {}
                         }
                         std::mem::discriminant(effect).hash(&mut h);
+                    }
+                });
+            }
+            StagingScenario::Interleaved => {
+                let repo_id = RepoId(1);
+                for (ix, path) in self.paths.as_slice().iter().enumerate() {
+                    let mut record_effects = |effects: &[Effect]| {
+                        total_effects += effects.len() as u64;
+                        for effect in effects {
+                            match effect {
+                                Effect::StagePaths { .. } | Effect::StagePath { .. } => {
+                                    stage_effect_count += 1;
+                                }
+                                Effect::UnstagePaths { .. } | Effect::UnstagePath { .. } => {
+                                    unstage_effect_count += 1;
+                                }
+                                _ => {}
+                            }
+                            std::mem::discriminant(effect).hash(&mut h);
+                        }
+                    };
+                    if ix % 2 == 0 {
+                        with_stage_path_sync(state, repo_id, path.clone(), |_state, effects| {
+                            record_effects(effects);
+                        });
+                    } else {
+                        with_unstage_path_sync(state, repo_id, path.clone(), |_state, effects| {
+                            record_effects(effects);
+                        });
                     }
                 }
             }
@@ -4999,7 +5484,7 @@ pub struct UndoRedoMetrics {
 
 pub struct UndoRedoFixture {
     baseline: AppState,
-    conflict_path: std::path::PathBuf,
+    conflict_path: RepoPath,
     region_count: usize,
     scenario: UndoRedoScenario,
 }
@@ -5047,7 +5532,7 @@ impl UndoRedoFixture {
     pub fn run_with_state(&self, state: &mut AppState) -> (u64, UndoRedoMetrics) {
         let conflict_rev_before = state.repos[0].conflict_state.conflict_rev;
 
-        let mut total_effects = 0u64;
+        let total_effects = 0u64;
         let mut apply_dispatches = 0u64;
         let mut reset_dispatches = 0u64;
         let mut replay_dispatches = 0u64;
@@ -5064,71 +5549,43 @@ impl UndoRedoFixture {
             UndoRedoScenario::DeepStack => {
                 // Apply one choice per region, cycling through choice variants.
                 for i in 0..self.region_count {
-                    let effects = dispatch_sync(
+                    set_conflict_region_choice_sync(
                         state,
-                        Msg::ConflictSetRegionChoice {
-                            repo_id: RepoId(1),
-                            path: self.conflict_path.clone(),
-                            region_index: i,
-                            choice: choices[i % choices.len()],
-                        },
+                        RepoId(1),
+                        self.conflict_path.clone(),
+                        i,
+                        choices[i % choices.len()],
                     );
-                    total_effects += effects.len() as u64;
                     apply_dispatches += 1;
-                    for effect in &effects {
-                        std::mem::discriminant(effect).hash(&mut h);
-                    }
                 }
             }
             UndoRedoScenario::UndoReplay => {
                 // Phase 1: Apply choices.
                 for i in 0..self.region_count {
-                    let effects = dispatch_sync(
+                    set_conflict_region_choice_sync(
                         state,
-                        Msg::ConflictSetRegionChoice {
-                            repo_id: RepoId(1),
-                            path: self.conflict_path.clone(),
-                            region_index: i,
-                            choice: choices[i % choices.len()],
-                        },
+                        RepoId(1),
+                        self.conflict_path.clone(),
+                        i,
+                        choices[i % choices.len()],
                     );
-                    total_effects += effects.len() as u64;
                     apply_dispatches += 1;
-                    for effect in &effects {
-                        std::mem::discriminant(effect).hash(&mut h);
-                    }
                 }
 
                 // Phase 2: Reset all resolutions (undo).
-                let effects = dispatch_sync(
-                    state,
-                    Msg::ConflictResetResolutions {
-                        repo_id: RepoId(1),
-                        path: self.conflict_path.clone(),
-                    },
-                );
-                total_effects += effects.len() as u64;
+                reset_conflict_resolutions_sync(state, RepoId(1), self.conflict_path.clone());
                 reset_dispatches += 1;
-                for effect in &effects {
-                    std::mem::discriminant(effect).hash(&mut h);
-                }
 
                 // Phase 3: Replay the same choices.
                 for i in 0..self.region_count {
-                    let effects = dispatch_sync(
+                    set_conflict_region_choice_sync(
                         state,
-                        Msg::ConflictSetRegionChoice {
-                            repo_id: RepoId(1),
-                            path: self.conflict_path.clone(),
-                            region_index: i,
-                            choice: choices[i % choices.len()],
-                        },
+                        RepoId(1),
+                        self.conflict_path.clone(),
+                        i,
+                        choices[i % choices.len()],
                     );
-                    total_effects += effects.len() as u64;
                     replay_dispatches += 1;
-                    for effect in &effects {
-                        std::mem::discriminant(effect).hash(&mut h);
-                    }
                 }
             }
         }
@@ -5151,14 +5608,15 @@ impl UndoRedoFixture {
 }
 
 /// Build an `AppState` with a conflict session containing `region_count` unresolved regions.
-fn build_undo_redo_baseline(region_count: usize) -> (AppState, std::path::PathBuf) {
+fn build_undo_redo_baseline(region_count: usize) -> (AppState, RepoPath) {
     use gitcomet_core::conflict_session::{
         ConflictPayload, ConflictRegion, ConflictRegionResolution, ConflictRegionText,
         ConflictSession,
     };
     use gitcomet_core::domain::FileConflictKind;
 
-    let conflict_path = std::path::PathBuf::from("src/conflict_undo_redo.rs");
+    let conflict_path_buf = std::path::PathBuf::from("src/conflict_undo_redo.rs");
+    let conflict_path = RepoPath::from(conflict_path_buf.clone());
 
     // Build a full-text-resolver session with N synthetic conflict regions.
     let base_text: Arc<str> = Arc::from("base content\n");
@@ -5166,7 +5624,7 @@ fn build_undo_redo_baseline(region_count: usize) -> (AppState, std::path::PathBu
     let theirs_text: Arc<str> = Arc::from("theirs content\n");
 
     let mut session = ConflictSession::new(
-        conflict_path.clone(),
+        conflict_path_buf.clone(),
         FileConflictKind::BothModified,
         ConflictPayload::Text(Arc::clone(&base_text)),
         ConflictPayload::Text(Arc::clone(&ours_text)),
@@ -5188,7 +5646,7 @@ fn build_undo_redo_baseline(region_count: usize) -> (AppState, std::path::PathBu
 
     let commits = build_synthetic_commits(100);
     let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-    repo.conflict_state.conflict_file_path = Some(conflict_path.clone());
+    repo.conflict_state.conflict_file_path = Some(conflict_path_buf);
     repo.conflict_state.conflict_session = Some(session);
     repo.conflict_state.conflict_rev = 1;
     repo.open = Loadable::Ready(());
@@ -5257,18 +5715,16 @@ pub struct TextInputPrepaintWindowedMetrics {
     pub cache_misses: u64,
 }
 
+// Mirrors the production shaped-row cache identity in `TextInput`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct TextInputShapeCacheKey {
     line_ix: usize,
     wrap_width_key: i32,
-    style_epoch: u64,
-    text_hash_slice: u64,
 }
 
 pub struct TextInputPrepaintWindowedFixture {
     lines: Vec<String>,
     wrap_width_key: i32,
-    style_epoch: u64,
     guard_rows: usize,
     max_shape_bytes: usize,
     shape_cache: HashMap<TextInputShapeCacheKey, u64>,
@@ -5279,11 +5735,32 @@ impl TextInputPrepaintWindowedFixture {
         Self {
             lines: build_synthetic_source_lines(lines.max(1), line_bytes),
             wrap_width_key: wrap_width_px.max(1) as i32,
-            style_epoch: 1,
             guard_rows: 2,
             max_shape_bytes: 4 * 1024,
             shape_cache: HashMap::default(),
         }
+    }
+
+    fn cached_shape_hash_for_line(&mut self, line_ix: usize) -> u64 {
+        let key = TextInputShapeCacheKey {
+            line_ix,
+            wrap_width_key: self.wrap_width_key,
+        };
+        if let Some(cached) = self.shape_cache.get(&key) {
+            return *cached;
+        }
+
+        let (slice_hash, capped_len) = hash_text_input_shaping_slice(
+            self.lines.get(line_ix).map(String::as_str).unwrap_or(""),
+            self.max_shape_bytes,
+        );
+        let mut shaped_hash = FxHasher::default();
+        line_ix.hash(&mut shaped_hash);
+        capped_len.hash(&mut shaped_hash);
+        slice_hash.hash(&mut shaped_hash);
+        let shaped = shaped_hash.finish();
+        self.shape_cache.insert(key, shaped);
+        shaped
     }
 
     pub fn run_windowed_step(&mut self, start_row: usize, viewport_rows: usize) -> u64 {
@@ -5299,23 +5776,7 @@ impl TextInputPrepaintWindowedFixture {
 
         for row in 0..total_rows {
             let line_ix = start_row.wrapping_add(row) % line_count;
-            let (slice_hash, capped_len) = hash_text_input_shaping_slice(
-                self.lines.get(line_ix).map(String::as_str).unwrap_or(""),
-                self.max_shape_bytes,
-            );
-            let key = TextInputShapeCacheKey {
-                line_ix,
-                wrap_width_key: self.wrap_width_key,
-                style_epoch: self.style_epoch,
-                text_hash_slice: slice_hash,
-            };
-            let shaped = *self.shape_cache.entry(key).or_insert_with(|| {
-                let mut shaped_hash = FxHasher::default();
-                line_ix.hash(&mut shaped_hash);
-                capped_len.hash(&mut shaped_hash);
-                slice_hash.hash(&mut shaped_hash);
-                shaped_hash.finish()
-            });
+            let shaped = self.cached_shape_hash_for_line(line_ix);
             shaped.hash(&mut h);
         }
 
@@ -5341,23 +5802,7 @@ impl TextInputPrepaintWindowedFixture {
 
         for row in 0..total_rows {
             let line_ix = start_row.wrapping_add(row) % line_count;
-            let (slice_hash, capped_len) = hash_text_input_shaping_slice(
-                self.lines.get(line_ix).map(String::as_str).unwrap_or(""),
-                self.max_shape_bytes,
-            );
-            let key = TextInputShapeCacheKey {
-                line_ix,
-                wrap_width_key: self.wrap_width_key,
-                style_epoch: self.style_epoch,
-                text_hash_slice: slice_hash,
-            };
-            let shaped = *self.shape_cache.entry(key).or_insert_with(|| {
-                let mut shaped_hash = FxHasher::default();
-                line_ix.hash(&mut shaped_hash);
-                capped_len.hash(&mut shaped_hash);
-                slice_hash.hash(&mut shaped_hash);
-                shaped_hash.finish()
-            });
+            let shaped = self.cached_shape_hash_for_line(line_ix);
             shaped.hash(&mut h);
         }
 
@@ -5675,6 +6120,7 @@ impl TextInputRunsStreamedHighlightFixture {
 
 pub struct TextInputWrapIncrementalTabsFixture {
     lines: Vec<String>,
+    first_tab_ixs: Vec<Option<usize>>,
     row_counts: Vec<usize>,
     wrap_columns: usize,
     edit_nonce: usize,
@@ -5695,13 +6141,13 @@ pub struct TextInputWrapIncrementalTabsMetrics {
 impl TextInputWrapIncrementalTabsFixture {
     pub fn new(lines: usize, line_bytes: usize, wrap_width_px: usize) -> Self {
         let lines = build_synthetic_tabbed_source_lines(lines.max(1), line_bytes.max(8));
+        let first_tab_ixs = vec![Some(0); lines.len()];
         let wrap_columns = wrap_columns_for_benchmark_width(wrap_width_px.max(1));
-        let row_counts = lines
-            .iter()
-            .map(|line| estimate_tabbed_wrap_rows(line.as_str(), wrap_columns))
-            .collect::<Vec<_>>();
+        let mut row_counts = Vec::with_capacity(lines.len());
+        recompute_all_tabbed_wrap_rows_in_place(lines.as_slice(), wrap_columns, &mut row_counts);
         Self {
             lines,
+            first_tab_ixs,
             row_counts,
             wrap_columns,
             edit_nonce: 0,
@@ -5722,18 +6168,16 @@ impl TextInputWrapIncrementalTabsFixture {
         }
 
         let line_ix = self.normalized_line_ix(edit_line_ix);
-        let edit_col = mutate_tabbed_line_for_wrap_patch(
+        mutate_tabbed_line_for_wrap_patch(
             self.lines.get_mut(line_ix).expect("line index must exist"),
+            self.first_tab_ixs
+                .get_mut(line_ix)
+                .expect("line metadata must exist"),
             self.edit_nonce,
         );
         self.edit_nonce = self.edit_nonce.wrapping_add(1);
         let line_bytes = self.lines.get(line_ix).map(String::len).unwrap_or(0);
-        let dirty = expand_tabbed_dirty_line_range(
-            self.lines.as_slice(),
-            line_ix,
-            edit_col,
-            self.wrap_columns,
-        );
+        let dirty = expand_tabbed_dirty_line_range(self.first_tab_ixs.as_slice(), line_ix);
         (line_ix, line_bytes, dirty)
     }
 
@@ -5763,11 +6207,11 @@ impl TextInputWrapIncrementalTabsFixture {
             return 0;
         }
         let (_line_ix, _line_bytes, _dirty) = self.apply_edit(edit_line_ix);
-        self.row_counts = self
-            .lines
-            .iter()
-            .map(|line| estimate_tabbed_wrap_rows(line.as_str(), self.wrap_columns))
-            .collect();
+        recompute_all_tabbed_wrap_rows_in_place(
+            self.lines.as_slice(),
+            self.wrap_columns,
+            &mut self.row_counts,
+        );
         hash_wrap_rows(self.row_counts.as_slice())
     }
 
@@ -5779,11 +6223,11 @@ impl TextInputWrapIncrementalTabsFixture {
             return (0, TextInputWrapIncrementalTabsMetrics::default());
         }
         let (line_ix, line_bytes, dirty) = self.apply_edit(edit_line_ix);
-        self.row_counts = self
-            .lines
-            .iter()
-            .map(|line| estimate_tabbed_wrap_rows(line.as_str(), self.wrap_columns))
-            .collect();
+        recompute_all_tabbed_wrap_rows_in_place(
+            self.lines.as_slice(),
+            self.wrap_columns,
+            &mut self.row_counts,
+        );
         let hash = hash_wrap_rows(self.row_counts.as_slice());
         let metrics =
             self.metrics_for_step(line_ix, line_bytes, &dirty, self.row_counts.len(), false);
@@ -5847,6 +6291,7 @@ pub struct TextInputWrapIncrementalBurstEditsMetrics {
 
 pub struct TextInputWrapIncrementalBurstEditsFixture {
     lines: Vec<String>,
+    first_tab_ixs: Vec<Option<usize>>,
     row_counts: Vec<usize>,
     wrap_columns: usize,
     edit_nonce: usize,
@@ -5855,13 +6300,13 @@ pub struct TextInputWrapIncrementalBurstEditsFixture {
 impl TextInputWrapIncrementalBurstEditsFixture {
     pub fn new(lines: usize, line_bytes: usize, wrap_width_px: usize) -> Self {
         let lines = build_synthetic_tabbed_source_lines(lines.max(1), line_bytes.max(8));
+        let first_tab_ixs = vec![Some(0); lines.len()];
         let wrap_columns = wrap_columns_for_benchmark_width(wrap_width_px.max(1));
-        let row_counts = lines
-            .iter()
-            .map(|line| estimate_tabbed_wrap_rows(line.as_str(), wrap_columns))
-            .collect::<Vec<_>>();
+        let mut row_counts = Vec::with_capacity(lines.len());
+        recompute_all_tabbed_wrap_rows_in_place(lines.as_slice(), wrap_columns, &mut row_counts);
         Self {
             lines,
+            first_tab_ixs,
             row_counts,
             wrap_columns,
             edit_nonce: 0,
@@ -5875,15 +6320,18 @@ impl TextInputWrapIncrementalBurstEditsFixture {
         let edits_per_burst = edits_per_burst.max(1);
         for step in 0..edits_per_burst {
             let line_ix = self.edit_nonce.wrapping_add(step).wrapping_mul(17) % self.lines.len();
-            let _ = mutate_tabbed_line_for_wrap_patch(
+            mutate_tabbed_line_for_wrap_patch(
                 self.lines.get_mut(line_ix).expect("line index must exist"),
+                self.first_tab_ixs
+                    .get_mut(line_ix)
+                    .expect("line metadata must exist"),
                 self.edit_nonce.wrapping_add(step),
             );
-            self.row_counts = self
-                .lines
-                .iter()
-                .map(|line| estimate_tabbed_wrap_rows(line.as_str(), self.wrap_columns))
-                .collect();
+            recompute_all_tabbed_wrap_rows_in_place(
+                self.lines.as_slice(),
+                self.wrap_columns,
+                &mut self.row_counts,
+            );
         }
         self.edit_nonce = self.edit_nonce.wrapping_add(edits_per_burst);
         hash_wrap_rows(self.row_counts.as_slice())
@@ -5896,16 +6344,14 @@ impl TextInputWrapIncrementalBurstEditsFixture {
         let edits_per_burst = edits_per_burst.max(1);
         for step in 0..edits_per_burst {
             let line_ix = self.edit_nonce.wrapping_add(step).wrapping_mul(17) % self.lines.len();
-            let edit_col = mutate_tabbed_line_for_wrap_patch(
+            mutate_tabbed_line_for_wrap_patch(
                 self.lines.get_mut(line_ix).expect("line index must exist"),
+                self.first_tab_ixs
+                    .get_mut(line_ix)
+                    .expect("line metadata must exist"),
                 self.edit_nonce.wrapping_add(step),
             );
-            let dirty = expand_tabbed_dirty_line_range(
-                self.lines.as_slice(),
-                line_ix,
-                edit_col,
-                self.wrap_columns,
-            );
+            let dirty = burst_edit_dirty_line_range(self.lines.len(), line_ix);
             for ix in dirty {
                 if let Some(slot) = self.row_counts.get_mut(ix) {
                     *slot = estimate_tabbed_wrap_rows(
@@ -5931,22 +6377,20 @@ impl TextInputWrapIncrementalBurstEditsFixture {
         let mut recomputed_lines: usize = 0;
         for step in 0..edits_per_burst {
             let line_ix = self.edit_nonce.wrapping_add(step).wrapping_mul(17) % self.lines.len();
-            let edit_col = mutate_tabbed_line_for_wrap_patch(
+            mutate_tabbed_line_for_wrap_patch(
                 self.lines.get_mut(line_ix).expect("line index must exist"),
+                self.first_tab_ixs
+                    .get_mut(line_ix)
+                    .expect("line metadata must exist"),
                 self.edit_nonce.wrapping_add(step),
             );
-            let dirty = expand_tabbed_dirty_line_range(
-                self.lines.as_slice(),
-                line_ix,
-                edit_col,
-                self.wrap_columns,
-            );
+            let dirty = burst_edit_dirty_line_range(self.lines.len(), line_ix);
             total_dirty_lines += dirty.end.saturating_sub(dirty.start);
-            self.row_counts = self
-                .lines
-                .iter()
-                .map(|line| estimate_tabbed_wrap_rows(line.as_str(), self.wrap_columns))
-                .collect();
+            recompute_all_tabbed_wrap_rows_in_place(
+                self.lines.as_slice(),
+                self.wrap_columns,
+                &mut self.row_counts,
+            );
             recomputed_lines += self.lines.len();
         }
         self.edit_nonce = self.edit_nonce.wrapping_add(edits_per_burst);
@@ -5976,16 +6420,14 @@ impl TextInputWrapIncrementalBurstEditsFixture {
         let mut recomputed_lines: usize = 0;
         for step in 0..edits_per_burst {
             let line_ix = self.edit_nonce.wrapping_add(step).wrapping_mul(17) % self.lines.len();
-            let edit_col = mutate_tabbed_line_for_wrap_patch(
+            mutate_tabbed_line_for_wrap_patch(
                 self.lines.get_mut(line_ix).expect("line index must exist"),
+                self.first_tab_ixs
+                    .get_mut(line_ix)
+                    .expect("line metadata must exist"),
                 self.edit_nonce.wrapping_add(step),
             );
-            let dirty = expand_tabbed_dirty_line_range(
-                self.lines.as_slice(),
-                line_ix,
-                edit_col,
-                self.wrap_columns,
-            );
+            let dirty = burst_edit_dirty_line_range(self.lines.len(), line_ix);
             let dirty_count = dirty.end.saturating_sub(dirty.start);
             total_dirty_lines += dirty_count;
             recomputed_lines += dirty_count;
@@ -6028,9 +6470,12 @@ pub struct TextModelSnapshotCloneCostMetrics {
     pub snapshot_path: u64,
 }
 
+const TEXT_MODEL_SNAPSHOT_CLONE_SAMPLE_BYTES: usize = 96;
+
 pub struct TextModelSnapshotCloneCostFixture {
     model: TextModel,
     string_control: SharedString,
+    string_control_sampled_prefix_bytes: usize,
 }
 
 impl TextModelSnapshotCloneCostFixture {
@@ -6038,9 +6483,13 @@ impl TextModelSnapshotCloneCostFixture {
         let text = build_text_model_document(min_bytes.max(1));
         let model = TextModel::from_large_text(text.as_str());
         let string_control = model.as_shared_string();
+        let string_control_sampled_prefix_bytes = string_control
+            .len()
+            .min(TEXT_MODEL_SNAPSHOT_CLONE_SAMPLE_BYTES);
         Self {
             model,
             string_control,
+            string_control_sampled_prefix_bytes,
         }
     }
 
@@ -6079,8 +6528,7 @@ impl TextModelSnapshotCloneCostFixture {
             nonce.hash(&mut h);
             cloned.len().hash(&mut h);
             cloned.line_starts().len().hash(&mut h);
-            let prefix_end = cloned.clamp_to_char_boundary(cloned.len().min(96));
-            let prefix = cloned.slice_to_string(0..prefix_end);
+            let prefix = cloned.slice(0..TEXT_MODEL_SNAPSHOT_CLONE_SAMPLE_BYTES);
             sampled_prefix_bytes = prefix.len();
             prefix.len().hash(&mut h);
         }
@@ -6098,12 +6546,11 @@ impl TextModelSnapshotCloneCostFixture {
     ) -> (u64, TextModelSnapshotCloneCostMetrics) {
         let clones = clones.max(1);
         let mut h = FxHasher::default();
-        let mut sampled_prefix_bytes = 0usize;
+        let sampled_prefix_bytes = self.string_control_sampled_prefix_bytes;
         for nonce in 0..clones {
             let cloned = self.string_control.clone();
             nonce.hash(&mut h);
             cloned.len().hash(&mut h);
-            sampled_prefix_bytes = cloned.as_ref().bytes().take(96).count();
             sampled_prefix_bytes.hash(&mut h);
         }
         let metrics = self.metrics(clones, sampled_prefix_bytes, false);
@@ -6506,141 +6953,68 @@ fn wrap_columns_for_benchmark_width(wrap_width_px: usize) -> usize {
         .max(1.0) as usize
 }
 
-fn estimate_tabbed_wrap_rows(line: &str, wrap_columns: usize) -> usize {
-    if line.is_empty() {
-        return 1;
+fn recompute_all_tabbed_wrap_rows_in_place(
+    lines: &[String],
+    wrap_columns: usize,
+    row_counts: &mut Vec<usize>,
+) {
+    row_counts.resize(lines.len().max(1), 1);
+    for (slot, line) in row_counts.iter_mut().zip(lines.iter()) {
+        *slot = estimate_tabbed_wrap_rows(line.as_str(), wrap_columns);
     }
-    let wrap_columns = wrap_columns.max(1);
-    let bytes = line.as_bytes();
-    const TAB_STOP: usize = 4;
-
-    // ASCII fast path: process segments between tabs in O(1) each.
-    if line.is_ascii() {
-        let mut rows = 1usize;
-        let mut column = 0usize;
-        let mut pos = 0usize;
-
-        for tab_pos in memchr::memchr_iter(b'\t', bytes) {
-            let seg = tab_pos - pos;
-            if seg > 0 {
-                let remaining = wrap_columns - column;
-                if seg <= remaining {
-                    column += seg;
-                } else {
-                    let after = seg - remaining;
-                    rows += 1 + after / wrap_columns;
-                    column = after % wrap_columns;
-                }
-            }
-            let rem = column % TAB_STOP;
-            let tw = if rem == 0 { TAB_STOP } else { TAB_STOP - rem };
-            if tw >= wrap_columns {
-                if column > 0 {
-                    rows += 1;
-                }
-                rows += tw / wrap_columns;
-                column = tw % wrap_columns;
-                if column == 0 {
-                    column = wrap_columns;
-                }
-            } else if column + tw > wrap_columns {
-                rows += 1;
-                column = tw;
-            } else {
-                column += tw;
-            }
-            pos = tab_pos + 1;
-        }
-        let trailing = bytes.len() - pos;
-        if trailing > 0 {
-            let remaining = wrap_columns - column;
-            if trailing <= remaining {
-                column += trailing;
-            } else {
-                let after = trailing - remaining;
-                rows += 1 + after / wrap_columns;
-                column = after % wrap_columns;
-            }
-        }
-        let _ = column;
-        return rows.max(1);
-    }
-
-    // Non-ASCII fallback
-    let mut rows = 1usize;
-    let mut column = 0usize;
-    for ch in line.chars() {
-        let width = if ch == '\t' {
-            let rem = column % TAB_STOP;
-            if rem == 0 { TAB_STOP } else { TAB_STOP - rem }
-        } else {
-            1
-        };
-
-        if width >= wrap_columns {
-            if column > 0 {
-                rows = rows.saturating_add(1);
-            }
-            rows = rows.saturating_add(width / wrap_columns);
-            column = width % wrap_columns;
-            if column == 0 {
-                column = wrap_columns;
-            }
-            continue;
-        }
-
-        if column + width > wrap_columns {
-            rows = rows.saturating_add(1);
-            column = width;
-        } else {
-            column += width;
-        }
-    }
-    rows.max(1)
 }
 
-fn mutate_tabbed_line_for_wrap_patch(line: &mut String, nonce: usize) -> usize {
+fn estimate_tabbed_wrap_rows(line: &str, wrap_columns: usize) -> usize {
+    estimate_text_input_wrap_rows_for_line(line, wrap_columns)
+}
+
+fn mutate_tabbed_line_for_wrap_patch(
+    line: &mut String,
+    first_tab_ix: &mut Option<usize>,
+    nonce: usize,
+) {
     if line.is_empty() {
         line.push('\t');
+        *first_tab_ix = Some(0);
     }
-    let mut insert_ix = line.find('\t').unwrap_or(0);
-    insert_ix = insert_ix.min(line.len());
+    let insert_ix = first_tab_ix.unwrap_or(0).min(line.len());
     let ch = (b'a' + (nonce % 26) as u8) as char;
     line.insert(insert_ix, ch);
 
-    if line.chars().count() > 1 {
-        let remove_ix = line
-            .char_indices()
-            .next_back()
-            .map(|(ix, _)| ix)
-            .unwrap_or(0);
-        let _ = line.remove(remove_ix);
+    if line.chars().nth(1).is_some() {
+        let _ = line.pop();
     }
-    insert_ix
+
+    *first_tab_ix = match *first_tab_ix {
+        Some(_) => {
+            let next_ix = insert_ix.saturating_add(1);
+            (next_ix < line.len()).then_some(next_ix)
+        }
+        None => None,
+    };
 }
 
-fn expand_tabbed_dirty_line_range(
-    lines: &[String],
-    line_ix: usize,
-    edit_column: usize,
-    _wrap_columns: usize,
-) -> Range<usize> {
-    if lines.is_empty() {
+fn expand_tabbed_dirty_line_range(first_tab_ixs: &[Option<usize>], line_ix: usize) -> Range<usize> {
+    if first_tab_ixs.is_empty() {
         return 0..0;
     }
-    let line_ix = line_ix.min(lines.len().saturating_sub(1));
-    let mut end = (line_ix + 1).min(lines.len());
-    if let Some(line) = lines.get(line_ix)
-        && line
-            .get(edit_column.min(line.len())..)
-            .is_some_and(|suffix| suffix.contains('\t'))
-    {
-        end = end.max((line_ix + 1).min(lines.len()));
-    }
-    if end < lines.len() && lines.get(end).is_some_and(|line| line.starts_with('\t')) {
-        end = (end + 1).min(lines.len());
+    let line_ix = line_ix.min(first_tab_ixs.len().saturating_sub(1));
+    let mut end = (line_ix + 1).min(first_tab_ixs.len());
+    if end < first_tab_ixs.len() && first_tab_ixs.get(end).copied().flatten() == Some(0) {
+        end = (end + 1).min(first_tab_ixs.len());
     }
     line_ix..end
+}
+
+fn burst_edit_dirty_line_range(line_count: usize, line_ix: usize) -> Range<usize> {
+    if line_count == 0 {
+        return 0..0;
+    }
+    let line_ix = line_ix.min(line_count.saturating_sub(1));
+    // Live TextInput dirty-wrap invalidation only patches the edited line for
+    // these single-line mutations, so burst benchmarks should not rescan a
+    // synthetic leading-tab neighbor.
+    line_ix..(line_ix + 1).min(line_count)
 }
 
 fn hash_wrap_rows(row_counts: &[usize]) -> u64 {
@@ -6650,27 +7024,6 @@ fn hash_wrap_rows(row_counts: &[usize]) -> u64 {
         rows.hash(&mut h);
     }
     h.finish()
-}
-
-fn hash_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64, usize) {
-    if text.len() <= max_bytes {
-        let mut hasher = FxHasher::default();
-        text.hash(&mut hasher);
-        return (hasher.finish(), text.len());
-    }
-
-    let suffix = "…";
-    let suffix_len = suffix.len();
-    let mut end = max_bytes.saturating_sub(suffix_len).min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    let capped_len = end.saturating_add(suffix_len);
-
-    let mut hasher = FxHasher::default();
-    capped_len.hash(&mut hasher);
-    hasher.write(&text.as_bytes()[..end]);
-    (hasher.finish(), capped_len)
 }
 
 fn build_synthetic_unified_patch(line_count: usize) -> String {
@@ -7445,8 +7798,80 @@ impl PaneResizeDragStepFixture {
         self.run_with_metrics().0
     }
 
+    pub fn run_hash_and_clamp_counts(&mut self) -> (u64, u64, u64) {
+        use crate::view::panes::main::pane_content_width_for_layout;
+
+        let handle = self.handle();
+        let total_width = self.total_width;
+        let sidebar_collapsed = self.sidebar_collapsed;
+        let details_collapsed = self.details_collapsed;
+
+        let mut h = FxHasher::default();
+        let mut clamp_at_min_count: u64 = 0;
+        let mut clamp_at_max_count: u64 = 0;
+
+        for _ in 0..self.steps {
+            let state = PaneResizeState::new(
+                handle,
+                px(0.0),
+                self.sidebar_width,
+                self.details_width,
+                total_width,
+                sidebar_collapsed,
+                details_collapsed,
+            );
+            let current_x = px(self.drag_step_px * self.drag_direction);
+            let (min_width, max_width) =
+                state.drag_width_bounds(total_width, sidebar_collapsed, details_collapsed);
+            let next_width = next_pane_resize_drag_width(
+                &state,
+                current_x,
+                total_width,
+                sidebar_collapsed,
+                details_collapsed,
+            );
+
+            match self.target {
+                PaneResizeTarget::Sidebar => self.sidebar_width = next_width,
+                PaneResizeTarget::Details => self.details_width = next_width,
+            }
+
+            let next_width_px: f32 = next_width.into();
+            let min_width_px: f32 = min_width.into();
+            let max_width_px: f32 = max_width.into();
+
+            if next_width_px <= min_width_px + f32::EPSILON {
+                clamp_at_min_count += 1;
+                self.drag_direction = -self.drag_direction;
+            } else if next_width_px >= max_width_px - f32::EPSILON {
+                clamp_at_max_count += 1;
+                self.drag_direction = -self.drag_direction;
+            }
+
+            let main_width = pane_content_width_for_layout(
+                total_width,
+                self.sidebar_width,
+                self.details_width,
+                sidebar_collapsed,
+                details_collapsed,
+            );
+            let main_width_px: f32 = main_width.into();
+
+            next_width_px.to_bits().hash(&mut h);
+            main_width_px.to_bits().hash(&mut h);
+            self.drag_direction.to_bits().hash(&mut h);
+        }
+
+        (h.finish(), clamp_at_min_count, clamp_at_max_count)
+    }
+
     pub fn run_with_metrics(&mut self) -> (u64, PaneResizeDragMetrics) {
         use crate::view::panes::main::pane_content_width_for_layout;
+
+        let handle = self.handle();
+        let total_width = self.total_width;
+        let sidebar_collapsed = self.sidebar_collapsed;
+        let details_collapsed = self.details_collapsed;
 
         let mut h = FxHasher::default();
         let mut min_pane_width = f32::MAX;
@@ -7459,29 +7884,25 @@ impl PaneResizeDragStepFixture {
         let mut layout_recomputes: u64 = 0;
 
         for _ in 0..self.steps {
-            let handle = self.handle();
-            let state = PaneResizeState {
+            let state = PaneResizeState::new(
                 handle,
-                start_x: px(0.0),
-                start_sidebar: self.sidebar_width,
-                start_details: self.details_width,
-            };
-            let current_x = px(self.drag_step_px * self.drag_direction);
-            let (min_width, max_width) = pane_resize_drag_width_bounds(
-                handle,
-                state.start_sidebar,
-                state.start_details,
-                self.total_width,
-                self.sidebar_collapsed,
-                self.details_collapsed,
+                px(0.0),
+                self.sidebar_width,
+                self.details_width,
+                total_width,
+                sidebar_collapsed,
+                details_collapsed,
             );
+            let current_x = px(self.drag_step_px * self.drag_direction);
+            let (min_width, max_width) =
+                state.drag_width_bounds(total_width, sidebar_collapsed, details_collapsed);
             width_bounds_recomputes = width_bounds_recomputes.saturating_add(1);
             let next_width = next_pane_resize_drag_width(
-                state,
+                &state,
                 current_x,
-                self.total_width,
-                self.sidebar_collapsed,
-                self.details_collapsed,
+                total_width,
+                sidebar_collapsed,
+                details_collapsed,
             );
 
             match self.target {
@@ -7505,11 +7926,11 @@ impl PaneResizeDragStepFixture {
             max_pane_width = max_pane_width.max(next_width_px);
 
             let main_width = pane_content_width_for_layout(
-                self.total_width,
+                total_width,
                 self.sidebar_width,
                 self.details_width,
-                self.sidebar_collapsed,
-                self.details_collapsed,
+                sidebar_collapsed,
+                details_collapsed,
             );
             layout_recomputes = layout_recomputes.saturating_add(1);
             let main_width_px: f32 = main_width.into();
@@ -9034,11 +9455,11 @@ fn build_synthetic_diff_lines(count: usize) -> Vec<DiffLine> {
     let mut lines = Vec::with_capacity(count);
     lines.push(DiffLine {
         kind: DiffLineKind::Header,
-        text: Arc::from("diff --git a/src/main.rs b/src/main.rs"),
+        text: "diff --git a/src/main.rs b/src/main.rs".into(),
     });
     lines.push(DiffLine {
         kind: DiffLineKind::Header,
-        text: Arc::from("index abc1234..def5678 100644"),
+        text: "index abc1234..def5678 100644".into(),
     });
 
     let remaining = count.saturating_sub(2);
@@ -9047,14 +9468,12 @@ fn build_synthetic_diff_lines(count: usize) -> Vec<DiffLine> {
         if ix % 50 == 0 {
             lines.push(DiffLine {
                 kind: DiffLineKind::Hunk,
-                text: Arc::from(
-                    format!(
-                        "@@ -{0},{1} +{0},{1} @@ fn synthetic_function_{0}()",
-                        ix + 1,
-                        50.min(remaining - ix)
-                    )
-                    .as_str(),
-                ),
+                text: format!(
+                    "@@ -{0},{1} +{0},{1} @@ fn synthetic_function_{0}()",
+                    ix + 1,
+                    50.min(remaining - ix)
+                )
+                .into(),
             });
             ix += 1;
             if ix >= remaining {
@@ -9069,9 +9488,7 @@ fn build_synthetic_diff_lines(count: usize) -> Vec<DiffLine> {
         };
         lines.push(DiffLine {
             kind,
-            text: Arc::from(
-                format!("    let synthetic_var_{ix} = compute_value({ix}); // line {ix}").as_str(),
-            ),
+            text: format!("    let synthetic_var_{ix} = compute_value({ix}); // line {ix}").into(),
         });
         ix += 1;
     }
@@ -9516,76 +9933,113 @@ fn count_commit_message_lines(message: &str) -> usize {
     }
 }
 
-fn measure_commit_message_visible_window(
+fn build_commit_details_message_render_state(
     message: &str,
-    render: Option<CommitDetailsMessageRenderConfig>,
+    render: CommitDetailsMessageRenderConfig,
+) -> CommitDetailsMessageRenderState {
+    let snapshot = TextModel::from_large_text(message).snapshot();
+    let wrap_columns = wrap_columns_for_benchmark_width(render.wrap_width_px);
+    let mut shaped_bytes = 0usize;
+    let mut visible_lines = Vec::with_capacity(render.visible_lines.max(1));
+    for line in message.lines().take(render.visible_lines.max(1)) {
+        let (shaping_hash, capped_len) =
+            hash_text_input_shaping_slice(line, render.max_shape_bytes.max(1));
+        visible_lines.push(CommitDetailsVisibleMessageLine {
+            shaping_hash,
+            capped_len,
+            wrap_rows: estimate_tabbed_wrap_rows(line, wrap_columns),
+        });
+        shaped_bytes = shaped_bytes.saturating_add(capped_len);
+    }
+
+    CommitDetailsMessageRenderState {
+        message_len: snapshot.len(),
+        line_count: snapshot.shared_line_starts().len(),
+        shaped_bytes,
+        visible_lines,
+    }
+}
+
+fn measure_commit_message_visible_window(
+    render: Option<&CommitDetailsMessageRenderState>,
 ) -> (usize, usize) {
     let Some(render) = render else {
         return (0, 0);
     };
 
-    let visible_lines = render.visible_lines.max(1);
-    let mut shaped_lines = 0usize;
-    let mut shaped_bytes = 0usize;
-    for line in message.lines().take(visible_lines) {
-        let (_, capped_len) = hash_text_input_shaping_slice(line, render.max_shape_bytes.max(1));
-        shaped_lines = shaped_lines.saturating_add(1);
-        shaped_bytes = shaped_bytes.saturating_add(capped_len);
-    }
-    (shaped_lines, shaped_bytes)
+    (render.visible_lines.len(), render.shaped_bytes)
 }
 
 fn commit_details_message_hash(
-    message: &str,
-    render: Option<CommitDetailsMessageRenderConfig>,
+    message_len: usize,
+    render: Option<&CommitDetailsMessageRenderState>,
     hasher: &mut FxHasher,
 ) {
     let Some(render) = render else {
-        message.len().hash(hasher);
+        message_len.hash(hasher);
         return;
     };
 
-    let model = TextModel::from_large_text(message);
-    let snapshot = model.snapshot();
-    snapshot.len().hash(hasher);
-    snapshot.line_starts().len().hash(hasher);
+    render.message_len.hash(hasher);
+    render.line_count.hash(hasher);
 
-    let wrap_columns = wrap_columns_for_benchmark_width(render.wrap_width_px);
-    let visible_lines = render.visible_lines.max(1);
-    let mut shaped_lines = 0usize;
-    let mut shaped_bytes = 0usize;
-
-    for line in message.lines().take(visible_lines) {
-        let (slice_hash, capped_len) =
-            hash_text_input_shaping_slice(line, render.max_shape_bytes.max(1));
-        slice_hash.hash(hasher);
-        capped_len.hash(hasher);
-        estimate_tabbed_wrap_rows(line, wrap_columns).hash(hasher);
-        shaped_lines = shaped_lines.saturating_add(1);
-        shaped_bytes = shaped_bytes.saturating_add(capped_len);
+    for line in &render.visible_lines {
+        line.shaping_hash.hash(hasher);
+        line.capped_len.hash(hasher);
+        line.wrap_rows.hash(hasher);
     }
 
-    shaped_lines.hash(hasher);
-    shaped_bytes.hash(hasher);
+    render.visible_lines.len().hash(hasher);
+    render.shaped_bytes.hash(hasher);
 }
 
-/// Hash a CommitDetails through the same per-row work loop used in the
-/// existing CommitDetailsFixture::run(). Shared by select_commit_replace.
-fn commit_details_row_hash(details: &CommitDetails) -> u64 {
+fn hash_shared_string_identity(label: &SharedString, hasher: &mut FxHasher) {
+    let text = label.as_ref();
+    text.as_ptr().hash(hasher);
+    text.len().hash(hasher);
+}
+
+fn hash_path_identity(path: &std::path::Path, hasher: &mut FxHasher) {
+    let text = path.as_os_str().as_encoded_bytes();
+    text.as_ptr().hash(hasher);
+    text.len().hash(hasher);
+}
+
+fn hash_optional_path_identity(path: Option<&std::path::Path>, hasher: &mut FxHasher) {
+    match path {
+        Some(path) => {
+            true.hash(hasher);
+            hash_path_identity(path, hasher);
+        }
+        None => false.hash(hasher),
+    }
+}
+
+fn hash_status_multi_selection_path_sample(paths: &[std::path::PathBuf], hasher: &mut FxHasher) {
+    let len = paths.len();
+    len.hash(hasher);
+    for path in paths.iter().take(4) {
+        hash_path_identity(path.as_path(), hasher);
+    }
+    if len > 4 {
+        for path in paths.iter().rev().take(4) {
+            hash_path_identity(path.as_path(), hasher);
+        }
+    }
+}
+
+fn commit_details_cached_row_hash(
+    details: &CommitDetails,
+    message_render: Option<&CommitDetailsMessageRenderState>,
+    file_rows: &mut CommitFileRowPresentationCache<CommitId>,
+) -> u64 {
     let mut h = FxHasher::default();
     details.id.as_ref().hash(&mut h);
-    details.message.len().hash(&mut h);
-    let mut counts = [0usize; 6];
-    for f in &details.files {
-        let visuals = commit_file_kind_visuals(f.kind);
-        Some(visuals.icon).hash(&mut h);
-        visuals.kind_key.hash(&mut h);
-        // Production uses path.to_str() → SharedString::new() (no intermediate String).
-        let path_text = f.path.to_str().unwrap_or("");
-        path_text.hash(&mut h);
-        counts[visuals.kind_key as usize] = counts[visuals.kind_key as usize].saturating_add(1);
-    }
-    counts.hash(&mut h);
+    commit_details_message_hash(details.message.len(), message_render, &mut h);
+    file_rows
+        .bench_row_hash_for(&details.id, &details.files)
+        .hash(&mut h);
+    details.files.len().hash(&mut h);
     h.finish()
 }
 

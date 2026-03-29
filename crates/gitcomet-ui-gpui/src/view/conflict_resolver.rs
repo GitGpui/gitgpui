@@ -1,6 +1,7 @@
 mod split_row_index;
 mod word_highlight;
 
+use split_row_index::SparseLineIndex;
 #[cfg(test)]
 use split_row_index::{CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES, CONFLICT_SPLIT_PAGE_SIZE};
 pub use split_row_index::{ConflictSplitRowIndex, TwoWaySplitProjection, TwoWaySplitVisibleRow};
@@ -1150,6 +1151,50 @@ pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
     generate_resolved_text_with_options(segments, GenerateResolvedTextOptions::default())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResolvedOutputText {
+    Shared(Arc<str>),
+    Owned(String),
+}
+
+impl ResolvedOutputText {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Shared(text) => text.as_ref(),
+            Self::Owned(text) => text.as_str(),
+        }
+    }
+
+    pub fn line_count(&self) -> usize {
+        text_line_count_usize(self.as_str())
+    }
+
+    pub fn into_shared_string(self) -> gpui::SharedString {
+        match self {
+            Self::Shared(text) => text.into(),
+            Self::Owned(text) => text.into(),
+        }
+    }
+}
+
+pub fn bootstrap_resolved_output_text(
+    segments: &[ConflictSegment],
+    current_text: Option<&Arc<str>>,
+    ours_text: Option<&Arc<str>>,
+    theirs_text: Option<&Arc<str>>,
+) -> ResolvedOutputText {
+    if segments.is_empty() {
+        return current_text
+            .or(ours_text)
+            .or(theirs_text)
+            .cloned()
+            .map(ResolvedOutputText::Shared)
+            .unwrap_or_else(|| ResolvedOutputText::Owned(String::new()));
+    }
+
+    ResolvedOutputText::Owned(generate_resolved_text(segments))
+}
+
 pub fn generate_resolved_text_with_options(
     segments: &[ConflictSegment],
     options: gitcomet_core::conflict_output::GenerateResolvedTextOptions<'_>,
@@ -1195,10 +1240,50 @@ enum ResolvedOutputFragmentSource {
     BlockTheirs { segment_ix: usize },
 }
 
+const RESOLVED_OUTPUT_SPARSE_LINE_INDEX_MIN_LINES: usize = LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
+
+#[derive(Clone, Debug)]
+enum ResolvedOutputFragmentLineIndex {
+    Dense(Arc<[usize]>),
+    Sparse(SparseLineIndex),
+}
+
+impl ResolvedOutputFragmentLineIndex {
+    fn line_text<'a>(&self, text: &'a str, line_ix: usize) -> Option<&'a str> {
+        match self {
+            Self::Dense(line_starts) => {
+                Some(line_text_from_starts(text, line_starts.as_ref(), line_ix))
+            }
+            Self::Sparse(line_index) => line_index.line_text(text, line_ix),
+        }
+    }
+
+    fn indexed_line_start_count(&self, line_count: usize, ends_with_newline: bool) -> usize {
+        match self {
+            Self::Dense(line_starts) => line_starts.len(),
+            Self::Sparse(_) => {
+                if line_count == 0 {
+                    0
+                } else {
+                    line_count.saturating_add(usize::from(ends_with_newline))
+                }
+            }
+        }
+    }
+
+    #[cfg(all(test, feature = "benchmarks"))]
+    fn metadata_byte_size(&self) -> usize {
+        match self {
+            Self::Dense(line_starts) => line_starts.len() * std::mem::size_of::<usize>(),
+            Self::Sparse(line_index) => line_index.metadata_byte_size(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ResolvedOutputFragment {
     source: ResolvedOutputFragmentSource,
-    line_starts: std::sync::Arc<[usize]>,
+    line_index: ResolvedOutputFragmentLineIndex,
     newline_count: usize,
     ends_with_newline: bool,
     line_count: usize,
@@ -1234,12 +1319,25 @@ impl ResolvedOutputFragment {
                 }
             }
         };
-        (line_ix < self.line_count)
-            .then(|| line_text_from_starts(text, self.line_starts.as_ref(), line_ix))
+        if line_ix < self.line_count {
+            self.line_index.line_text(text, line_ix)
+        } else {
+            None
+        }
     }
 
     fn widest_line(&self) -> Option<(usize, usize)> {
         (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
+    }
+
+    fn indexed_line_start_count(&self) -> usize {
+        self.line_index
+            .indexed_line_start_count(self.line_count, self.ends_with_newline)
+    }
+
+    #[cfg(all(test, feature = "benchmarks"))]
+    fn metadata_byte_size(&self) -> usize {
+        self.line_index.metadata_byte_size()
     }
 }
 
@@ -1310,42 +1408,45 @@ impl ResolvedOutputProjection {
             }
         }
 
-        fn fragment_line_stats(
-            text: &str,
-        ) -> (std::sync::Arc<[usize]>, usize, bool, usize, usize, usize) {
+        fn dense_line_starts(text: &str) -> Arc<[usize]> {
             let bytes = text.as_bytes();
             let mut starts = Vec::new();
             starts.push(0usize);
-            let mut prev_pos = 0usize;
-            let mut widest_line_ix = 0usize;
-            let mut widest_line_len = 0usize;
-            let mut line_count = 0usize;
-
             for pos in memchr::memchr_iter(b'\n', bytes) {
                 starts.push(pos + 1);
-                let line_len = pos - prev_pos;
-                if line_len > widest_line_len {
-                    widest_line_len = line_len;
-                    widest_line_ix = line_count;
-                }
-                line_count += 1;
-                prev_pos = pos + 1;
             }
+            starts.into()
+        }
 
-            // Handle last line (no trailing newline).
-            if prev_pos < bytes.len() {
-                let line_len = bytes.len() - prev_pos;
-                if line_len > widest_line_len {
-                    widest_line_len = line_len;
-                    widest_line_ix = line_count;
-                }
-                line_count += 1;
-            }
-
-            let newline_count = starts.len().saturating_sub(1);
+        fn fragment_line_stats(
+            text: &str,
+        ) -> (
+            ResolvedOutputFragmentLineIndex,
+            usize,
+            bool,
+            usize,
+            usize,
+            usize,
+        ) {
+            let bytes = text.as_bytes();
+            let line_index = SparseLineIndex::for_text(text);
+            let line_count = line_index.line_count();
+            let (widest_line_ix, widest_line_len) = line_index.widest_line().unwrap_or((0, 0));
             let ends_with_newline = bytes.last().copied() == Some(b'\n');
+            let newline_count = if line_count == 0 {
+                0
+            } else if ends_with_newline {
+                line_count
+            } else {
+                line_count.saturating_sub(1)
+            };
+            let fragment_index = if line_count >= RESOLVED_OUTPUT_SPARSE_LINE_INDEX_MIN_LINES {
+                ResolvedOutputFragmentLineIndex::Sparse(line_index)
+            } else {
+                ResolvedOutputFragmentLineIndex::Dense(dense_line_starts(text))
+            };
             (
-                starts.into(),
+                fragment_index,
                 newline_count,
                 ends_with_newline,
                 line_count,
@@ -1369,7 +1470,7 @@ impl ResolvedOutputProjection {
             conflict_line_ranges.len().hash(&mut hasher);
             for fragment in fragments {
                 fragment.source.hash(&mut hasher);
-                fragment.line_starts.len().hash(&mut hasher);
+                fragment.indexed_line_start_count().hash(&mut hasher);
                 fragment.newline_count.hash(&mut hasher);
                 fragment.ends_with_newline.hash(&mut hasher);
             }
@@ -1604,10 +1705,25 @@ impl ResolvedOutputProjection {
         }
 
         let conflict_total = conflict_count(segments);
+        let projected_fragment_count = segments
+            .iter()
+            .map(|segment| match segment {
+                ConflictSegment::Text(text) => usize::from(!text.is_empty()),
+                ConflictSegment::Block(block) => match block.choice {
+                    ConflictChoice::Base => {
+                        usize::from(block.base.as_ref().is_some_and(|base| !base.is_empty()))
+                    }
+                    ConflictChoice::Ours => usize::from(!block.ours.is_empty()),
+                    ConflictChoice::Theirs => usize::from(!block.theirs.is_empty()),
+                    ConflictChoice::Both => usize::from(!block.ours.is_empty())
+                        .saturating_add(usize::from(!block.theirs.is_empty())),
+                },
+            })
+            .sum();
         let mut conflict_ranges: Vec<Option<std::ops::Range<usize>>> = vec![None; conflict_total];
         let mut conflict_line_anchors = vec![0usize; conflict_total];
-        let mut fragments = Vec::new();
-        let mut spans = Vec::new();
+        let mut fragments = Vec::with_capacity(projected_fragment_count);
+        let mut spans = Vec::with_capacity(projected_fragment_count.saturating_add(conflict_total));
         let mut pending = PendingLine::Empty;
         let mut visible_line = 0usize;
         let mut block_ix = 0usize;
@@ -1622,7 +1738,7 @@ impl ResolvedOutputProjection {
                 return None;
             }
             let (
-                line_starts,
+                line_index,
                 newline_count,
                 ends_with_newline,
                 line_count,
@@ -1632,7 +1748,7 @@ impl ResolvedOutputProjection {
             let fragment_ix = fragments.len();
             fragments.push(ResolvedOutputFragment {
                 source,
-                line_starts,
+                line_index,
                 newline_count,
                 ends_with_newline,
                 line_count,
@@ -1735,42 +1851,40 @@ impl ResolvedOutputProjection {
                         *anchor = visible_line;
                     }
 
-                    let mut fragment_sources: Vec<(ResolvedOutputFragmentSource, &str)> =
-                        Vec::new();
-                    match block.choice {
-                        ConflictChoice::Base => {
-                            if let Some(base) = block.base.as_deref() {
-                                fragment_sources.push((
-                                    ResolvedOutputFragmentSource::BlockBase { segment_ix },
-                                    base,
-                                ));
-                            }
-                        }
-                        ConflictChoice::Ours => {
-                            fragment_sources.push((
+                    let fragment_sources = match block.choice {
+                        ConflictChoice::Base => [
+                            block.base.as_deref().map(|base| {
+                                (ResolvedOutputFragmentSource::BlockBase { segment_ix }, base)
+                            }),
+                            None,
+                        ],
+                        ConflictChoice::Ours => [
+                            Some((
                                 ResolvedOutputFragmentSource::BlockOurs { segment_ix },
                                 block.ours.as_str(),
-                            ));
-                        }
-                        ConflictChoice::Theirs => {
-                            fragment_sources.push((
+                            )),
+                            None,
+                        ],
+                        ConflictChoice::Theirs => [
+                            Some((
                                 ResolvedOutputFragmentSource::BlockTheirs { segment_ix },
                                 block.theirs.as_str(),
-                            ));
-                        }
-                        ConflictChoice::Both => {
-                            fragment_sources.push((
+                            )),
+                            None,
+                        ],
+                        ConflictChoice::Both => [
+                            Some((
                                 ResolvedOutputFragmentSource::BlockOurs { segment_ix },
                                 block.ours.as_str(),
-                            ));
-                            fragment_sources.push((
+                            )),
+                            Some((
                                 ResolvedOutputFragmentSource::BlockTheirs { segment_ix },
                                 block.theirs.as_str(),
-                            ));
-                        }
-                    }
+                            )),
+                        ],
+                    };
 
-                    for (source, text) in fragment_sources {
+                    for (source, text) in fragment_sources.into_iter().flatten() {
                         let Some(fragment_ix) = push_fragment(&mut fragments, source, text) else {
                             continue;
                         };
@@ -1931,7 +2045,7 @@ impl ResolvedOutputProjection {
             + self
                 .fragments
                 .iter()
-                .map(|fragment| fragment.line_starts.len() * std::mem::size_of::<usize>())
+                .map(ResolvedOutputFragment::metadata_byte_size)
                 .sum::<usize>();
         let spans = self.spans.len() * std::mem::size_of::<ResolvedOutputSpan>()
             + self
@@ -3190,7 +3304,11 @@ pub fn visible_index_for_conflict(
 /// will be `None` even though the git ancestor content (index stage :1:) is available.
 /// This function populates `block.base` by using the Text segments as anchors to
 /// locate the corresponding base content in the ancestor file.
-pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ancestor_text: &str) {
+fn populate_block_bases_from_ancestor_impl(
+    segments: &mut [ConflictSegment],
+    ancestor_text: &str,
+    shared_ancestor_text: Option<&Arc<str>>,
+) {
     if ancestor_text.is_empty() {
         return;
     }
@@ -3203,7 +3321,8 @@ pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ance
 
     // Find each Text segment's byte position in the ancestor file.
     // Text segments are the non-conflicting parts that exist in all three versions.
-    let mut text_byte_ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut text_byte_ranges: Vec<std::ops::Range<usize>> =
+        Vec::with_capacity(segments.len().saturating_add(1) / 2);
     let mut cursor = 0usize;
     for seg in segments.iter() {
         if let ConflictSegment::Text(text) = seg {
@@ -3236,10 +3355,28 @@ pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ance
                     .get(text_idx)
                     .map(|r| r.start)
                     .unwrap_or(ancestor_text.len());
-                block.base = Some(ancestor_text[prev_end..next_start].to_string().into());
+                block.base = Some(if let Some(shared_ancestor_text) = shared_ancestor_text {
+                    ConflictText::shared_slice(
+                        Arc::clone(shared_ancestor_text),
+                        prev_end..next_start,
+                    )
+                } else {
+                    ancestor_text[prev_end..next_start].to_string().into()
+                });
             }
         }
     }
+}
+
+pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ancestor_text: &str) {
+    populate_block_bases_from_ancestor_impl(segments, ancestor_text, None);
+}
+
+pub fn populate_block_bases_from_shared_ancestor(
+    segments: &mut [ConflictSegment],
+    ancestor_text: Arc<str>,
+) {
+    populate_block_bases_from_ancestor_impl(segments, ancestor_text.as_ref(), Some(&ancestor_text));
 }
 
 /// Check whether the given text still contains git conflict markers.

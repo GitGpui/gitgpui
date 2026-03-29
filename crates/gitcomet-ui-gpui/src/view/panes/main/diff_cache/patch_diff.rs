@@ -126,7 +126,7 @@ impl PagedPatchDiffRows {
             };
             rows.push(AnnotatedDiffLine {
                 kind: line.kind,
-                text: Arc::clone(&line.text),
+                text: line.text.clone(),
                 old_line,
                 new_line,
             });

@@ -2260,6 +2260,7 @@ dependencies = [
 name = "gitcomet-core"
 version = "0.1.7"
 dependencies = [
+ "memchr",
  "regex",
  "rustc-hash 2.1.1",
  "strsim",

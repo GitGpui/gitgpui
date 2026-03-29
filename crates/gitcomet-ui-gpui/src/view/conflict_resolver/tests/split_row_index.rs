@@ -59,6 +59,10 @@ fn split_row_index_context_plus_block() {
     let c0 = index.row_at(&segments, 0).unwrap();
     assert_eq!(c0.old, Some("line4".into()));
     assert_eq!(c0.new, Some("line4".into()));
+    assert!(std::sync::Arc::ptr_eq(
+        c0.old.as_ref().unwrap(),
+        c0.new.as_ref().unwrap()
+    ));
     assert_eq!(c0.old_line, Some(4)); // line4 is at 1-based index 4
     assert_eq!(c0.kind, gitcomet_core::file_diff::FileDiffRowKind::Context);
 
@@ -77,6 +81,27 @@ fn split_row_index_context_plus_block() {
     assert_eq!(b1.old, None);
     assert_eq!(b1.new, Some("c".into()));
     assert_eq!(b1.kind, gitcomet_core::file_diff::FileDiffRowKind::Add);
+}
+
+#[test]
+fn split_row_index_equal_block_rows_share_old_new_arc() {
+    let segments = vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours: "shared\n".into(),
+        theirs: "shared\n".into(),
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })];
+    let index = ConflictSplitRowIndex::new(&segments, 1);
+
+    let row = index.row_at(&segments, 0).unwrap();
+    assert_eq!(row.kind, gitcomet_core::file_diff::FileDiffRowKind::Context);
+    assert_eq!(row.old, Some("shared".into()));
+    assert_eq!(row.new, Some("shared".into()));
+    assert!(std::sync::Arc::ptr_eq(
+        row.old.as_ref().unwrap(),
+        row.new.as_ref().unwrap()
+    ));
 }
 
 #[test]
@@ -1147,6 +1172,58 @@ fn resolved_output_projection_tracks_conflict_line_ranges() {
             .expect("final base line should be projected")
             .as_ref(),
         "base-last"
+    );
+}
+
+#[test]
+fn resolved_output_projection_keeps_large_fragment_line_access() {
+    let mut trailing = String::new();
+    for line_ix in 0..(LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 32) {
+        trailing.push_str("tail-");
+        trailing.push_str(line_ix.to_string().as_str());
+        trailing.push('\n');
+    }
+
+    let segments = vec![
+        ConflictSegment::Text("head\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours-choice\n".into(),
+            theirs: "theirs-choice\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+        }),
+        ConflictSegment::Text(trailing.into()),
+    ];
+
+    let projection = ResolvedOutputProjection::from_segments(&segments);
+    let expected_lines: Vec<String> = generate_resolved_text(&segments)
+        .split('\n')
+        .map(str::to_string)
+        .collect();
+    let deep_line_ix = expected_lines.len().saturating_sub(2);
+
+    assert_eq!(projection.len(), expected_lines.len());
+    assert_eq!(
+        projection
+            .line_text(&segments, 0)
+            .expect("first line should stay accessible")
+            .as_ref(),
+        "head"
+    );
+    assert_eq!(
+        projection
+            .line_text(&segments, 1)
+            .expect("chosen conflict line should stay accessible")
+            .as_ref(),
+        "ours-choice"
+    );
+    assert_eq!(
+        projection
+            .line_text(&segments, deep_line_ix)
+            .expect("deep trailing line should stay accessible")
+            .as_ref(),
+        expected_lines[deep_line_ix].as_str()
     );
 }
 

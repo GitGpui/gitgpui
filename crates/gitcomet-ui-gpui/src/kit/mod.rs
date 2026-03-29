@@ -13,7 +13,8 @@ pub use text_input::{
 #[cfg(feature = "benchmarks")]
 pub(crate) use text_input::{
     benchmark_text_input_runs_legacy_visible_window,
-    benchmark_text_input_runs_streamed_visible_window,
+    benchmark_text_input_runs_streamed_visible_window, benchmark_text_input_shaping_slice,
+    benchmark_text_input_wrap_rows_for_line,
 };
 
 #[cfg(feature = "benchmarks")]

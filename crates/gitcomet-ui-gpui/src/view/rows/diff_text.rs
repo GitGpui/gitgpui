@@ -1181,21 +1181,29 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
         Some(syntax::PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
             let query_trimmed = query.trim();
             if word_ranges.is_empty() && query_trimmed.is_empty() {
-                let highlights = match highlight_palette {
-                    Some(highlight_palette) => {
-                        prepared_document_line_highlights_from_tokens_with_palette(
-                            highlight_palette,
-                            text.len(),
-                            &tokens,
-                        )
-                    }
-                    None => {
-                        prepared_document_line_highlights_from_tokens(theme, text.len(), &tokens)
-                    }
-                };
-                PreparedDocumentLineStyledText::Cacheable(
-                    build_cached_diff_styled_text_from_owned_relative_highlights(text, highlights),
-                )
+                PreparedDocumentLineStyledText::Cacheable(SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(
+                    |buf| {
+                        match highlight_palette {
+                            Some(highlight_palette) => {
+                                prepared_document_line_highlights_from_tokens_into_with_palette(
+                                    highlight_palette,
+                                    text.len(),
+                                    &tokens,
+                                    buf,
+                                );
+                            }
+                            None => {
+                                prepared_document_line_highlights_from_tokens_into(
+                                    theme,
+                                    text.len(),
+                                    &tokens,
+                                    buf,
+                                );
+                            }
+                        }
+                        styled_text_to_cached_from_buf(text, buf)
+                    },
+                ))
             } else {
                 PreparedDocumentLineStyledText::Cacheable(build_styled_text_fused(
                     theme,
@@ -2848,7 +2856,7 @@ mod tests {
 
         let remove_line = AnnotatedDiffLine {
             kind: DiffLineKind::Remove,
-            text: Arc::from("-let old_two = 2;"),
+            text: "-let old_two = 2;".into(),
             old_line: Some(2),
             new_line: None,
         };
@@ -2866,7 +2874,7 @@ mod tests {
 
         let add_line = AnnotatedDiffLine {
             kind: DiffLineKind::Add,
-            text: Arc::from("+let new_three = 3;"),
+            text: "+let new_three = 3;".into(),
             old_line: None,
             new_line: Some(3),
         };
@@ -2884,7 +2892,7 @@ mod tests {
 
         let context_line = AnnotatedDiffLine {
             kind: DiffLineKind::Context,
-            text: Arc::from(" let new_one = 1;"),
+            text: " let new_one = 1;".into(),
             old_line: Some(1),
             new_line: Some(1),
         };
@@ -2909,7 +2917,7 @@ mod tests {
 
         let header_line = AnnotatedDiffLine {
             kind: DiffLineKind::Header,
-            text: Arc::from("diff --git a/file b/file"),
+            text: "diff --git a/file b/file".into(),
             old_line: None,
             new_line: None,
         };
@@ -2927,7 +2935,7 @@ mod tests {
 
         let missing_add_line = AnnotatedDiffLine {
             kind: DiffLineKind::Add,
-            text: Arc::from("+let value = 1;"),
+            text: "+let value = 1;".into(),
             old_line: None,
             new_line: None,
         };
@@ -2963,7 +2971,7 @@ mod tests {
         // Remove line: old_line=1 should project from old document line 0 ("struct Foo {")
         let remove_line = AnnotatedDiffLine {
             kind: DiffLineKind::Remove,
-            text: Arc::from("-struct Foo {"),
+            text: "-struct Foo {".into(),
             old_line: Some(1),
             new_line: None,
         };
@@ -2987,7 +2995,7 @@ mod tests {
         // Add line: new_line=2 should project from new document line 1 ("    let y = 42;")
         let add_line = AnnotatedDiffLine {
             kind: DiffLineKind::Add,
-            text: Arc::from("+    let y = 42;"),
+            text: "+    let y = 42;".into(),
             old_line: None,
             new_line: Some(2),
         };

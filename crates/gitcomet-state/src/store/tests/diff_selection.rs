@@ -35,10 +35,11 @@ fn select_diff_sets_loading_and_emits_effect() {
     assert!(repo_state.diff_state.diff_file.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFile { repo_id: RepoId(1), target: a },
-            Effect::LoadDiff { repo_id: RepoId(1), target: b },
-        ] if a == &target && b == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: true,
+            load_file_image: false,
+        }]
     ));
 }
 
@@ -80,10 +81,11 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: a },
-            Effect::LoadDiff { repo_id: RepoId(1), target: b },
-        ] if a == &target && b == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: false,
+            load_file_image: true,
+        }]
     ));
 }
 
@@ -125,10 +127,11 @@ fn select_diff_for_ico_sets_loading_and_emits_effect() {
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: a },
-            Effect::LoadDiff { repo_id: RepoId(1), target: b },
-        ] if a == &target && b == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: false,
+            load_file_image: true,
+        }]
     ));
 }
 
@@ -167,11 +170,11 @@ fn select_diff_for_svg_loads_image_and_text() {
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: a },
-            Effect::LoadDiffFile { repo_id: RepoId(1), target: b },
-            Effect::LoadDiff { repo_id: RepoId(1), target: c },
-        ] if a == &target && b == &target && c == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: true,
+            load_file_image: true,
+        }]
     ));
 }
 
@@ -229,11 +232,10 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
     assert!(repo_state.conflict_state.conflict_file.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadConflictFile {
+        [Effect::LoadSelectedConflictFile {
             repo_id: RepoId(1),
-            path,
             mode: crate::model::ConflictFileLoadMode::CurrentOnly
-        }] if path == &PathBuf::from("index.html")
+        }]
     ));
 }
 
@@ -285,11 +287,10 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
     ));
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadConflictFile {
+        [Effect::LoadSelectedConflictFile {
             repo_id: RepoId(1),
-            path,
             mode: crate::model::ConflictFileLoadMode::CurrentOnly
-        }] if path == &PathBuf::from("icon.svg")
+        }]
     ));
 }
 
@@ -334,10 +335,11 @@ fn select_diff_for_commit_without_path_only_loads_patch() {
     ));
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadDiff {
+        [Effect::LoadSelectedDiff {
             repo_id: RepoId(1),
-            target: effect_target
-        }] if effect_target == &target
+            load_file_text: false,
+            load_file_image: false,
+        }]
     ));
 }
 
@@ -376,11 +378,11 @@ fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: a },
-            Effect::LoadDiffFile { repo_id: RepoId(1), target: b },
-            Effect::LoadDiff { repo_id: RepoId(1), target: c },
-        ] if a == &target && b == &target && c == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: true,
+            load_file_image: true,
+        }]
     ));
 }
 

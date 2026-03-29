@@ -1,5 +1,7 @@
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy};
-use gitcomet_core::domain::{DiffArea, DiffTarget, FileConflictKind, FileStatusKind};
+use gitcomet_core::domain::{
+    CommitId, DiffArea, DiffLineKind, DiffTarget, FileConflictKind, FileStatusKind,
+};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::ConflictSide;
 use gitcomet_core::services::GitBackend;
@@ -1630,6 +1632,74 @@ fn diff_parsed_outside_repository_path_returns_structured_git_error() {
         unreachable!("assert_git_failure() already checked the error kind");
     };
     assert_eq!(failure.exit_code(), Some(128));
+}
+
+#[test]
+fn diff_parsed_commit_rename_preserves_rename_headers_and_hunks() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "diff.renames", "true"]);
+
+    write(repo, "docs/source.txt", "one\ntwo\n");
+    run_git(repo, &["add", "docs/source.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+
+    fs::create_dir_all(repo.join("docs/renamed")).unwrap();
+    fs::rename(
+        repo.join("docs/source.txt"),
+        repo.join("docs/renamed/target.txt"),
+    )
+    .unwrap();
+    fs::write(repo.join("docs/renamed/target.txt"), "one\ntwo\nthree\n").unwrap();
+    run_git(repo, &["add", "-A"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "rename"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let diff = opened
+        .diff_parsed(&DiffTarget::Commit {
+            commit_id,
+            path: None,
+        })
+        .expect("parse rename commit diff");
+
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Header
+                && line.text.as_ref() == "rename from docs/source.txt")
+    );
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Header
+                && line.text.as_ref() == "rename to docs/renamed/target.txt")
+    );
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Hunk && line.text.as_ref().starts_with("@@")),
+    );
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Add && line.text.as_ref() == "+three"),
+    );
 }
 
 #[test]

@@ -40,22 +40,28 @@ fn set_status_multi_selection_single(
     selected: &mut Vec<std::path::PathBuf>,
     anchor: &mut Option<std::path::PathBuf>,
     anchor_index: &mut Option<usize>,
+    anchor_status_rev: &mut Option<u64>,
     clicked_path: std::path::PathBuf,
     clicked_index: Option<usize>,
+    status_rev: Option<u64>,
 ) {
     selected.clear();
     selected.push(clicked_path.clone());
     *anchor = Some(clicked_path);
     *anchor_index = clicked_index;
+    *anchor_status_rev = status_rev;
 }
 
 fn apply_status_multi_selection_to_slice(
     selected: &mut Vec<std::path::PathBuf>,
     anchor: &mut Option<std::path::PathBuf>,
     anchor_index: &mut Option<usize>,
+    anchor_status_rev: &mut Option<u64>,
     clicked_path: std::path::PathBuf,
     clicked_index: Option<usize>,
     modifiers: gpui::Modifiers,
+    status_rev: Option<u64>,
+    trust_clicked_index: bool,
     entries: Option<&[std::path::PathBuf]>,
 ) {
     if modifiers.shift {
@@ -64,28 +70,41 @@ fn apply_status_multi_selection_to_slice(
                 selected,
                 anchor,
                 anchor_index,
+                anchor_status_rev,
                 clicked_path,
                 clicked_index,
+                status_rev,
             );
             return;
         };
 
-        let Some(clicked_ix) =
-            status_selection_entry_index(entries, clicked_path.as_path(), clicked_index)
-        else {
+        let Some(clicked_ix) = status_selection_entry_index(
+            entries,
+            clicked_path.as_path(),
+            clicked_index,
+            trust_clicked_index,
+        ) else {
             set_status_multi_selection_single(
                 selected,
                 anchor,
                 anchor_index,
+                anchor_status_rev,
                 clicked_path,
                 clicked_index,
+                status_rev,
             );
             return;
         };
 
-        let anchor_path = anchor.clone().unwrap_or_else(|| clicked_path.clone());
-        let anchor_ix = status_selection_entry_index(entries, anchor_path.as_path(), *anchor_index)
-            .unwrap_or(clicked_ix);
+        let anchor_ix = if let Some(anchor_path) = anchor.as_deref() {
+            let trust_anchor_index = status_rev
+                .zip(*anchor_status_rev)
+                .is_some_and(|(current, anchor_rev)| current == anchor_rev);
+            status_selection_entry_index(entries, anchor_path, *anchor_index, trust_anchor_index)
+                .unwrap_or(clicked_ix)
+        } else {
+            clicked_ix
+        };
         let (a, b) = if anchor_ix <= clicked_ix {
             (anchor_ix, clicked_ix)
         } else {
@@ -93,8 +112,11 @@ fn apply_status_multi_selection_to_slice(
         };
         selected.clear();
         selected.extend(entries[a..=b].iter().cloned());
-        *anchor = Some(anchor_path);
+        if anchor.is_none() {
+            *anchor = Some(clicked_path.clone());
+        }
         *anchor_index = Some(anchor_ix);
+        *anchor_status_rev = status_rev;
         return;
     }
 
@@ -104,23 +126,37 @@ fn apply_status_multi_selection_to_slice(
             if selected.is_empty() {
                 *anchor = None;
                 *anchor_index = None;
+                *anchor_status_rev = None;
             }
         } else {
             selected.push(clicked_path.clone());
             *anchor = Some(clicked_path);
             *anchor_index = clicked_index;
+            *anchor_status_rev = status_rev;
         }
         return;
     }
 
-    set_status_multi_selection_single(selected, anchor, anchor_index, clicked_path, clicked_index);
+    set_status_multi_selection_single(
+        selected,
+        anchor,
+        anchor_index,
+        anchor_status_rev,
+        clicked_path,
+        clicked_index,
+        status_rev,
+    );
 }
 
 fn status_selection_entry_index_hint(
     entries: &[std::path::PathBuf],
     target: &std::path::Path,
     index_hint: Option<usize>,
+    trust_hint: bool,
 ) -> Option<usize> {
+    if trust_hint {
+        return index_hint.filter(|&ix| entries.get(ix).is_some());
+    }
     index_hint.filter(|&ix| entries.get(ix).is_some_and(|path| path.as_path() == target))
 }
 
@@ -129,8 +165,9 @@ fn status_selection_entry_index(
     entries: &[std::path::PathBuf],
     target: &std::path::Path,
     index_hint: Option<usize>,
+    trust_hint: bool,
 ) -> Option<usize> {
-    if let Some(ix) = status_selection_entry_index_hint(entries, target, index_hint) {
+    if let Some(ix) = status_selection_entry_index_hint(entries, target, index_hint, trust_hint) {
         return Some(ix);
     }
     for (ix, path) in entries.iter().enumerate() {
@@ -147,8 +184,9 @@ fn status_selection_entry_index(
     entries: &[std::path::PathBuf],
     target: &std::path::Path,
     index_hint: Option<usize>,
+    trust_hint: bool,
 ) -> Option<usize> {
-    status_selection_entry_index_hint(entries, target, index_hint)
+    status_selection_entry_index_hint(entries, target, index_hint, trust_hint)
         .or_else(|| entries.iter().position(|path| path.as_path() == target))
 }
 
@@ -158,6 +196,8 @@ pub(super) fn apply_status_multi_selection_click(
     clicked_path: std::path::PathBuf,
     clicked_index: Option<usize>,
     modifiers: gpui::Modifiers,
+    status_rev: Option<u64>,
+    trust_clicked_index: bool,
     entries: Option<&[std::path::PathBuf]>,
 ) {
     match section {
@@ -167,13 +207,17 @@ pub(super) fn apply_status_multi_selection_click(
             selection.staged.clear();
             selection.staged_anchor = None;
             selection.staged_anchor_index = None;
+            selection.staged_anchor_status_rev = None;
             apply_status_multi_selection_to_slice(
                 &mut selection.unstaged,
                 &mut selection.unstaged_anchor,
                 &mut selection.unstaged_anchor_index,
+                &mut selection.unstaged_anchor_status_rev,
                 clicked_path,
                 clicked_index,
                 modifiers,
+                status_rev,
+                trust_clicked_index,
                 entries,
             );
         }
@@ -181,17 +225,23 @@ pub(super) fn apply_status_multi_selection_click(
             selection.unstaged.clear();
             selection.unstaged_anchor = None;
             selection.unstaged_anchor_index = None;
+            selection.unstaged_anchor_status_rev = None;
             selection.staged.clear();
             selection.staged_anchor = None;
             selection.staged_anchor_index = None;
+            selection.staged_anchor_status_rev = None;
             let mut untracked_anchor_index = None;
+            let mut untracked_anchor_status_rev = None;
             apply_status_multi_selection_to_slice(
                 &mut selection.untracked,
                 &mut selection.untracked_anchor,
                 &mut untracked_anchor_index,
+                &mut untracked_anchor_status_rev,
                 clicked_path,
                 clicked_index,
                 modifiers,
+                status_rev,
+                trust_clicked_index,
                 entries,
             );
         }
@@ -201,13 +251,17 @@ pub(super) fn apply_status_multi_selection_click(
             selection.unstaged.clear();
             selection.unstaged_anchor = None;
             selection.unstaged_anchor_index = None;
+            selection.unstaged_anchor_status_rev = None;
             apply_status_multi_selection_to_slice(
                 &mut selection.staged,
                 &mut selection.staged_anchor,
                 &mut selection.staged_anchor_index,
+                &mut selection.staged_anchor_status_rev,
                 clicked_path,
                 clicked_index,
                 modifiers,
+                status_rev,
+                trust_clicked_index,
                 entries,
             );
         }
@@ -297,6 +351,10 @@ impl DetailsPaneView {
         modifiers: gpui::Modifiers,
         entries: Option<&[std::path::PathBuf]>,
     ) {
+        let status_rev = self
+            .active_repo()
+            .filter(|repo| repo.id == repo_id)
+            .map(|repo| repo.status_rev);
         let sel = self.status_multi_selection_for_repo_mut(repo_id);
         apply_status_multi_selection_click(
             sel,
@@ -304,6 +362,8 @@ impl DetailsPaneView {
             clicked_path,
             clicked_index,
             modifiers,
+            status_rev,
+            true,
             entries,
         );
     }
@@ -476,8 +536,14 @@ fn status_row(
                 this.take_status_selected_paths_for_action(repo_id, area, path_for_stage.as_ref());
 
             match area {
-                DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths { repo_id, paths }),
-                DiffArea::Staged => this.store.dispatch(Msg::UnstagePaths { repo_id, paths }),
+                DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                }),
+                DiffArea::Staged => this.store.dispatch(Msg::UnstagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                }),
             }
 
             this.clear_status_multi_selection(repo_id);
@@ -669,6 +735,8 @@ mod tests {
                 ..Default::default()
             },
             None,
+            false,
+            None,
         );
         assert_eq!(sel.unstaged, vec![pb("a")]);
 
@@ -682,6 +750,8 @@ mod tests {
                 ..Default::default()
             },
             None,
+            false,
+            None,
         );
         assert_eq!(sel.unstaged, vec![pb("a"), pb("b")]);
 
@@ -694,6 +764,8 @@ mod tests {
                 control: true,
                 ..Default::default()
             },
+            None,
+            false,
             None,
         );
         assert_eq!(sel.unstaged, vec![pb("b")]);
@@ -710,6 +782,8 @@ mod tests {
             pb("b"),
             None,
             gpui::Modifiers::default(),
+            Some(1),
+            false,
             Some(&entries),
         );
         assert_eq!(sel.unstaged, vec![pb("b")]);
@@ -723,6 +797,8 @@ mod tests {
                 shift: true,
                 ..Default::default()
             },
+            Some(1),
+            false,
             Some(&entries),
         );
         assert_eq!(sel.unstaged, vec![pb("b"), pb("c"), pb("d")]);
@@ -743,6 +819,8 @@ mod tests {
             None,
             gpui::Modifiers::default(),
             None,
+            false,
+            None,
         );
 
         assert!(sel.unstaged.is_empty());
@@ -762,6 +840,8 @@ mod tests {
             pb("b"),
             Some(1),
             gpui::Modifiers::default(),
+            Some(1),
+            true,
             Some(&entries),
         );
         apply_status_multi_selection_click(
@@ -773,12 +853,15 @@ mod tests {
                 shift: true,
                 ..Default::default()
             },
+            Some(1),
+            true,
             Some(&entries),
         );
 
         assert_eq!(sel.unstaged, vec![pb("b"), pb("c"), pb("d")]);
         assert_eq!(sel.unstaged_anchor, Some(pb("b")));
         assert_eq!(sel.unstaged_anchor_index, Some(1));
+        assert_eq!(sel.unstaged_anchor_status_rev, Some(1));
         assert_eq!(bench_snapshot_status_selection().position_scan_steps, 0);
     }
 
@@ -795,6 +878,8 @@ mod tests {
             pb("b"),
             Some(1),
             gpui::Modifiers::default(),
+            Some(1),
+            true,
             Some(&entries),
         );
         apply_status_multi_selection_click(
@@ -806,6 +891,8 @@ mod tests {
                 shift: true,
                 ..Default::default()
             },
+            Some(2),
+            false,
             Some(&entries),
         );
 
@@ -836,6 +923,8 @@ mod tests {
             pb("staged.txt"),
             Some(2),
             gpui::Modifiers::default(),
+            Some(3),
+            false,
             None,
         );
 
@@ -844,8 +933,10 @@ mod tests {
         assert!(sel.untracked_anchor.is_none());
         assert!(sel.unstaged_anchor.is_none());
         assert!(sel.unstaged_anchor_index.is_none());
+        assert!(sel.unstaged_anchor_status_rev.is_none());
         assert_eq!(sel.staged, vec![pb("staged.txt")]);
         assert_eq!(sel.staged_anchor, Some(pb("staged.txt")));
         assert_eq!(sel.staged_anchor_index, Some(2));
+        assert_eq!(sel.staged_anchor_status_rev, Some(3));
     }
 }

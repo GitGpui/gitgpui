@@ -181,6 +181,7 @@ pub(in crate::view) fn pane_resize_drag_width_bounds(
     let sidebar_min = px(SIDEBAR_MIN_PX);
     let details_min = px(DETAILS_MIN_PX);
     let collapsed_w = px(PANE_COLLAPSED_PX);
+    let available_w = total_w - main_min - handles_w;
 
     match handle {
         PaneResizeHandle::Sidebar => {
@@ -189,7 +190,7 @@ pub(in crate::view) fn pane_resize_drag_width_bounds(
             } else {
                 start_details
             };
-            let max_sidebar = (total_w - details_w - main_min - handles_w).max(sidebar_min);
+            let max_sidebar = (available_w - details_w).max(sidebar_min);
             (sidebar_min, max_sidebar)
         }
         PaneResizeHandle::Details => {
@@ -198,28 +199,22 @@ pub(in crate::view) fn pane_resize_drag_width_bounds(
             } else {
                 start_sidebar
             };
-            let max_details = (total_w - sidebar_w - main_min - handles_w).max(details_min);
+            let max_details = (available_w - sidebar_w).max(details_min);
             (details_min, max_details)
         }
     }
 }
 
 pub(in crate::view) fn next_pane_resize_drag_width(
-    state: PaneResizeState,
+    state: &PaneResizeState,
     current_x: Pixels,
     total_w: Pixels,
     sidebar_collapsed: bool,
     details_collapsed: bool,
 ) -> Pixels {
     let dx = current_x - state.start_x;
-    let (min_width, max_width) = pane_resize_drag_width_bounds(
-        state.handle,
-        state.start_sidebar,
-        state.start_details,
-        total_w,
-        sidebar_collapsed,
-        details_collapsed,
-    );
+    let (min_width, max_width) =
+        state.drag_width_bounds(total_w, sidebar_collapsed, details_collapsed);
 
     match state.handle {
         PaneResizeHandle::Sidebar => (state.start_sidebar + dx).max(min_width).min(max_width),
@@ -1089,12 +1084,15 @@ impl GitCometView {
                             this.details_render_width = this.details_width;
                         }
                     }
-                    this.pane_resize = Some(PaneResizeState {
+                    this.pane_resize = Some(PaneResizeState::new(
                         handle,
-                        start_x: e.position.x,
-                        start_sidebar: this.sidebar_width,
-                        start_details: this.details_width,
-                    });
+                        e.position.x,
+                        this.sidebar_width,
+                        this.details_width,
+                        this.last_window_size.width,
+                        this.sidebar_collapsed,
+                        this.details_collapsed,
+                    ));
                     cx.notify();
                 }),
             )
@@ -1109,7 +1107,7 @@ impl GitCometView {
 
                     let total_w = this.last_window_size.width;
                     let next_width = next_pane_resize_drag_width(
-                        state,
+                        &state,
                         e.event.position.x,
                         total_w,
                         this.sidebar_collapsed,

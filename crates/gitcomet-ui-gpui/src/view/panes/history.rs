@@ -1,7 +1,8 @@
 use super::super::*;
 use crate::view::caches::{
-    HistoryShortShaVm, HistoryWhenVm, build_history_branch_text_by_target,
-    build_history_tag_names_by_target,
+    HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm, analyze_history_stashes,
+    build_history_branch_text_by_target, build_history_tag_names_by_target,
+    build_history_visible_indices, next_history_stash_tip_for_commit_ix,
 };
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -154,6 +155,119 @@ fn history_column_drag_clamped_width(
     candidate.max(min_w).min(max_w)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistorySelectedListIndexCache {
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<CommitId>,
+    list_ix: usize,
+}
+
+fn history_selected_list_index_cache_matches(
+    cache: &HistorySelectedListIndexCache,
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<&CommitId>,
+) -> bool {
+    cache.repo_id == repo_id
+        && cache.log_rev == log_rev
+        && cache.stashes_rev == stashes_rev
+        && cache.history_scope == history_scope
+        && cache.show_working_tree_summary_row == show_working_tree_summary_row
+        && cache.selected_commit.as_ref() == selected_commit
+}
+
+fn set_history_selected_list_index_cache(
+    cache: &mut Option<HistorySelectedListIndexCache>,
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<CommitId>,
+    list_ix: usize,
+) {
+    *cache = Some(HistorySelectedListIndexCache {
+        repo_id,
+        log_rev,
+        stashes_rev,
+        history_scope,
+        show_working_tree_summary_row,
+        selected_commit,
+        list_ix,
+    });
+}
+
+fn resolve_history_selected_list_index(
+    cache: &mut Option<HistorySelectedListIndexCache>,
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<&CommitId>,
+    visible_indices: &HistoryVisibleIndices,
+    commits: &[Commit],
+) -> Option<usize> {
+    if show_working_tree_summary_row && selected_commit.is_none() {
+        set_history_selected_list_index_cache(
+            cache,
+            repo_id,
+            log_rev,
+            stashes_rev,
+            history_scope,
+            show_working_tree_summary_row,
+            None,
+            0,
+        );
+        return Some(0);
+    }
+
+    if let Some(list_ix) = cache
+        .as_ref()
+        .filter(|entry| {
+            history_selected_list_index_cache_matches(
+                entry,
+                repo_id,
+                log_rev,
+                stashes_rev,
+                history_scope,
+                show_working_tree_summary_row,
+                selected_commit,
+            )
+        })
+        .map(|entry| entry.list_ix)
+    {
+        return Some(list_ix);
+    }
+
+    let selected_commit = selected_commit?;
+    let offset = usize::from(show_working_tree_summary_row);
+    let visible_ix = visible_indices.iter().position(|commit_ix| {
+        commits
+            .get(commit_ix)
+            .is_some_and(|commit| &commit.id == selected_commit)
+    })?;
+    let list_ix = visible_ix + offset;
+    set_history_selected_list_index_cache(
+        cache,
+        repo_id,
+        log_rev,
+        stashes_rev,
+        history_scope,
+        show_working_tree_summary_row,
+        Some(selected_commit.clone()),
+        list_ix,
+    );
+    Some(list_ix)
+}
+
 pub(in super::super) struct HistoryView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -181,6 +295,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_col_graph_auto: bool,
     pub(in super::super) history_col_resize: Option<HistoryColResizeState>,
     pub(in super::super) history_cache: Option<HistoryCache>,
+    history_selected_list_index_cache: Option<HistorySelectedListIndexCache>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -269,6 +384,7 @@ impl HistoryView {
             history_col_graph_auto: true,
             history_col_resize: None,
             history_cache: None,
+            history_selected_list_index_cache: None,
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
@@ -765,7 +881,7 @@ impl HistoryView {
         cx.spawn(
             async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {
                 struct Rebuild {
-                    visible_indices: Vec<usize>,
+                    visible_indices: HistoryVisibleIndices,
                     graph_rows: Arc<[history_graph::GraphRow]>,
                     max_lanes: usize,
                     commit_row_vms: Vec<HistoryCommitRowVm>,
@@ -775,53 +891,12 @@ impl HistoryView {
                 let request_for_build = request_for_task.clone();
 
                 let rebuild = smol::unblock(move || {
-                    let mut stash_messages_by_id: HashMap<&str, Arc<str>> =
-                        HashMap::with_capacity_and_hasher(stashes.len(), Default::default());
-                    for stash in stashes.iter() {
-                        stash_messages_by_id.insert(stash.id.as_ref(), stash.message.clone());
-                    }
+                    let stash_analysis = analyze_history_stashes(&page.commits, stashes.as_ref());
+                    let stash_tips = stash_analysis.stash_tips;
+                    let stash_helper_ids = stash_analysis.stash_helper_ids;
 
-                    let stash_tip_ids_from_list: HashSet<&str> =
-                        stash_messages_by_id.keys().copied().collect();
-                    let mut stash_tip_ids = stash_tip_ids_from_list.clone();
-                    let derive_helper_ids_from_detected_tips = stash_tip_ids_from_list.is_empty();
-                    let mut stash_helper_ids: HashSet<&str> = HashSet::with_capacity_and_hasher(
-                        stash_tip_ids_from_list.len().max(4),
-                        Default::default(),
-                    );
-                    for commit in page.commits.iter() {
-                        let commit_id = commit.id.as_ref();
-                        let is_probable_stash = is_probable_stash_tip(commit);
-                        if is_probable_stash {
-                            stash_tip_ids.insert(commit_id);
-                        }
-
-                        let should_collect_helpers = if derive_helper_ids_from_detected_tips {
-                            is_probable_stash
-                        } else {
-                            stash_tip_ids_from_list.contains(commit_id)
-                        };
-                        if !should_collect_helpers {
-                            continue;
-                        }
-
-                        for parent_id in commit.parent_ids.iter().skip(1).map(|p| p.as_ref()) {
-                            stash_helper_ids.insert(parent_id);
-                        }
-                    }
-
-                    let visible_indices: Vec<usize> = if stash_helper_ids.is_empty() {
-                        (0..page.commits.len()).collect()
-                    } else {
-                        let mut visible_indices =
-                            Vec::with_capacity(page.commits.len() - stash_helper_ids.len());
-                        for (ix, commit) in page.commits.iter().enumerate() {
-                            if !stash_helper_ids.contains(commit.id.as_ref()) {
-                                visible_indices.push(ix);
-                            }
-                        }
-                        visible_indices
-                    };
+                    let visible_indices =
+                        build_history_visible_indices(&page.commits, &stash_helper_ids);
 
                     let head_target = match head_branch.as_deref() {
                         Some("HEAD") => request_for_build
@@ -833,7 +908,7 @@ impl HistoryView {
                                     .then(|| {
                                         visible_indices
                                             .first()
-                                            .and_then(|&ix| page.commits.get(ix))
+                                            .and_then(|ix| page.commits.get(ix))
                                             .map(|c| c.id.as_ref())
                                     })
                                     .flatten()
@@ -865,7 +940,7 @@ impl HistoryView {
                         // construction.
                         let visible_commit_refs = visible_indices
                             .iter()
-                            .map(|&ix| &page.commits[ix])
+                            .map(|ix| &page.commits[ix])
                             .collect::<Vec<_>>();
                         history_graph::compute_graph_refs(
                             &visible_commit_refs,
@@ -880,71 +955,107 @@ impl HistoryView {
                         .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
                         .max()
                         .unwrap_or(1);
-                    let (branch_text_by_target, head_branches_text) =
+                    let (mut branch_text_by_target, head_branches_text) =
                         build_history_branch_text_by_target(
                             branches.as_ref(),
                             remote_branches.as_ref(),
                             head_branch.as_deref(),
                             head_target,
                         );
-                    let tag_names_by_target = build_history_tag_names_by_target(tags.as_ref());
+                    let mut tag_names_by_target = build_history_tag_names_by_target(tags.as_ref());
 
-                    let empty_tags: Arc<[SharedString]> = Vec::new().into();
+                    let has_stash_tips = !stash_tips.is_empty();
                     let mut author_cache: HashMap<&str, SharedString> =
                         HashMap::with_capacity_and_hasher(64, Default::default());
                     let mut commit_row_vms = Vec::with_capacity(visible_indices.len());
-                    for &ix in &visible_indices {
-                        let Some(commit) = page.commits.get(ix) else {
-                            continue;
-                        };
-                        let commit_id = commit.id.as_ref();
+                    if has_stash_tips {
+                        let mut next_stash_tip_ix = 0usize;
+                        for ix in visible_indices.iter() {
+                            let Some(commit) = page.commits.get(ix) else {
+                                continue;
+                            };
+                            let commit_id = commit.id.as_ref();
 
-                        let is_head = head_target == Some(commit_id);
+                            let is_head = head_target == Some(commit_id);
 
-                        let branches_text = if is_head {
-                            head_branches_text.clone().unwrap_or_default()
-                        } else {
-                            branch_text_by_target
-                                .get(commit_id)
-                                .cloned()
-                                .unwrap_or_default()
-                        };
+                            let branches_text = if is_head {
+                                head_branches_text.clone().unwrap_or_default()
+                            } else {
+                                branch_text_by_target.remove(commit_id).unwrap_or_default()
+                            };
 
-                        let tag_names = tag_names_by_target
-                            .get(commit_id)
-                            .cloned()
-                            .unwrap_or_else(|| Arc::clone(&empty_tags));
+                            let tag_names =
+                                tag_names_by_target.remove(commit_id).unwrap_or_default();
 
-                        let author: SharedString = author_cache
-                            .entry(commit.author.as_ref())
-                            .or_insert_with(|| commit.author.clone().into())
-                            .clone();
-                        let is_stash = stash_tip_ids.contains(commit_id);
-                        let summary: SharedString = if is_stash {
-                            stash_messages_by_id
-                                .get(commit_id)
-                                .filter(|message| !message.trim().is_empty())
-                                .cloned()
-                                .map(Into::into)
-                                .or_else(|| {
-                                    stash_summary_from_log_summary(&commit.summary)
-                                        .map(SharedString::new)
-                                })
-                                .unwrap_or_else(|| commit.summary.clone().into())
-                        } else {
-                            commit.summary.clone().into()
-                        };
+                            let author: SharedString = author_cache
+                                .entry(commit.author.as_ref())
+                                .or_insert_with(|| commit.author.clone().into())
+                                .clone();
+                            let (is_stash, summary): (bool, SharedString) =
+                                match next_history_stash_tip_for_commit_ix(
+                                    &stash_tips,
+                                    &mut next_stash_tip_ix,
+                                    ix,
+                                ) {
+                                    Some(stash_tip) => (
+                                        true,
+                                        stash_tip
+                                            .message
+                                            .map(|message| Arc::clone(message).into())
+                                            .or_else(|| {
+                                                stash_summary_from_log_summary(&commit.summary)
+                                                    .map(SharedString::new)
+                                            })
+                                            .unwrap_or_else(|| commit.summary.clone().into()),
+                                    ),
+                                    None => (false, commit.summary.clone().into()),
+                                };
 
-                        commit_row_vms.push(HistoryCommitRowVm {
-                            branches_text,
-                            tag_names,
-                            author,
-                            summary,
-                            when: HistoryWhenVm::deferred(commit.time),
-                            short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
-                            is_head,
-                            is_stash,
-                        });
+                            commit_row_vms.push(HistoryCommitRowVm {
+                                branches_text,
+                                tag_names,
+                                author,
+                                summary,
+                                when: HistoryWhenVm::deferred(commit.time),
+                                short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
+                                is_head,
+                                is_stash,
+                            });
+                        }
+                    } else {
+                        for ix in visible_indices.iter() {
+                            let Some(commit) = page.commits.get(ix) else {
+                                continue;
+                            };
+                            let commit_id = commit.id.as_ref();
+
+                            let is_head = head_target == Some(commit_id);
+
+                            let branches_text = if is_head {
+                                head_branches_text.clone().unwrap_or_default()
+                            } else {
+                                branch_text_by_target.remove(commit_id).unwrap_or_default()
+                            };
+
+                            let tag_names =
+                                tag_names_by_target.remove(commit_id).unwrap_or_default();
+
+                            let author: SharedString = author_cache
+                                .entry(commit.author.as_ref())
+                                .or_insert_with(|| commit.author.clone().into())
+                                .clone();
+
+                            commit_row_vms.push(HistoryCommitRowVm {
+                                branches_text,
+                                tag_names,
+                                author,
+                                summary: commit.summary.clone().into(),
+                                when: HistoryWhenVm::deferred(commit.time),
+                                short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
+                                is_head,
+                                is_stash: false,
+                            });
+                        }
                     }
 
                     Rebuild {
@@ -1002,12 +1113,9 @@ impl HistoryView {
     }
 }
 
+#[cfg(test)]
 fn is_probable_stash_tip(commit: &Commit) -> bool {
-    if !(2..=3).contains(&commit.parent_ids.len()) {
-        return false;
-    }
-    let summary: &str = &commit.summary;
-    (summary.starts_with("WIP on ") || summary.starts_with("On ")) && summary.contains(": ")
+    crate::view::caches::history_commit_is_probable_stash_tip(commit)
 }
 
 fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
@@ -1159,5 +1267,70 @@ mod tests {
             layout,
         );
         assert_eq!(next, px(HISTORY_COL_SHA_MIN_PX));
+    }
+
+    #[test]
+    fn resolve_history_selected_list_index_populates_cache_for_commit_selection() {
+        let commits = vec![
+            commit("a", &["p0"], "a"),
+            commit("b", &["a"], "b"),
+            commit("c", &["b"], "c"),
+        ];
+        let selected = CommitId("c".into());
+        let mut cache = None;
+
+        let list_ix = resolve_history_selected_list_index(
+            &mut cache,
+            RepoId(7),
+            11,
+            13,
+            LogScope::AllBranches,
+            true,
+            Some(&selected),
+            &HistoryVisibleIndices::Filtered(vec![0, 2]),
+            &commits,
+        );
+
+        assert_eq!(list_ix, Some(2));
+        assert_eq!(
+            cache,
+            Some(HistorySelectedListIndexCache {
+                repo_id: RepoId(7),
+                log_rev: 11,
+                stashes_rev: 13,
+                history_scope: LogScope::AllBranches,
+                show_working_tree_summary_row: true,
+                selected_commit: Some(selected),
+                list_ix: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_history_selected_list_index_reuses_matching_cache() {
+        let selected = CommitId("cached".into());
+        let mut cache = Some(HistorySelectedListIndexCache {
+            repo_id: RepoId(3),
+            log_rev: 21,
+            stashes_rev: 34,
+            history_scope: LogScope::CurrentBranch,
+            show_working_tree_summary_row: false,
+            selected_commit: Some(selected.clone()),
+            list_ix: 5,
+        });
+
+        let list_ix = resolve_history_selected_list_index(
+            &mut cache,
+            RepoId(3),
+            21,
+            34,
+            LogScope::CurrentBranch,
+            false,
+            Some(&selected),
+            &HistoryVisibleIndices::all(0),
+            &[],
+        );
+
+        assert_eq!(list_ix, Some(5));
     }
 }

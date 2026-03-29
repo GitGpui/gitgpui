@@ -1,7 +1,16 @@
 use gpui::SharedString;
+#[cfg(windows)]
 use rustc_hash::FxHashMap as HashMap;
+#[cfg(not(windows))]
+use rustc_hash::FxHashMap as HashMap;
+#[cfg(not(windows))]
+use rustc_hash::FxHasher;
+#[cfg(not(windows))]
+use smallvec::SmallVec;
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 use std::cell::Cell;
+#[cfg(not(windows))]
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
@@ -15,7 +24,9 @@ pub(in crate::view) struct PathDisplayBenchSnapshot {
 }
 
 #[cfg(not(windows))]
-type PathDisplayCacheMap = HashMap<SharedString, SharedString>;
+type PathDisplayCacheBucket = SmallVec<[SharedString; 1]>;
+#[cfg(not(windows))]
+type PathDisplayCacheMap = HashMap<u64, PathDisplayCacheBucket>;
 #[cfg(windows)]
 type PathDisplayCacheMap = HashMap<PathBuf, SharedString>;
 
@@ -24,16 +35,40 @@ type PathDisplayCacheMap = HashMap<PathBuf, SharedString>;
 pub(super) struct PathDisplayCache {
     recent: PathDisplayCacheMap,
     previous: PathDisplayCacheMap,
+    recent_entries: usize,
+    previous_entries: usize,
+    #[cfg(not(windows))]
+    present_hash_counts: HashMap<u64, u16>,
+    #[cfg(not(windows))]
+    overflow_tail_active: bool,
 }
 
 impl Default for PathDisplayCache {
     fn default() -> Self {
         Self {
+            #[cfg(not(windows))]
             recent: HashMap::with_capacity_and_hasher(Self::RECENT_MAX_ENTRIES, Default::default()),
+            #[cfg(windows)]
+            recent: HashMap::with_capacity_and_hasher(Self::RECENT_MAX_ENTRIES, Default::default()),
+            #[cfg(not(windows))]
             previous: HashMap::with_capacity_and_hasher(
                 Self::RECENT_MAX_ENTRIES,
                 Default::default(),
             ),
+            #[cfg(windows)]
+            previous: HashMap::with_capacity_and_hasher(
+                Self::RECENT_MAX_ENTRIES,
+                Default::default(),
+            ),
+            recent_entries: 0,
+            previous_entries: 0,
+            #[cfg(not(windows))]
+            present_hash_counts: HashMap::with_capacity_and_hasher(
+                Self::MAX_ENTRIES,
+                Default::default(),
+            ),
+            #[cfg(not(windows))]
+            overflow_tail_active: false,
         }
     }
 }
@@ -46,19 +81,145 @@ impl PathDisplayCache {
     pub(super) fn clear(&mut self) {
         self.recent.clear();
         self.previous.clear();
+        self.recent_entries = 0;
+        self.previous_entries = 0;
+        #[cfg(not(windows))]
+        {
+            self.present_hash_counts.clear();
+            self.overflow_tail_active = false;
+        }
     }
 
     pub(super) fn len(&self) -> usize {
-        self.recent.len() + self.previous.len()
+        self.recent_entries + self.previous_entries
     }
 
     fn rotate_generations(&mut self) {
         #[cfg(any(debug_assertions, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
+        #[cfg(not(windows))]
+        {
+            remove_generation_hashes(&self.previous, &mut self.present_hash_counts);
+            self.overflow_tail_active = false;
+        }
         self.previous.clear();
+        self.previous_entries = 0;
         std::mem::swap(&mut self.previous, &mut self.recent);
+        std::mem::swap(&mut self.previous_entries, &mut self.recent_entries);
         debug_assert!(self.recent.is_empty());
+        debug_assert_eq!(self.recent_entries, 0);
     }
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn path_display_cache_key(path_key: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    path_key.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn bucket_find<'a>(bucket: &'a PathDisplayCacheBucket, path_key: &str) -> Option<&'a SharedString> {
+    bucket.iter().find(|label| label.as_ref() == path_key)
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn hash_counts_contains(hash_counts: &HashMap<u64, u16>, path_key_hash: u64) -> bool {
+    hash_counts.contains_key(&path_key_hash)
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn hash_counts_insert(hash_counts: &mut HashMap<u64, u16>, path_key_hash: u64) {
+    hash_counts
+        .entry(path_key_hash)
+        .and_modify(|count| *count = count.saturating_add(1))
+        .or_insert(1);
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn hash_counts_remove(
+    hash_counts: &mut HashMap<u64, u16>,
+    path_key_hash: u64,
+    removed_entries: usize,
+) {
+    let Ok(removed_entries) = u16::try_from(removed_entries) else {
+        hash_counts.remove(&path_key_hash);
+        return;
+    };
+    let Some(current_count) = hash_counts.get(&path_key_hash).copied() else {
+        return;
+    };
+    if current_count <= removed_entries {
+        hash_counts.remove(&path_key_hash);
+    } else if let Some(count) = hash_counts.get_mut(&path_key_hash) {
+        *count = current_count - removed_entries;
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_generation_hashes(cache: &PathDisplayCacheMap, hash_counts: &mut HashMap<u64, u16>) {
+    for (&path_key_hash, bucket) in cache.iter() {
+        hash_counts_remove(hash_counts, path_key_hash, bucket.len());
+    }
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn cache_lookup(
+    cache: &PathDisplayCacheMap,
+    path_key_hash: u64,
+    path_key: &str,
+) -> Option<SharedString> {
+    cache
+        .get(&path_key_hash)
+        .and_then(|bucket| bucket_find(bucket, path_key))
+        .cloned()
+}
+
+#[cfg(not(windows))]
+fn cache_remove(
+    cache: &mut PathDisplayCacheMap,
+    entry_count: &mut usize,
+    hash_counts: &mut HashMap<u64, u16>,
+    path_key_hash: u64,
+    path_key: &str,
+) -> Option<SharedString> {
+    let (remove_bucket, position) = {
+        let bucket = cache.get(&path_key_hash)?;
+        let position = bucket.iter().position(|label| label.as_ref() == path_key)?;
+        (bucket.len() == 1, position)
+    };
+
+    *entry_count = entry_count.saturating_sub(1);
+    hash_counts_remove(hash_counts, path_key_hash, 1);
+    if remove_bucket {
+        return cache
+            .remove(&path_key_hash)
+            .and_then(|mut bucket| bucket.pop());
+    }
+
+    cache
+        .get_mut(&path_key_hash)
+        .map(|bucket| bucket.swap_remove(position))
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn cache_insert(
+    cache: &mut PathDisplayCacheMap,
+    entry_count: &mut usize,
+    hash_counts: &mut HashMap<u64, u16>,
+    path_key_hash: u64,
+    label: SharedString,
+) {
+    cache.entry(path_key_hash).or_default().push(label);
+    *entry_count = entry_count.saturating_add(1);
+    hash_counts_insert(hash_counts, path_key_hash);
 }
 
 #[cfg(windows)]
@@ -99,12 +260,28 @@ pub(super) fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> 
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_miss);
         return path_display_shared(path);
     };
+    #[cfg(not(windows))]
+    let path_key_hash = path_display_cache_key(path_key);
+    #[cfg(not(windows))]
+    let full_two_generation_cache = cache.recent_entries >= PathDisplayCache::RECENT_MAX_ENTRIES
+        && cache.previous_entries != 0
+        && cache.len() >= PathDisplayCache::MAX_ENTRIES;
+    #[cfg(not(windows))]
+    if full_two_generation_cache
+        && cache.overflow_tail_active
+        && !hash_counts_contains(&cache.present_hash_counts, path_key_hash)
+    {
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_miss);
+        return SharedString::new(path_key);
+    }
 
     #[cfg(not(windows))]
-    if let Some(s) = cache.recent.get(path_key) {
+    if let Some(s) = cache_lookup(&cache.recent, path_key_hash, path_key) {
         #[cfg(any(debug_assertions, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_hit);
-        return s.clone();
+        cache.overflow_tail_active = false;
+        return s;
     }
 
     #[cfg(windows)]
@@ -117,46 +294,73 @@ pub(super) fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> 
     // Skip the previous-generation lookup entirely when it is empty.
     // This avoids a redundant hash + probe on cold caches and after clear().
     #[cfg(not(windows))]
-    if !cache.previous.is_empty()
-        && let Some(s) = cache.previous.remove(path_key)
+    if cache.previous_entries != 0
+        && let Some(s) = cache_remove(
+            &mut cache.previous,
+            &mut cache.previous_entries,
+            &mut cache.present_hash_counts,
+            path_key_hash,
+            path_key,
+        )
     {
         #[cfg(any(debug_assertions, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_hit);
+        cache.overflow_tail_active = false;
         // Promote to recent so subsequent lookups hit the fast path.
         // Check capacity before inserting to maintain the size invariant.
-        if cache.recent.len() >= PathDisplayCache::RECENT_MAX_ENTRIES {
+        if cache.recent_entries >= PathDisplayCache::RECENT_MAX_ENTRIES {
             cache.rotate_generations();
         }
-        cache.recent.insert(s.clone(), s.clone());
+        cache_insert(
+            &mut cache.recent,
+            &mut cache.recent_entries,
+            &mut cache.present_hash_counts,
+            path_key_hash,
+            s.clone(),
+        );
         return s;
     }
 
     #[cfg(windows)]
-    if !cache.previous.is_empty()
+    if cache.previous_entries != 0
         && let Some(s) = cache.previous.remove(path)
     {
         #[cfg(any(debug_assertions, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_hit);
+        cache.previous_entries = cache.previous_entries.saturating_sub(1);
         // Promote to recent so subsequent lookups hit the fast path.
         // Check capacity before inserting to maintain the size invariant.
-        if cache.recent.len() >= PathDisplayCache::RECENT_MAX_ENTRIES {
+        if cache.recent_entries >= PathDisplayCache::RECENT_MAX_ENTRIES {
             cache.rotate_generations();
         }
         cache.recent.insert(path.to_path_buf(), s.clone());
+        cache.recent_entries = cache.recent_entries.saturating_add(1);
         return s;
     }
 
     #[cfg(any(debug_assertions, feature = "benchmarks"))]
     PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_miss);
-    if cache.recent.len() >= PathDisplayCache::RECENT_MAX_ENTRIES {
-        if cache.previous.is_empty() || cache.len() < PathDisplayCache::MAX_ENTRIES {
+    if cache.recent_entries >= PathDisplayCache::RECENT_MAX_ENTRIES {
+        if cache.previous_entries == 0 || cache.len() < PathDisplayCache::MAX_ENTRIES {
             cache.rotate_generations();
         } else {
             // Once both generations are full, keep the hot working set and
             // skip caching one-off overflow misses instead of invalidating the
             // entire previous generation on every long unique tail.
-            return path_display_shared_fast(path);
+            #[cfg(not(windows))]
+            {
+                cache.overflow_tail_active = true;
+                return SharedString::new(path_key);
+            }
+            #[cfg(windows)]
+            {
+                return path_display_shared_fast(path);
+            }
         }
+    }
+    #[cfg(not(windows))]
+    {
+        cache.overflow_tail_active = false;
     }
 
     #[cfg(not(windows))]
@@ -166,10 +370,19 @@ pub(super) fn cached_path_display(cache: &mut PathDisplayCache, path: &Path) -> 
     let s = path_display_shared_fast(path);
 
     #[cfg(not(windows))]
-    cache.recent.insert(s.clone(), s.clone());
+    cache_insert(
+        &mut cache.recent,
+        &mut cache.recent_entries,
+        &mut cache.present_hash_counts,
+        path_key_hash,
+        s.clone(),
+    );
 
     #[cfg(windows)]
-    cache.recent.insert(path.to_path_buf(), s.clone());
+    {
+        cache.recent.insert(path.to_path_buf(), s.clone());
+        cache.recent_entries = cache.recent_entries.saturating_add(1);
+    }
 
     s
 }
@@ -273,10 +486,17 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     #[cfg(not(windows))]
+    fn cache_contains(cache_map: &super::PathDisplayCacheMap, path: &Path) -> bool {
+        let path_key = path.to_str().expect("test paths should be utf-8");
+        let path_key_hash = super::path_display_cache_key(path_key);
+        cache_map
+            .get(&path_key_hash)
+            .is_some_and(|bucket| bucket.iter().any(|label| label.as_ref() == path_key))
+    }
+
+    #[cfg(not(windows))]
     fn cache_contains_recent(cache: &PathDisplayCache, path: &Path) -> bool {
-        cache
-            .recent
-            .contains_key(path.to_str().expect("test paths should be utf-8"))
+        cache_contains(&cache.recent, path)
     }
 
     #[cfg(windows)]
@@ -286,9 +506,7 @@ mod tests {
 
     #[cfg(not(windows))]
     fn cache_contains_previous(cache: &PathDisplayCache, path: &Path) -> bool {
-        cache
-            .previous
-            .contains_key(path.to_str().expect("test paths should be utf-8"))
+        cache_contains(&cache.previous, path)
     }
 
     #[cfg(windows)]
@@ -345,18 +563,22 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn utf8_cache_reuses_shared_string_for_key_and_value() {
+    fn utf8_cache_reuses_shared_string_for_entry_and_return_value() {
         let mut cache = PathDisplayCache::default();
         let path = PathBuf::from("src/lib.rs");
         let display = cached_path_display(&mut cache, &path);
 
-        let (cached_key, cached_value) = cache.recent.iter().next().unwrap();
-        let key_arc: Arc<str> = cached_key.clone().into();
-        let value_arc: Arc<str> = cached_value.clone().into();
+        let cached = cache
+            .recent
+            .values()
+            .next()
+            .and_then(|bucket| bucket.first())
+            .cloned()
+            .expect("cached recent label");
+        let cached_arc: Arc<str> = cached.into();
         let display_arc: Arc<str> = display.into();
 
-        assert!(Arc::ptr_eq(&key_arc, &value_arc));
-        assert!(Arc::ptr_eq(&value_arc, &display_arc));
+        assert!(Arc::ptr_eq(&cached_arc, &display_arc));
     }
 
     #[test]
@@ -436,6 +658,40 @@ mod tests {
         assert!(cache_contains_recent(&cache, &recent_hot));
         assert!(!cache_contains_recent(&cache, &overflow));
         assert!(!cache_contains_previous(&cache, &overflow));
+    }
+
+    #[test]
+    fn overflow_tail_misses_still_allow_cached_hits() {
+        bench_reset();
+
+        let mut cache = PathDisplayCache::default();
+        let previous_hot = PathBuf::from("src/previous_hot.rs");
+        let recent_hot = PathBuf::from("src/recent_hot.rs");
+
+        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
+            let path = if ix == 0 {
+                previous_hot.clone()
+            } else {
+                PathBuf::from(format!("src/previous_{ix}.rs"))
+            };
+            let _ = cached_path_display(&mut cache, &path);
+        }
+        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
+            let path = if ix == 0 {
+                recent_hot.clone()
+            } else {
+                PathBuf::from(format!("src/recent_{ix}.rs"))
+            };
+            let _ = cached_path_display(&mut cache, &path);
+        }
+
+        let _ = cached_path_display(&mut cache, Path::new("src/overflow_a.rs"));
+        let _ = cached_path_display(&mut cache, Path::new("src/overflow_b.rs"));
+
+        let display = cached_path_display(&mut cache, &recent_hot);
+        assert_eq!(display.as_ref(), recent_hot.to_str().unwrap_or_default());
+        assert!(cache_contains_recent(&cache, &recent_hot));
+        assert!(cache_contains_previous(&cache, &previous_hot));
     }
 
     #[test]

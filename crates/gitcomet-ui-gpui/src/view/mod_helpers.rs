@@ -276,6 +276,68 @@ pub(super) struct PaneResizeState {
     pub(super) start_x: Pixels,
     pub(super) start_sidebar: Pixels,
     pub(super) start_details: Pixels,
+    pub(super) bounds_total_w: Pixels,
+    pub(super) bounds_sidebar_collapsed: bool,
+    pub(super) bounds_details_collapsed: bool,
+    pub(super) min_width: Pixels,
+    pub(super) max_width: Pixels,
+}
+
+impl PaneResizeState {
+    #[inline]
+    pub(super) fn new(
+        handle: PaneResizeHandle,
+        start_x: Pixels,
+        start_sidebar: Pixels,
+        start_details: Pixels,
+        total_w: Pixels,
+        sidebar_collapsed: bool,
+        details_collapsed: bool,
+    ) -> Self {
+        let (min_width, max_width) = super::pane_resize_drag_width_bounds(
+            handle,
+            start_sidebar,
+            start_details,
+            total_w,
+            sidebar_collapsed,
+            details_collapsed,
+        );
+        Self {
+            handle,
+            start_x,
+            start_sidebar,
+            start_details,
+            bounds_total_w: total_w,
+            bounds_sidebar_collapsed: sidebar_collapsed,
+            bounds_details_collapsed: details_collapsed,
+            min_width,
+            max_width,
+        }
+    }
+
+    #[inline]
+    pub(super) fn drag_width_bounds(
+        &self,
+        total_w: Pixels,
+        sidebar_collapsed: bool,
+        details_collapsed: bool,
+    ) -> (Pixels, Pixels) {
+        if self.bounds_total_w == total_w
+            && self.bounds_sidebar_collapsed == sidebar_collapsed
+            && self.bounds_details_collapsed == details_collapsed
+        {
+            (self.min_width, self.max_width)
+        } else {
+            super::pane_resize_drag_width_bounds(
+                self.handle,
+                self.start_sidebar,
+                self.start_details,
+                total_w,
+                sidebar_collapsed,
+                details_collapsed,
+            )
+        }
+    }
 }
 
 pub(super) use ResizeDragGhost as PaneResizeDragGhost;
@@ -459,9 +521,11 @@ pub(super) struct StatusMultiSelection {
     pub(super) unstaged: Vec<std::path::PathBuf>,
     pub(super) unstaged_anchor: Option<std::path::PathBuf>,
     pub(super) unstaged_anchor_index: Option<usize>,
+    pub(super) unstaged_anchor_status_rev: Option<u64>,
     pub(super) staged: Vec<std::path::PathBuf>,
     pub(super) staged_anchor: Option<std::path::PathBuf>,
     pub(super) staged_anchor_index: Option<usize>,
+    pub(super) staged_anchor_status_rev: Option<u64>,
 }
 
 impl StatusMultiSelection {
@@ -536,6 +600,7 @@ pub(super) fn reconcile_status_multi_selection(
     {
         selection.unstaged_anchor = None;
         selection.unstaged_anchor_index = None;
+        selection.unstaged_anchor_status_rev = None;
     }
 
     let mut staged_paths: HashSet<&std::path::Path> =
@@ -554,6 +619,7 @@ pub(super) fn reconcile_status_multi_selection(
     {
         selection.staged_anchor = None;
         selection.staged_anchor_index = None;
+        selection.staged_anchor_status_rev = None;
     }
 }
 
@@ -789,6 +855,7 @@ impl Default for ConflictModeState {
 pub(super) struct ConflictResolverUiState {
     pub(super) repo_id: Option<RepoId>,
     pub(super) path: Option<std::path::PathBuf>,
+    pub(super) shared_path: Option<gitcomet_state::msg::RepoPath>,
     pub(super) loaded_file: Option<gitcomet_state::model::ConflictFile>,
     pub(super) conflict_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(super) source_hash: Option<u64>,
@@ -855,6 +922,7 @@ impl Default for ConflictResolverUiState {
         Self {
             repo_id: None,
             path: None,
+            shared_path: None,
             loaded_file: None,
             conflict_syntax_language: None,
             source_hash: None,
@@ -915,6 +983,10 @@ fn indexed_line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -
 impl ConflictResolverUiState {
     pub(super) fn matches_target(&self, repo_id: RepoId, path: &std::path::Path) -> bool {
         self.repo_id == Some(repo_id) && self.path.as_deref() == Some(path)
+    }
+
+    pub(super) fn dispatch_path(&self) -> Option<gitcomet_state::msg::RepoPath> {
+        self.shared_path.clone()
     }
 
     pub(super) fn cached_loaded_file_for_target(

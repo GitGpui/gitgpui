@@ -1,15 +1,20 @@
-use super::branch_sidebar::{BranchSidebarSourceFingerprint, BranchSidebarSourceFingerprintParts};
+use super::branch_sidebar::{
+    BranchSidebarSourceFingerprint, BranchSidebarSourceFingerprintParts,
+    branch_sidebar_source_matches_cached,
+};
 use super::*;
-use gitcomet_core::domain::{Branch, LogScope, RemoteBranch, Tag};
+use gitcomet_core::domain::{Branch, LogScope, RemoteBranch, StashEntry, Tag};
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::ops::Range;
+use std::rc::Rc;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug)]
 pub(super) struct HistoryCache {
     pub(super) request: HistoryCacheRequest,
-    pub(super) visible_indices: Vec<usize>,
+    pub(super) visible_indices: HistoryVisibleIndices,
     pub(super) graph_rows: Arc<[history_graph::GraphRow]>,
     pub(super) commit_row_vms: Vec<HistoryCommitRowVm>,
 }
@@ -28,6 +33,89 @@ pub(super) struct HistoryCacheRequest {
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) enum HistoryVisibleIndices {
+    All { len: usize },
+    Filtered(Vec<usize>),
+}
+
+pub(in crate::view) enum HistoryVisibleIndicesIter<'a> {
+    All(Range<usize>),
+    Filtered(std::iter::Copied<std::slice::Iter<'a, usize>>),
+}
+
+impl Iterator for HistoryVisibleIndicesIter<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::All(range) => range.next(),
+            Self::Filtered(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::All(range) => range.size_hint(),
+            Self::Filtered(iter) => iter.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for HistoryVisibleIndicesIter<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::All(range) => range.len(),
+            Self::Filtered(iter) => iter.len(),
+        }
+    }
+}
+
+impl HistoryVisibleIndices {
+    pub(in crate::view) const fn all(len: usize) -> Self {
+        Self::All { len }
+    }
+
+    pub(in crate::view) fn len(&self) -> usize {
+        match self {
+            Self::All { len } => *len,
+            Self::Filtered(indices) => indices.len(),
+        }
+    }
+
+    pub(in crate::view) fn first(&self) -> Option<usize> {
+        match self {
+            Self::All { len } => (*len > 0).then_some(0),
+            Self::Filtered(indices) => indices.first().copied(),
+        }
+    }
+
+    pub(in crate::view) fn get(&self, visible_ix: usize) -> Option<usize> {
+        match self {
+            Self::All { len } => (visible_ix < *len).then_some(visible_ix),
+            Self::Filtered(indices) => indices.get(visible_ix).copied(),
+        }
+    }
+
+    pub(in crate::view) fn iter(&self) -> HistoryVisibleIndicesIter<'_> {
+        match self {
+            Self::All { len } => HistoryVisibleIndicesIter::All(0..*len),
+            Self::Filtered(indices) => HistoryVisibleIndicesIter::Filtered(indices.iter().copied()),
+        }
+    }
+}
+
+pub(in crate::view) struct HistoryStashAnalysis<'a> {
+    pub(in crate::view) stash_tips: Vec<HistoryStashTip<'a>>,
+    pub(in crate::view) stash_helper_ids: HashSet<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct HistoryStashTip<'a> {
+    pub(in crate::view) commit_ix: usize,
+    pub(in crate::view) message: Option<&'a Arc<str>>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +201,115 @@ pub(super) struct HistoryCommitRowVm {
     pub(super) is_stash: bool,
 }
 
+#[inline]
+pub(in crate::view) fn history_commit_is_probable_stash_tip(commit: &Commit) -> bool {
+    if !(2..=3).contains(&commit.parent_ids.len()) {
+        return false;
+    }
+    let summary: &str = &commit.summary;
+    (summary.starts_with("WIP on ") || summary.starts_with("On ")) && summary.contains(": ")
+}
+
+pub(in crate::view) fn analyze_history_stashes<'a>(
+    commits: &'a [Commit],
+    stashes: &'a [StashEntry],
+) -> HistoryStashAnalysis<'a> {
+    if stashes.is_empty() {
+        let mut stash_tips: Vec<HistoryStashTip<'_>> = Vec::new();
+        let mut stash_helper_ids: HashSet<&str> = HashSet::default();
+        for (commit_ix, commit) in commits.iter().enumerate() {
+            if !history_commit_is_probable_stash_tip(commit) {
+                continue;
+            }
+            if stash_tips.is_empty() {
+                stash_tips.reserve(4);
+                stash_helper_ids.reserve(4);
+            }
+            stash_tips.push(HistoryStashTip {
+                commit_ix,
+                message: None,
+            });
+            for parent_id in commit.parent_ids.iter().skip(1).map(|p| p.as_ref()) {
+                stash_helper_ids.insert(parent_id);
+            }
+        }
+
+        return HistoryStashAnalysis {
+            stash_tips,
+            stash_helper_ids,
+        };
+    }
+
+    let mut listed_stash_messages_by_id: HashMap<&str, Option<&Arc<str>>> =
+        HashMap::with_capacity_and_hasher(stashes.len(), Default::default());
+    for stash in stashes.iter() {
+        listed_stash_messages_by_id.insert(
+            stash.id.as_ref(),
+            (!stash.message.trim().is_empty()).then_some(&stash.message),
+        );
+    }
+
+    let mut stash_tips: Vec<HistoryStashTip<'_>> = Vec::with_capacity(stashes.len());
+    let mut stash_helper_ids: HashSet<&str> =
+        HashSet::with_capacity_and_hasher(stashes.len().max(4), Default::default());
+    for (commit_ix, commit) in commits.iter().enumerate() {
+        let commit_id = commit.id.as_ref();
+        let is_probable_stash = history_commit_is_probable_stash_tip(commit);
+        let listed_stash_message = listed_stash_messages_by_id.get(commit_id).copied();
+        let listed_stash_tip = listed_stash_message.is_some();
+        if listed_stash_tip || is_probable_stash {
+            stash_tips.push(HistoryStashTip {
+                commit_ix,
+                message: listed_stash_message.flatten(),
+            });
+        }
+
+        if listed_stash_tip {
+            for parent_id in commit.parent_ids.iter().skip(1).map(|p| p.as_ref()) {
+                stash_helper_ids.insert(parent_id);
+            }
+        }
+    }
+
+    HistoryStashAnalysis {
+        stash_tips,
+        stash_helper_ids,
+    }
+}
+
+pub(in crate::view) fn build_history_visible_indices(
+    commits: &[Commit],
+    stash_helper_ids: &HashSet<&str>,
+) -> HistoryVisibleIndices {
+    if stash_helper_ids.is_empty() {
+        return HistoryVisibleIndices::all(commits.len());
+    }
+
+    let mut visible_indices =
+        Vec::with_capacity(commits.len().saturating_sub(stash_helper_ids.len()));
+    for (ix, commit) in commits.iter().enumerate() {
+        if stash_helper_ids.contains(commit.id.as_ref()) {
+            continue;
+        }
+        visible_indices.push(ix);
+    }
+    HistoryVisibleIndices::Filtered(visible_indices)
+}
+
+#[inline]
+pub(in crate::view) fn next_history_stash_tip_for_commit_ix<'a>(
+    stash_tips: &[HistoryStashTip<'a>],
+    next_stash_tip_ix: &mut usize,
+    commit_ix: usize,
+) -> Option<HistoryStashTip<'a>> {
+    let stash_tip = stash_tips.get(*next_stash_tip_ix).copied()?;
+    if stash_tip.commit_ix != commit_ix {
+        return None;
+    }
+    *next_stash_tip_ix += 1;
+    Some(stash_tip)
+}
+
 type HistoryBranchNameBucket<'a> = SmallVec<[HistoryBranchNameRef<'a>; 2]>;
 type HistoryTagNameBucket<'a> = SmallVec<[&'a str; 1]>;
 
@@ -159,6 +356,19 @@ impl<'a> HistoryBranchNameRef<'a> {
             }
         }
     }
+
+    fn to_shared_string(self) -> SharedString {
+        match self {
+            Self::Plain(name) => SharedString::new(name),
+            Self::Remote { remote, name } => {
+                let mut text = String::with_capacity(remote.len() + 1 + name.len());
+                text.push_str(remote);
+                text.push('/');
+                text.push_str(name);
+                SharedString::from(text)
+            }
+        }
+    }
 }
 
 fn cmp_history_branch_display(
@@ -202,11 +412,20 @@ fn cmp_history_branch_display(
 }
 
 fn sort_and_dedup_history_branch_names(names: &mut HistoryBranchNameBucket<'_>) {
+    if names.len() < 2 {
+        return;
+    }
     names.sort_unstable_by(|left, right| cmp_history_branch_display(*left, *right));
     names.dedup_by(|left, right| cmp_history_branch_display(*left, *right) == Ordering::Equal);
 }
 
 fn shared_history_branch_text(names: &[HistoryBranchNameRef<'_>]) -> SharedString {
+    match names {
+        [] => return SharedString::default(),
+        [name] => return name.to_shared_string(),
+        _ => {}
+    }
+
     let total_len = names
         .iter()
         .copied()
@@ -227,6 +446,10 @@ fn shared_history_branch_text_with_extra_plain(
     names: &[HistoryBranchNameRef<'_>],
     extra_plain: &str,
 ) -> SharedString {
+    if names.is_empty() {
+        return SharedString::new(extra_plain);
+    }
+
     let extra = HistoryBranchNameRef::Plain(extra_plain);
     let include_extra = names
         .iter()
@@ -342,11 +565,16 @@ pub(in crate::view) fn build_history_tag_names_by_target(
     let mut tag_text_by_target: HashMap<&str, Arc<[SharedString]>> =
         HashMap::with_capacity_and_hasher(tag_names_by_target.len(), Default::default());
     for (target, mut names) in tag_names_by_target {
-        names.sort_unstable();
-        names.dedup();
         if names.is_empty() {
             continue;
         }
+        if names.len() == 1 {
+            let tag_names: Vec<SharedString> = vec![SharedString::new(names[0])];
+            tag_text_by_target.insert(target, tag_names.into());
+            continue;
+        }
+        names.sort_unstable();
+        names.dedup();
         let tag_names: Vec<SharedString> = names.into_iter().map(SharedString::new).collect();
         tag_text_by_target.insert(target, tag_names.into());
     }
@@ -382,19 +610,19 @@ pub(super) struct BranchSidebarCache {
     pub(super) fingerprint: BranchSidebarFingerprint,
     pub(super) source_fingerprint: BranchSidebarSourceFingerprint,
     pub(super) source_parts: BranchSidebarSourceFingerprintParts,
-    pub(super) rows: Arc<[BranchSidebarRow]>,
+    pub(super) rows: Rc<[BranchSidebarRow]>,
 }
 
 pub(super) fn branch_sidebar_cache_lookup(
     cache: &mut Option<BranchSidebarCache>,
     repo_id: RepoId,
     fingerprint: BranchSidebarFingerprint,
-) -> Option<Arc<[BranchSidebarRow]>> {
+) -> Option<Rc<[BranchSidebarRow]>> {
     if let Some(cached) = cache.as_mut()
         && cached.repo_id == repo_id
         && cached.fingerprint == fingerprint
     {
-        return Some(Arc::clone(&cached.rows));
+        return Some(Rc::clone(&cached.rows));
     }
 
     None
@@ -406,7 +634,7 @@ pub(super) fn branch_sidebar_cache_lookup_by_source(
     fingerprint: BranchSidebarFingerprint,
     source_fingerprint: BranchSidebarSourceFingerprint,
     source_parts: &BranchSidebarSourceFingerprintParts,
-) -> Option<Arc<[BranchSidebarRow]>> {
+) -> Option<Rc<[BranchSidebarRow]>> {
     if let Some(cached) = cache.as_mut()
         && cached.repo_id == repo_id
         && cached.source_fingerprint == source_fingerprint
@@ -414,7 +642,24 @@ pub(super) fn branch_sidebar_cache_lookup_by_source(
         cached.fingerprint = fingerprint;
         cached.source_fingerprint = source_fingerprint;
         cached.source_parts = source_parts.clone();
-        return Some(Arc::clone(&cached.rows));
+        return Some(Rc::clone(&cached.rows));
+    }
+
+    None
+}
+
+#[inline]
+pub(super) fn branch_sidebar_cache_lookup_by_cached_source(
+    cache: &mut Option<BranchSidebarCache>,
+    repo: &RepoState,
+    fingerprint: BranchSidebarFingerprint,
+) -> Option<Rc<[BranchSidebarRow]>> {
+    if let Some(cached) = cache.as_mut()
+        && cached.repo_id == repo.id
+        && branch_sidebar_source_matches_cached(repo, &cached.source_parts)
+    {
+        cached.fingerprint = fingerprint;
+        return Some(Rc::clone(&cached.rows));
     }
 
     None
@@ -426,7 +671,7 @@ pub(super) fn branch_sidebar_cache_store(
     fingerprint: BranchSidebarFingerprint,
     source_fingerprint: BranchSidebarSourceFingerprint,
     source_parts: BranchSidebarSourceFingerprintParts,
-    rows: Arc<[BranchSidebarRow]>,
+    rows: Rc<[BranchSidebarRow]>,
 ) {
     *cache = Some(BranchSidebarCache {
         repo_id,
@@ -475,10 +720,20 @@ impl GitCometView {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::time::SystemTime;
 
     fn commit_id(id: &str) -> CommitId {
         CommitId(id.into())
+    }
+
+    fn commit(id: &str, parents: &[&str], summary: &str) -> Commit {
+        Commit {
+            id: commit_id(id),
+            parent_ids: parents.iter().map(|parent| commit_id(parent)).collect(),
+            summary: summary.into(),
+            author: "author".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }
     }
 
     #[test]
@@ -628,6 +883,49 @@ mod tests {
     }
 
     #[test]
+    fn history_stash_analysis_ignores_stash_ids_absent_from_log() {
+        let commits = vec![
+            commit("a", &[], "Commit A"),
+            commit("b", &["a"], "Commit B"),
+        ];
+        let stashes = vec![StashEntry {
+            index: 0,
+            id: commit_id("z"),
+            message: "On main: hidden stash".into(),
+            created_at: None,
+        }];
+
+        let analysis = analyze_history_stashes(&commits, &stashes);
+
+        assert!(analysis.stash_tips.is_empty());
+        assert!(analysis.stash_helper_ids.is_empty());
+    }
+
+    #[test]
+    fn history_stash_analysis_keeps_matching_tip_message_and_helper() {
+        let commits = vec![
+            commit("base", &[], "Commit base"),
+            commit("helper", &["base"], "index on main: helper"),
+            commit("tip", &["base", "helper"], "WIP on main: fallback"),
+        ];
+        let stashes = vec![StashEntry {
+            index: 0,
+            id: commit_id("tip"),
+            message: "On main: listed stash".into(),
+            created_at: None,
+        }];
+
+        let analysis = analyze_history_stashes(&commits, &stashes);
+
+        assert_eq!(analysis.stash_tips.len(), 1);
+        assert_eq!(analysis.stash_tips[0].commit_ix, 2);
+        assert_eq!(
+            analysis.stash_tips[0].message.map(AsRef::as_ref),
+            Some("On main: listed stash")
+        );
+        assert!(analysis.stash_helper_ids.contains("helper"));
+    }
+
     fn history_when_vm_formats_lazily_and_caches_result() {
         let request = HistoryCacheRequest {
             repo_id: RepoId(1),
@@ -717,7 +1015,7 @@ mod tests {
         );
         let (source_fingerprint, source_parts) =
             branch_sidebar::branch_sidebar_source_fingerprint(&repo, None);
-        let rows: Arc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
+        let rows: Rc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
         let mut cache = None;
 
         branch_sidebar_cache_store(
@@ -726,7 +1024,7 @@ mod tests {
             BranchSidebarFingerprint { cache_rev: 1 },
             source_fingerprint,
             source_parts.clone(),
-            Arc::clone(&rows),
+            Rc::clone(&rows),
         );
 
         let hit = branch_sidebar_cache_lookup_by_source(
@@ -738,7 +1036,7 @@ mod tests {
         )
         .expect("matching source fingerprints should reuse cached rows");
 
-        assert!(Arc::ptr_eq(&hit, &rows));
+        assert!(Rc::ptr_eq(&hit, &rows));
         let cached = cache
             .as_ref()
             .expect("branch sidebar cache should stay populated");
@@ -751,6 +1049,47 @@ mod tests {
     }
 
     #[test]
+    fn branch_sidebar_cache_lookup_by_cached_source_reuses_rows_when_revs_bump() {
+        let mut repo = RepoState::new_opening(
+            RepoId(7),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        let (source_fingerprint, source_parts) =
+            branch_sidebar::branch_sidebar_source_fingerprint(&repo, None);
+        let rows: Rc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
+        let mut cache = None;
+
+        branch_sidebar_cache_store(
+            &mut cache,
+            repo.id,
+            BranchSidebarFingerprint { cache_rev: 1 },
+            source_fingerprint,
+            source_parts,
+            Rc::clone(&rows),
+        );
+
+        repo.branches_rev = repo.branches_rev.wrapping_add(1);
+
+        let hit = branch_sidebar_cache_lookup_by_cached_source(
+            &mut cache,
+            &repo,
+            BranchSidebarFingerprint { cache_rev: 2 },
+        )
+        .expect("unchanged source snapshots should reuse cached rows");
+
+        assert!(Rc::ptr_eq(&hit, &rows));
+        let cached = cache
+            .as_ref()
+            .expect("branch sidebar cache should stay populated");
+        assert_eq!(
+            cached.fingerprint,
+            BranchSidebarFingerprint { cache_rev: 2 }
+        );
+    }
+
+    #[test]
     fn branch_sidebar_cache_lookup_by_source_rejects_repo_and_source_mismatches() {
         let repo = RepoState::new_opening(
             RepoId(7),
@@ -760,7 +1099,7 @@ mod tests {
         );
         let (source_fingerprint, source_parts) =
             branch_sidebar::branch_sidebar_source_fingerprint(&repo, None);
-        let rows: Arc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
+        let rows: Rc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
         let mut cache = None;
 
         branch_sidebar_cache_store(

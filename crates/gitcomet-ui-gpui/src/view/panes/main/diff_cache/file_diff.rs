@@ -16,7 +16,7 @@ pub(super) fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
     SharedString::from(text)
 }
 
-fn prefixed_inline_text(prefix: char, line: &str) -> Arc<str> {
+fn prefixed_inline_text(prefix: char, line: &str) -> gitcomet_core::domain::SharedLineText {
     let mut text = String::with_capacity(line.len().saturating_add(1));
     text.push(prefix);
     text.push_str(line);
@@ -1085,19 +1085,19 @@ mod tests {
         let rows = vec![
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Header,
-                text: Arc::from("diff --git a/file b/file"),
+                text: "diff --git a/file b/file".into(),
                 old_line: None,
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-old"),
+                text: "-old".into(),
                 old_line: Some(1),
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Add,
-                text: Arc::from("+new"),
+                text: "+new".into(),
                 old_line: None,
                 new_line: Some(1),
             },

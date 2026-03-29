@@ -94,6 +94,30 @@ fn shared_nonempty_marker_parse_skips_clean_text() {
 }
 
 #[test]
+fn bootstrap_resolved_output_text_reuses_clean_current_arc() {
+    let current: std::sync::Arc<str> = std::sync::Arc::from("pre\nplain html\npost\n");
+    let output = bootstrap_resolved_output_text(&[], Some(&current), None, None);
+
+    let ResolvedOutputText::Shared(shared) = &output else {
+        panic!("clean bootstrap should reuse the shared current text");
+    };
+
+    assert!(std::sync::Arc::ptr_eq(&current, shared));
+    assert_eq!(output.line_count(), 3);
+}
+
+#[test]
+fn bootstrap_resolved_output_text_materializes_conflicted_output() {
+    let segments =
+        parse_conflict_markers("a\n<<<<<<< ours\none\n=======\nuno\n>>>>>>> theirs\nb\n");
+    let output = bootstrap_resolved_output_text(&segments, None, None, None);
+
+    assert!(matches!(output, ResolvedOutputText::Owned(_)));
+    assert_eq!(output.as_str(), "a\none\nb\n");
+    assert_eq!(output.line_count(), 3);
+}
+
+#[test]
 fn generate_with_options_preserves_unresolved_markers_with_labels() {
     let input = "a\n<<<<<<< ours\none\n||||||| base\norig\n=======\nuno\n>>>>>>> theirs\nb\n";
     let segments = parse_conflict_markers(input);

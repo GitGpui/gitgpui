@@ -310,16 +310,16 @@ const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         threshold_ns: 1.0 * NANOS_PER_MILLISECOND,
     },
     // status_select_diff_open/unstaged — reducer dispatch cost for selecting
-    // an unstaged status row to open its diff. Includes a linear conflict-check
-    // scan over all 10k unstaged entries (~326 µs measured). Budget generous to
-    // allow shared-runner noise.
+    // an unstaged status row to open its diff. The hot non-conflict path now
+    // stores the selected target once and emits one pathless selected-diff
+    // intent, so this stays well below 1 µs with wide runner-noise headroom.
     PerfBudgetSpec {
         label: "status_select_diff_open/unstaged",
         estimate_path: "status_select_diff_open/unstaged/new/estimates.json",
         threshold_ns: 1.0 * NANOS_PER_MILLISECOND,
     },
-    // status_select_diff_open/staged — staged path skips the conflict-entry scan,
-    // so the dispatch is pure state mutation + effect allocation (~208 ns measured).
+    // status_select_diff_open/staged — staged path shares the same pathless
+    // selected-diff intent and avoids the unstaged conflict probe entirely.
     PerfBudgetSpec {
         label: "status_select_diff_open/staged",
         estimate_path: "status_select_diff_open/staged/new/estimates.json",
@@ -2245,7 +2245,7 @@ const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "status_select_diff_open/unstaged",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 2.0,
+        threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "status_select_diff_open/unstaged",
@@ -2269,7 +2269,7 @@ const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "status_select_diff_open/staged",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 2.0,
+        threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "status_select_diff_open/staged",
@@ -5736,8 +5736,10 @@ const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
     // --- text_input_wrap_incremental_burst_edits structural budgets ---
     // Defaults: 20,000 tabbed lines, 128-byte minimum => 131-byte generated
     // lines, 720 px wrap => 92 columns, 12 edits per burst. Each burst scatters
-    // 12 edits across well-spaced lines (stride 17); each edit invalidates ~2
-    // dirty lines. Full recompute recomputes all 20,000 lines per edit.
+    // 12 edits across well-spaced lines (stride 17); the burst fixture now
+    // mirrors live TextInput dirty invalidation by rescanning only the edited
+    // line for each single-line mutation. Full recompute still recomputes all
+    // 20,000 lines per edit.
     // These sidecars follow the Criterion bench ids with the default `/12`
     // burst-size segment, so structural lookups must match that emitted path.
     StructuralBudgetSpec {
@@ -5762,7 +5764,7 @@ const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "text_input_wrap_incremental_burst_edits/full_recompute/12",
         metric: "total_dirty_lines",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 24.0,
+        threshold: 12.0,
     },
     StructuralBudgetSpec {
         bench: "text_input_wrap_incremental_burst_edits/full_recompute/12",
@@ -5804,7 +5806,7 @@ const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "text_input_wrap_incremental_burst_edits/incremental_patch/12",
         metric: "total_dirty_lines",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 24.0,
+        threshold: 12.0,
     },
     StructuralBudgetSpec {
         bench: "text_input_wrap_incremental_burst_edits/incremental_patch/12",
@@ -5816,7 +5818,7 @@ const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "text_input_wrap_incremental_burst_edits/incremental_patch/12",
         metric: "recomputed_lines",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 24.0,
+        threshold: 12.0,
     },
     StructuralBudgetSpec {
         bench: "text_input_wrap_incremental_burst_edits/incremental_patch/12",
