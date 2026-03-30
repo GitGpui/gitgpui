@@ -52,7 +52,7 @@ notify = "9.0.0-rc.2"
 raw-window-handle = "0.6"
 regex = "1.12.3"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
-rustc-hash = "2.1.1"
+rustc-hash = "2.1.2"
 semver = "1.0.27"
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
