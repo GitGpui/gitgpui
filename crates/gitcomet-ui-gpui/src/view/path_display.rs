@@ -2,6 +2,26 @@ use gpui::SharedString;
 use rustc_hash::FxHashMap as HashMap;
 use std::path::{Path, PathBuf};
 
+pub(in crate::view) type PathDisplayCache = HashMap<PathBuf, SharedString>;
+
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct PathDisplayBenchCounters {
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_clears: u64,
+}
+
+#[cfg(feature = "benchmarks")]
+thread_local! {
+    static PATH_DISPLAY_BENCH_COUNTERS: std::cell::Cell<PathDisplayBenchCounters> =
+        const { std::cell::Cell::new(PathDisplayBenchCounters {
+            cache_hits: 0,
+            cache_misses: 0,
+            cache_clears: 0,
+        }) };
+}
+
 pub(super) fn path_display_string(path: &Path) -> String {
     format_windows_path_for_display(path.display().to_string())
 }
@@ -17,13 +37,41 @@ pub(super) fn cached_path_display(
     const MAX_ENTRIES: usize = 8_192;
     if cache.len() > MAX_ENTRIES {
         cache.clear();
+        #[cfg(feature = "benchmarks")]
+        PATH_DISPLAY_BENCH_COUNTERS.with(|counters| {
+            let mut snapshot = counters.get();
+            snapshot.cache_clears = snapshot.cache_clears.saturating_add(1);
+            counters.set(snapshot);
+        });
     }
     if let Some(s) = cache.get(path) {
+        #[cfg(feature = "benchmarks")]
+        PATH_DISPLAY_BENCH_COUNTERS.with(|counters| {
+            let mut snapshot = counters.get();
+            snapshot.cache_hits = snapshot.cache_hits.saturating_add(1);
+            counters.set(snapshot);
+        });
         return s.clone();
     }
     let s = path_display_shared(path);
     cache.insert(path.clone(), s.clone());
+    #[cfg(feature = "benchmarks")]
+    PATH_DISPLAY_BENCH_COUNTERS.with(|counters| {
+        let mut snapshot = counters.get();
+        snapshot.cache_misses = snapshot.cache_misses.saturating_add(1);
+        counters.set(snapshot);
+    });
     s
+}
+
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) fn bench_reset() {
+    PATH_DISPLAY_BENCH_COUNTERS.with(|counters| counters.set(PathDisplayBenchCounters::default()));
+}
+
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) fn bench_snapshot() -> PathDisplayBenchCounters {
+    PATH_DISPLAY_BENCH_COUNTERS.with(std::cell::Cell::get)
 }
 
 #[cfg(windows)]

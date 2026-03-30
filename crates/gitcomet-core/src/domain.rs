@@ -219,6 +219,22 @@ pub struct FileDiffText {
     pub new: Option<String>,
 }
 
+impl FileDiffText {
+    pub fn new(path: PathBuf, old: Option<String>, new: Option<String>) -> Self {
+        Self { path, old, new }
+    }
+
+    pub fn content_signature(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = rustc_hash::FxHasher::default();
+        self.path.hash(&mut hasher);
+        self.old.hash(&mut hasher);
+        self.new.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffImage {
     pub path: PathBuf,

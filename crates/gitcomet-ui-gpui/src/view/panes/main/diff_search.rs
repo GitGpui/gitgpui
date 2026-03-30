@@ -1,5 +1,54 @@
 use super::*;
 
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct AsciiCaseInsensitiveNeedle<'a> {
+    needle: &'a [u8],
+}
+
+#[cfg(feature = "benchmarks")]
+impl<'a> AsciiCaseInsensitiveNeedle<'a> {
+    pub(in crate::view) fn new(needle: &'a str) -> Option<Self> {
+        let needle = needle.trim();
+        (!needle.is_empty()).then_some(Self {
+            needle: needle.as_bytes(),
+        })
+    }
+
+    pub(in crate::view) fn is_match(self, haystack: &str) -> bool {
+        contains_ascii_case_insensitive_bytes(haystack.as_bytes(), self.needle)
+    }
+}
+
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum DiffSearchQueryReuse {
+    SameSemantics,
+    Refinement,
+    None,
+}
+
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) fn diff_search_query_reuse(
+    previous_query: &str,
+    current_query: &str,
+) -> DiffSearchQueryReuse {
+    let previous = previous_query.trim();
+    let current = current_query.trim();
+    if previous.eq_ignore_ascii_case(current) {
+        return DiffSearchQueryReuse::SameSemantics;
+    }
+    if !previous.is_empty()
+        && current.len() >= previous.len()
+        && current
+            .get(..previous.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(previous))
+    {
+        return DiffSearchQueryReuse::Refinement;
+    }
+    DiffSearchQueryReuse::None
+}
+
 impl MainPaneView {
     pub(in crate::view) fn active_conflict_target(
         &self,
@@ -174,8 +223,10 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
         return true;
     }
 
-    let haystack_bytes = haystack.as_bytes();
-    let needle_bytes = needle.as_bytes();
+    contains_ascii_case_insensitive_bytes(haystack.as_bytes(), needle.as_bytes())
+}
+
+fn contains_ascii_case_insensitive_bytes(haystack_bytes: &[u8], needle_bytes: &[u8]) -> bool {
     if needle_bytes.len() > haystack_bytes.len() {
         return false;
     }

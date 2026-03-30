@@ -38,6 +38,10 @@ pub struct Radii {
 }
 
 impl AppTheme {
+    pub fn gitcomet_dark() -> Self {
+        Self::zed_ayu_dark()
+    }
+
     pub fn default_for_window_appearance(appearance: WindowAppearance) -> Self {
         match appearance {
             WindowAppearance::Light | WindowAppearance::VibrantLight => Self::zed_one_light(),

@@ -34,6 +34,8 @@ pub struct FileDiffRow {
     pub eof_newline: Option<FileDiffEofNewline>,
 }
 
+pub type FileDiffLineText = Arc<str>;
+
 /// Stable anchor metadata for a rendered side-by-side diff row.
 ///
 /// `region_id`/`ordinal_in_region` are only populated for non-context rows.

@@ -278,6 +278,41 @@ pub(super) struct PaneResizeState {
     pub(super) start_details: Pixels,
 }
 
+impl PaneResizeState {
+    pub(super) fn new(
+        handle: PaneResizeHandle,
+        start_x: Pixels,
+        start_sidebar: Pixels,
+        start_details: Pixels,
+        _total_w: Pixels,
+        _sidebar_collapsed: bool,
+        _details_collapsed: bool,
+    ) -> Self {
+        Self {
+            handle,
+            start_x,
+            start_sidebar,
+            start_details,
+        }
+    }
+
+    pub(super) fn drag_width_bounds(
+        &self,
+        total_w: Pixels,
+        sidebar_collapsed: bool,
+        details_collapsed: bool,
+    ) -> (Pixels, Pixels) {
+        pane_resize_drag_width_bounds(
+            self.handle,
+            self.start_sidebar,
+            self.start_details,
+            total_w,
+            sidebar_collapsed,
+            details_collapsed,
+        )
+    }
+}
+
 pub(super) use ResizeDragGhost as PaneResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2385,6 +2420,10 @@ pub(super) enum ThemeMode {
 }
 
 impl ThemeMode {
+    pub(super) const fn is_automatic(self) -> bool {
+        matches!(self, Self::Automatic)
+    }
+
     pub(super) const fn key(self) -> &'static str {
         match self {
             Self::Automatic => "automatic",

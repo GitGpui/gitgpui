@@ -698,6 +698,25 @@ impl ConflictSplitRowIndex {
         out
     }
 
+    #[cfg(feature = "benchmarks")]
+    pub fn search_text_matching_rows(
+        &self,
+        segments: &[ConflictSegment],
+        needle: &[u8],
+    ) -> Vec<usize> {
+        self.search_matching_rows(segments, |text| {
+            if needle.is_empty() || needle.len() > text.len() {
+                return false;
+            }
+            text.as_bytes().windows(needle.len()).any(|window| {
+                window
+                    .iter()
+                    .zip(needle.iter())
+                    .all(|(left, right)| left.eq_ignore_ascii_case(right))
+            })
+        })
+    }
+
     /// Find the source-row indices that contain the widest visible text for the
     /// left (ours) and right (theirs) sides of the split view.
     ///

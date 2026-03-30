@@ -169,7 +169,9 @@ fn render_image_from_bgra8(buffer: image::RgbaImage) -> Arc<gpui::RenderImage> {
     Arc::new(gpui::RenderImage::new(vec![image::Frame::new(buffer)]))
 }
 
-fn render_svg_image_diff_preview(svg_bytes: &[u8]) -> Option<Arc<gpui::RenderImage>> {
+pub(in crate::view) fn render_svg_image_diff_preview(
+    svg_bytes: &[u8],
+) -> Option<Arc<gpui::RenderImage>> {
     let tree = resvg::usvg::Tree::from_data(svg_bytes, &resvg::usvg::Options::default()).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();

@@ -3,6 +3,8 @@ mod text_input;
 pub(crate) mod text_model;
 
 pub use scrollbar::{Scrollbar, ScrollbarAxis, ScrollbarMarker, ScrollbarMarkerKind};
+#[cfg(feature = "benchmarks")]
+pub(crate) use scrollbar::{compute_vertical_click_offset, vertical_thumb_metrics};
 pub use text_input::{
     Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, Down, End, Enter,
     HighlightProvider, HighlightProviderResult, Home, Left, PageDown, PageUp, Paste, Redo, Right,
@@ -13,7 +15,8 @@ pub use text_input::{
 #[cfg(feature = "benchmarks")]
 pub(crate) use text_input::{
     benchmark_text_input_runs_legacy_visible_window,
-    benchmark_text_input_runs_streamed_visible_window,
+    benchmark_text_input_runs_streamed_visible_window, benchmark_text_input_shaping_slice,
+    benchmark_text_input_wrap_rows_for_line,
 };
 
 #[cfg(target_os = "macos")]

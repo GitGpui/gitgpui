@@ -155,9 +155,17 @@ impl PagedPatchDiffRows {
         page.get(row_ix).cloned()
     }
 
-    #[cfg(test)]
-    fn cached_page_count(&self) -> usize {
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn cached_page_count(&self) -> usize {
         self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn materialized_row_count(&self) -> usize {
+        self.pages
+            .lock()
+            .map(|pages| pages.values().map(|page| page.len()).sum())
+            .unwrap_or(0)
     }
 }
 
@@ -214,6 +222,18 @@ pub(in crate::view) struct PagedPatchSplitRows {
 impl PagedPatchSplitRows {
     pub(in crate::view) fn new(source: Arc<PagedPatchDiffRows>) -> Self {
         let len_hint = Self::count_rows(source.diff.lines.as_slice());
+        Self {
+            source,
+            len_hint,
+            state: std::sync::Mutex::new(PatchSplitMaterializationState::default()),
+        }
+    }
+
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn new_with_len_hint(
+        source: Arc<PagedPatchDiffRows>,
+        len_hint: usize,
+    ) -> Self {
         Self {
             source,
             len_hint,
@@ -419,8 +439,8 @@ impl PagedPatchSplitRows {
             .and_then(|state| state.rows.get(ix).cloned())
     }
 
-    #[cfg(test)]
-    fn materialized_row_count(&self) -> usize {
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn materialized_row_count(&self) -> usize {
         self.state.lock().map(|state| state.rows.len()).unwrap_or(0)
     }
 }

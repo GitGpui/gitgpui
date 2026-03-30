@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const LOCAL_SECTION_KEY: &str = "section:branches/local";
 const REMOTE_SECTION_KEY: &str = "section:branches/remote";

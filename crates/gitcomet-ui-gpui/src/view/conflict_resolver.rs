@@ -254,6 +254,81 @@ pub enum ResolvedLineSource {
     Manual,
 }
 
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Debug, Default)]
+pub struct ResolvedOutputText {
+    text: String,
+    line_count: usize,
+}
+
+#[cfg(feature = "benchmarks")]
+impl ResolvedOutputText {
+    pub fn as_str(&self) -> &str {
+        self.text.as_str()
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.line_count
+    }
+}
+
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedOutputGutterRow {
+    source: ResolvedLineSource,
+    marker_conflict_ix: Option<usize>,
+    is_start: bool,
+    is_end: bool,
+    unresolved: bool,
+}
+
+#[cfg(feature = "benchmarks")]
+impl ResolvedOutputGutterRow {
+    pub fn new(
+        source: ResolvedLineSource,
+        marker_conflict_ix: Option<usize>,
+        is_start: bool,
+        is_end: bool,
+        unresolved: bool,
+    ) -> Self {
+        Self {
+            source,
+            marker_conflict_ix,
+            is_start,
+            is_end,
+            unresolved,
+        }
+    }
+
+    pub fn source(self) -> ResolvedLineSource {
+        self.source
+    }
+
+    pub fn badge_char(self) -> char {
+        self.source.badge_char()
+    }
+
+    pub fn manual_without_marker(self) -> bool {
+        self.source == ResolvedLineSource::Manual && self.marker_conflict_ix.is_none()
+    }
+
+    pub fn marker_conflict_ix(self) -> Option<usize> {
+        self.marker_conflict_ix
+    }
+
+    pub fn is_start(self) -> bool {
+        self.is_start
+    }
+
+    pub fn is_end(self) -> bool {
+        self.is_end
+    }
+
+    pub fn unresolved(self) -> bool {
+        self.unresolved
+    }
+}
+
 impl ResolvedLineSource {
     /// Compact single-character label for UI badges.
     pub fn badge_char(self) -> char {
@@ -434,6 +509,11 @@ pub fn parse_conflict_markers_shared(text: Arc<str>) -> Vec<ConflictSegment> {
             }
         })
         .collect()
+}
+
+#[cfg(feature = "benchmarks")]
+pub fn parse_conflict_markers_shared_nonempty(text: Arc<str>) -> Vec<ConflictSegment> {
+    parse_conflict_markers_shared(text)
 }
 
 fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: impl Into<ConflictText>) {
@@ -3122,6 +3202,80 @@ pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ance
                 block.base = Some(ancestor_text[prev_end..next_start].to_string().into());
             }
         }
+    }
+}
+
+#[cfg(feature = "benchmarks")]
+pub fn populate_block_bases_from_shared_ancestor(
+    segments: &mut [ConflictSegment],
+    ancestor_text: Arc<str>,
+) {
+    populate_block_bases_from_ancestor(segments, ancestor_text.as_ref())
+}
+
+#[cfg(feature = "benchmarks")]
+pub fn bootstrap_resolved_output_text(
+    segments: &[ConflictSegment],
+    current_text: Option<&Arc<str>>,
+    ours_text: Option<&Arc<str>>,
+    theirs_text: Option<&Arc<str>>,
+) -> ResolvedOutputText {
+    let text = if segments.is_empty() {
+        current_text
+            .map(|text| text.as_ref().to_string())
+            .or_else(|| ours_text.map(|text| text.as_ref().to_string()))
+            .or_else(|| theirs_text.map(|text| text.as_ref().to_string()))
+            .unwrap_or_default()
+    } else {
+        generate_resolved_text(segments)
+    };
+    let line_count = if text.is_empty() {
+        0
+    } else {
+        split_output_lines_for_outline(&text).len()
+    };
+    ResolvedOutputText { text, line_count }
+}
+
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Debug, Default)]
+pub struct ConflictSplitStyledTextCache(
+    rustc_hash::FxHashMap<
+        (usize, ConflictPickSide),
+        crate::view::diff_text_model::CachedDiffStyledText,
+    >,
+);
+
+#[cfg(feature = "benchmarks")]
+impl ConflictSplitStyledTextCache {
+    pub fn with_row_capacity(row_capacity: usize) -> Self {
+        Self(rustc_hash::FxHashMap::with_capacity_and_hasher(
+            row_capacity.saturating_mul(2),
+            Default::default(),
+        ))
+    }
+
+    pub fn get(
+        &self,
+        key: &(usize, ConflictPickSide),
+    ) -> Option<&crate::view::diff_text_model::CachedDiffStyledText> {
+        self.0.get(key)
+    }
+
+    pub fn insert(
+        &mut self,
+        key: (usize, ConflictPickSide),
+        value: crate::view::diff_text_model::CachedDiffStyledText,
+    ) {
+        self.0.insert(key, value);
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
