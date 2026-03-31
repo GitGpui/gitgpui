@@ -1,7 +1,11 @@
 use gitcomet_core::auth::{
-    GITCOMET_AUTH_KIND_ENV, GITCOMET_AUTH_KIND_HOST_VERIFICATION, GITCOMET_AUTH_KIND_PASSPHRASE,
-    GITCOMET_AUTH_KIND_USERNAME_PASSWORD, GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV,
-    GitAuthKind, StagedGitAuth, take_staged_git_auth,
+    CachedPassphraseEntry, GITCOMET_AUTH_CACHE_PROMPT_ENV_PREFIX,
+    GITCOMET_AUTH_CACHE_SECRET_ENV_PREFIX, GITCOMET_AUTH_CACHE_SIZE_ENV, GITCOMET_AUTH_KIND_ENV,
+    GITCOMET_AUTH_KIND_HOST_VERIFICATION, GITCOMET_AUTH_KIND_PASSPHRASE,
+    GITCOMET_AUTH_KIND_PASSPHRASE_CACHED, GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
+    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
+    load_session_passphrases, remember_passphrase_prompt_from_staged_git_auth,
+    take_staged_git_auth,
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -25,6 +29,7 @@ const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
 const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
 const GIT_COMMAND_WAIT_POLL_MAX: Duration = Duration::from_millis(5);
 const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
+const GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TestGitCommandEnvironment {
@@ -39,7 +44,61 @@ static TEST_GIT_COMMAND_ENVIRONMENT: OnceLock<TestGitCommandEnvironment> = OnceL
 struct AskPassScript {
     _dir: tempfile::TempDir,
     path: PathBuf,
-    prompt_log_path: PathBuf,
+    host_prompt_log_path: PathBuf,
+    passphrase_prompt_log_path: PathBuf,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+enum PromptAuth {
+    Explicit(StagedGitAuth),
+    CachedPassphrases(Vec<CachedPassphraseEntry>),
+}
+
+impl PromptAuth {
+    fn from_explicit(auth: StagedGitAuth) -> Option<Self> {
+        if auth.secret.is_empty() {
+            return None;
+        }
+        Some(Self::Explicit(auth))
+    }
+
+    fn from_cached_passphrases(passphrases: Vec<CachedPassphraseEntry>) -> Option<Self> {
+        if passphrases.is_empty() {
+            return None;
+        }
+        Some(Self::CachedPassphrases(passphrases))
+    }
+
+    fn kind_env(&self) -> &'static str {
+        match self {
+            Self::Explicit(auth) => match auth.kind {
+                GitAuthKind::UsernamePassword => GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
+                GitAuthKind::Passphrase => GITCOMET_AUTH_KIND_PASSPHRASE,
+                GitAuthKind::HostVerification => GITCOMET_AUTH_KIND_HOST_VERIFICATION,
+            },
+            Self::CachedPassphrases(_) => GITCOMET_AUTH_KIND_PASSPHRASE_CACHED,
+        }
+    }
+
+    fn username(&self) -> Option<&str> {
+        match self {
+            Self::Explicit(auth) => auth.username.as_deref(),
+            Self::CachedPassphrases(_) => None,
+        }
+    }
+
+    fn secret(&self) -> &str {
+        match self {
+            Self::Explicit(auth) => &auth.secret,
+            Self::CachedPassphrases(_) => "",
+        }
+    }
+
+    fn remember_on_success(&self, prompt: Option<&str>) {
+        if let Self::Explicit(auth) = self {
+            remember_passphrase_prompt_from_staged_git_auth(auth, prompt);
+        }
+    }
 }
 
 fn git_command_timeout() -> Duration {
@@ -141,12 +200,13 @@ fn command_may_require_auth(cmd: &Command) -> bool {
     false
 }
 
-fn take_pending_git_auth() -> Option<StagedGitAuth> {
-    let auth = take_staged_git_auth()?;
-    if auth.secret.is_empty() {
-        return None;
-    }
-    Some(auth)
+fn take_pending_git_auth() -> Option<PromptAuth> {
+    take_staged_git_auth()
+        .and_then(PromptAuth::from_explicit)
+        .or_else(|| {
+            let passphrases = load_session_passphrases();
+            PromptAuth::from_cached_passphrases(passphrases)
+        })
 }
 
 #[cfg(unix)]
@@ -160,12 +220,30 @@ if [ -n "${GITCOMET_ASKPASS_PROMPT_LOG:-}" ]; then
       printf '%s\n' "$prompt" >> "${GITCOMET_ASKPASS_PROMPT_LOG}" ;;
   esac
 fi
+if [ -n "${GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG:-}" ]; then
+  case "$lower_prompt" in
+    *passphrase*)
+      printf '%s\n' "$prompt" >> "${GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG}" ;;
+  esac
+fi
 kind="${GITCOMET_AUTH_KIND:-}"
 if [ "$kind" = "username_password" ]; then
   case "$lower_prompt" in
     *username*) printf '%s\n' "${GITCOMET_AUTH_USERNAME:-}" ;;
     *) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
   esac
+elif [ "$kind" = "passphrase_cached" ]; then
+  cache_size="${GITCOMET_AUTH_CACHE_SIZE:-0}"
+  i=0
+  while [ "$i" -lt "$cache_size" ]; do
+    cached_prompt=$(printenv "GITCOMET_AUTH_CACHE_PROMPT_$i")
+    if [ "$prompt" = "$cached_prompt" ]; then
+      printenv "GITCOMET_AUTH_CACHE_SECRET_$i"
+      exit 0
+    fi
+    i=$((i + 1))
+  done
+  printf '\n'
 elif [ "$kind" = "host_verification" ]; then
   case "$lower_prompt" in
     *continue\ connecting*|*yes/no*|*fingerprint*) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
@@ -188,6 +266,12 @@ if not "%GITCOMET_ASKPASS_PROMPT_LOG%"=="" (
     >>"%GITCOMET_ASKPASS_PROMPT_LOG%" echo %prompt%
   )
 )
+if not "%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%"=="" (
+  echo %prompt% | findstr /I "passphrase" >nul
+  if not errorlevel 1 (
+    >>"%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%" echo %prompt%
+  )
+)
 if /I "%GITCOMET_AUTH_KIND%"=="username_password" (
   echo %prompt% | findstr /I "username" >nul
   if not errorlevel 1 (
@@ -195,6 +279,22 @@ if /I "%GITCOMET_AUTH_KIND%"=="username_password" (
     exit /b 0
   )
   echo %GITCOMET_AUTH_SECRET%
+  exit /b 0
+)
+if /I "%GITCOMET_AUTH_KIND%"=="passphrase_cached" (
+  set "cache_size=%GITCOMET_AUTH_CACHE_SIZE%"
+  if "!cache_size!"=="" set "cache_size=0"
+  set /a cache_last=!cache_size!-1
+  if !cache_last! GEQ 0 (
+    for /L %%i in (0,1,!cache_last!) do (
+      call set "cached_prompt=%%GITCOMET_AUTH_CACHE_PROMPT_%%i%%"
+      if "!prompt!"=="!cached_prompt!" (
+        call set "cached_secret=%%GITCOMET_AUTH_CACHE_SECRET_%%i%%"
+        echo !cached_secret!
+        exit /b 0
+      )
+    )
+  )
   exit /b 0
 )
 if /I "%GITCOMET_AUTH_KIND%"=="host_verification" (
@@ -215,10 +315,12 @@ fn create_askpass_script() -> Result<AskPassScript> {
     #[cfg(not(windows))]
     let script_name = "gitcomet-askpass.sh";
     let path = dir.path().join(script_name);
-    let prompt_log_path = dir.path().join("gitcomet-askpass-prompt.log");
+    let host_prompt_log_path = dir.path().join("gitcomet-askpass-host-prompt.log");
+    let passphrase_prompt_log_path = dir.path().join("gitcomet-askpass-passphrase-prompt.log");
 
     fs::write(&path, askpass_script_contents()).map_err(io_err)?;
-    fs::write(&prompt_log_path, b"").map_err(io_err)?;
+    fs::write(&host_prompt_log_path, b"").map_err(io_err)?;
+    fs::write(&passphrase_prompt_log_path, b"").map_err(io_err)?;
 
     #[cfg(unix)]
     {
@@ -232,36 +334,60 @@ fn create_askpass_script() -> Result<AskPassScript> {
     Ok(AskPassScript {
         _dir: dir,
         path,
-        prompt_log_path,
+        host_prompt_log_path,
+        passphrase_prompt_log_path,
     })
 }
 
 fn configure_git_auth_prompt(
     cmd: &mut Command,
-    auth: Option<&StagedGitAuth>,
+    auth: Option<&PromptAuth>,
     askpass: &AskPassScript,
 ) {
     cmd.env("GIT_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS_REQUIRE", "force");
-    cmd.env(GITCOMET_ASKPASS_PROMPT_LOG_ENV, &askpass.prompt_log_path);
+    cmd.env(
+        GITCOMET_ASKPASS_PROMPT_LOG_ENV,
+        &askpass.host_prompt_log_path,
+    );
+    cmd.env(
+        GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV,
+        &askpass.passphrase_prompt_log_path,
+    );
     if cfg!(all(unix, not(target_os = "macos"))) && std::env::var_os("DISPLAY").is_none() {
         cmd.env("DISPLAY", "gitcomet:0");
     }
 
+    cmd.env(GITCOMET_AUTH_CACHE_SIZE_ENV, "0");
     if let Some(auth) = auth {
-        let kind = match auth.kind {
-            GitAuthKind::UsernamePassword => GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
-            GitAuthKind::Passphrase => GITCOMET_AUTH_KIND_PASSPHRASE,
-            GitAuthKind::HostVerification => GITCOMET_AUTH_KIND_HOST_VERIFICATION,
-        };
-        cmd.env(GITCOMET_AUTH_KIND_ENV, kind);
-        if let Some(username) = &auth.username {
-            cmd.env(GITCOMET_AUTH_USERNAME_ENV, username);
-        } else {
-            cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
+        match auth {
+            PromptAuth::Explicit(_) => {
+                cmd.env(GITCOMET_AUTH_KIND_ENV, auth.kind_env());
+                if let Some(username) = auth.username() {
+                    cmd.env(GITCOMET_AUTH_USERNAME_ENV, username);
+                } else {
+                    cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
+                }
+                cmd.env(GITCOMET_AUTH_SECRET_ENV, auth.secret());
+            }
+            PromptAuth::CachedPassphrases(entries) => {
+                cmd.env(GITCOMET_AUTH_KIND_ENV, auth.kind_env());
+                cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
+                cmd.env_remove(GITCOMET_AUTH_SECRET_ENV);
+                cmd.env(GITCOMET_AUTH_CACHE_SIZE_ENV, entries.len().to_string());
+                for (idx, entry) in entries.iter().enumerate() {
+                    cmd.env(
+                        format!("{GITCOMET_AUTH_CACHE_PROMPT_ENV_PREFIX}{idx}"),
+                        &entry.prompt,
+                    );
+                    cmd.env(
+                        format!("{GITCOMET_AUTH_CACHE_SECRET_ENV_PREFIX}{idx}"),
+                        &entry.secret,
+                    );
+                }
+            }
         }
-        cmd.env(GITCOMET_AUTH_SECRET_ENV, &auth.secret);
     } else {
         cmd.env_remove(GITCOMET_AUTH_KIND_ENV);
         cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
@@ -269,8 +395,22 @@ fn configure_git_auth_prompt(
     }
 }
 
+fn last_logged_passphrase_prompt(askpass: &AskPassScript) -> Option<String> {
+    let raw = fs::read_to_string(&askpass.passphrase_prompt_log_path).ok()?;
+    raw.lines()
+        .rev()
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn remember_successful_prompt_auth(auth: Option<&PromptAuth>, askpass: &AskPassScript) {
+    if let Some(auth) = auth {
+        auth.remember_on_success(last_logged_passphrase_prompt(askpass).as_deref());
+    }
+}
+
 fn append_host_prompt_to_stderr(stderr: &mut Vec<u8>, askpass: &AskPassScript) {
-    let Ok(raw_prompt_log) = fs::read_to_string(&askpass.prompt_log_path) else {
+    let Ok(raw_prompt_log) = fs::read_to_string(&askpass.host_prompt_log_path) else {
         return;
     };
     let prompt_log = raw_prompt_log.trim();
@@ -335,11 +475,11 @@ pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
 fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) -> Result<Output> {
     configure_background_command(&mut cmd);
     configure_non_interactive_git(&mut cmd);
-    let askpass_script = if command_may_require_auth(&cmd) {
+    let askpass_context = if command_may_require_auth(&cmd) {
         let auth = take_pending_git_auth();
         let script = create_askpass_script()?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
-        Some(script)
+        Some((script, auth))
     } else {
         None
     };
@@ -377,7 +517,7 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
     let stdout = stdout_handle.join().unwrap_or_default();
     let mut stderr = stderr_handle.join().unwrap_or_default();
 
-    if let Some(askpass_script) = askpass_script.as_ref() {
+    if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
     }
 
@@ -389,6 +529,12 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
             stdout,
             stderr,
         ));
+    }
+
+    if let Some((askpass_script, auth)) = askpass_context.as_ref() {
+        if status.success() {
+            remember_successful_prompt_auth(auth.as_ref(), askpass_script);
+        }
     }
 
     Ok(Output {
@@ -414,11 +560,11 @@ where
 {
     configure_background_command(&mut cmd);
     configure_non_interactive_git(&mut cmd);
-    let askpass_script = if command_may_require_auth(&cmd) {
+    let askpass_context = if command_may_require_auth(&cmd) {
         let auth = take_pending_git_auth();
         let script = create_askpass_script()?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
-        Some(script)
+        Some((script, auth))
     } else {
         None
     };
@@ -463,7 +609,7 @@ where
         .unwrap_or_else(|_| Err(Error::new(ErrorKind::Io(io::ErrorKind::Other))));
     let mut stderr = stderr_handle.join().unwrap_or_default();
 
-    if let Some(askpass_script) = askpass_script.as_ref() {
+    if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
     }
 
@@ -487,6 +633,10 @@ where
                 stderr,
             },
         ));
+    }
+
+    if let Some((askpass_script, auth)) = askpass_context.as_ref() {
+        remember_successful_prompt_auth(auth.as_ref(), askpass_script);
     }
 
     parsed_result
@@ -1267,7 +1417,7 @@ mod tests {
     fn append_host_prompt_to_stderr_includes_logged_prompt_with_fingerprint() {
         let askpass = create_askpass_script().expect("askpass script creation");
         std::fs::write(
-            &askpass.prompt_log_path,
+            &askpass.host_prompt_log_path,
             "The authenticity of host 'github.com (140.82.121.3)' can't be established.\nED25519 key fingerprint is: SHA256:+DiY...\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
         )
         .expect("write prompt log");
@@ -1285,7 +1435,7 @@ mod tests {
     fn append_host_prompt_to_stderr_skips_when_prompt_already_present() {
         let askpass = create_askpass_script().expect("askpass script creation");
         let prompt = "Are you sure you want to continue connecting (yes/no/[fingerprint])?";
-        std::fs::write(&askpass.prompt_log_path, prompt).expect("write prompt log");
+        std::fs::write(&askpass.host_prompt_log_path, prompt).expect("write prompt log");
 
         let mut stderr = format!("Host key verification failed.\n{prompt}\n").into_bytes();
         append_host_prompt_to_stderr(&mut stderr, &askpass);
@@ -1318,11 +1468,11 @@ mod tests {
     fn configure_git_auth_prompt_sets_username_password_env() {
         let askpass = create_askpass_script().expect("askpass script creation");
         let mut cmd = Command::new("git");
-        let auth = StagedGitAuth {
+        let auth = PromptAuth::Explicit(StagedGitAuth {
             kind: GitAuthKind::UsernamePassword,
             username: Some("alice".to_string()),
             secret: "secret-token".to_string(),
-        };
+        });
 
         configure_git_auth_prompt(&mut cmd, Some(&auth), &askpass);
 
@@ -1345,7 +1495,11 @@ mod tests {
         );
         assert_eq!(
             command_env_value(&cmd, GITCOMET_ASKPASS_PROMPT_LOG_ENV).as_deref(),
-            askpass.prompt_log_path.to_str()
+            askpass.host_prompt_log_path.to_str()
+        );
+        assert_eq!(
+            command_env_value(&cmd, GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV).as_deref(),
+            askpass.passphrase_prompt_log_path.to_str()
         );
         assert_eq!(
             command_env_value(&cmd, GITCOMET_AUTH_KIND_ENV).as_deref(),
@@ -1358,6 +1512,10 @@ mod tests {
         assert_eq!(
             command_env_value(&cmd, GITCOMET_AUTH_SECRET_ENV).as_deref(),
             Some("secret-token")
+        );
+        assert_eq!(
+            command_env_value(&cmd, GITCOMET_AUTH_CACHE_SIZE_ENV).as_deref(),
+            Some("0")
         );
 
         if cfg!(all(unix, not(target_os = "macos"))) && std::env::var_os("DISPLAY").is_none() {
@@ -1373,11 +1531,11 @@ mod tests {
         let askpass = create_askpass_script().expect("askpass script creation");
         let mut cmd = Command::new("git");
         cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
-        let auth = StagedGitAuth {
+        let auth = PromptAuth::Explicit(StagedGitAuth {
             kind: GitAuthKind::Passphrase,
             username: None,
             secret: "ssh-passphrase".to_string(),
-        };
+        });
 
         configure_git_auth_prompt(&mut cmd, Some(&auth), &askpass);
 
@@ -1393,15 +1551,61 @@ mod tests {
     }
 
     #[test]
+    fn configure_git_auth_prompt_sets_cached_passphrase_env_and_removes_username() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+        let mut cmd = Command::new("git");
+        cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
+        let auth = PromptAuth::CachedPassphrases(vec![
+            CachedPassphraseEntry {
+                prompt: "Enter passphrase for key '/tmp/key-a':".to_string(),
+                secret: "ssh-passphrase-a".to_string(),
+            },
+            CachedPassphraseEntry {
+                prompt: "Enter passphrase for key '/tmp/key-b':".to_string(),
+                secret: "ssh-passphrase-b".to_string(),
+            },
+        ]);
+
+        configure_git_auth_prompt(&mut cmd, Some(&auth), &askpass);
+
+        assert_eq!(
+            command_env_value(&cmd, GITCOMET_AUTH_KIND_ENV).as_deref(),
+            Some(GITCOMET_AUTH_KIND_PASSPHRASE_CACHED)
+        );
+        assert!(command_env_removed(&cmd, GITCOMET_AUTH_USERNAME_ENV));
+        assert!(command_env_removed(&cmd, GITCOMET_AUTH_SECRET_ENV));
+        assert_eq!(
+            command_env_value(&cmd, GITCOMET_AUTH_CACHE_SIZE_ENV).as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            command_env_value(&cmd, "GITCOMET_AUTH_CACHE_PROMPT_0").as_deref(),
+            Some("Enter passphrase for key '/tmp/key-a':")
+        );
+        assert_eq!(
+            command_env_value(&cmd, "GITCOMET_AUTH_CACHE_SECRET_0").as_deref(),
+            Some("ssh-passphrase-a")
+        );
+        assert_eq!(
+            command_env_value(&cmd, "GITCOMET_AUTH_CACHE_PROMPT_1").as_deref(),
+            Some("Enter passphrase for key '/tmp/key-b':")
+        );
+        assert_eq!(
+            command_env_value(&cmd, "GITCOMET_AUTH_CACHE_SECRET_1").as_deref(),
+            Some("ssh-passphrase-b")
+        );
+    }
+
+    #[test]
     fn configure_git_auth_prompt_sets_host_verification_env_and_removes_username() {
         let askpass = create_askpass_script().expect("askpass script creation");
         let mut cmd = Command::new("git");
         cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
-        let auth = StagedGitAuth {
+        let auth = PromptAuth::Explicit(StagedGitAuth {
             kind: GitAuthKind::HostVerification,
             username: None,
             secret: "yes".to_string(),
-        };
+        });
 
         configure_git_auth_prompt(&mut cmd, Some(&auth), &askpass);
 
