@@ -23,6 +23,7 @@ use gpui::{
     point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::ops::Range;
@@ -34,6 +35,7 @@ mod app_model;
 mod branch_sidebar;
 mod caches;
 mod chrome;
+pub(crate) mod clone_progress;
 mod color;
 pub(crate) mod components;
 pub(crate) mod conflict_resolver;
@@ -79,14 +81,18 @@ use chrome::{
 };
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
 #[cfg(test)]
+use date_time::format_datetime;
+#[cfg(test)]
 use date_time::format_datetime_utc;
-use date_time::{DateTimeFormat, Timezone, format_datetime};
+use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
 use patch_split::build_patch_split_rows;
 use poller::Poller;
 use word_diff::capped_word_diff_ranges;
 
-use diff_text_model::{CachedDiffStyledText, CachedDiffTextSegment, SyntaxTokenKind};
+#[cfg(test)]
+use diff_text_model::CachedDiffTextSegment;
+use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
@@ -147,6 +153,131 @@ const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
 const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
+
+pub(in crate::view) fn pane_resize_handles_width(
+    sidebar_collapsed: bool,
+    details_collapsed: bool,
+) -> Pixels {
+    let visible_handles = u8::from(!sidebar_collapsed).saturating_add(u8::from(!details_collapsed));
+    px(f32::from(visible_handles) * PANE_RESIZE_HANDLE_PX)
+}
+
+#[cfg(test)]
+pub(in crate::view) fn pane_resize_drag_width_bounds(
+    handle: PaneResizeHandle,
+    start_sidebar: Pixels,
+    start_details: Pixels,
+    total_w: Pixels,
+    sidebar_collapsed: bool,
+    details_collapsed: bool,
+) -> (Pixels, Pixels) {
+    let (min_width, other_width, other_collapsed) = match handle {
+        PaneResizeHandle::Sidebar => (px(SIDEBAR_MIN_PX), start_details, details_collapsed),
+        PaneResizeHandle::Details => (px(DETAILS_MIN_PX), start_sidebar, sidebar_collapsed),
+    };
+    pane_resize_drag_width_bounds_for_other_pane(
+        min_width,
+        other_width,
+        other_collapsed,
+        total_w,
+        sidebar_collapsed,
+        details_collapsed,
+    )
+}
+
+#[inline]
+pub(in crate::view) fn pane_resize_drag_width_bounds_for_other_pane(
+    min_width: Pixels,
+    other_width: Pixels,
+    other_collapsed: bool,
+    total_w: Pixels,
+    sidebar_collapsed: bool,
+    details_collapsed: bool,
+) -> (Pixels, Pixels) {
+    let handles_w = pane_resize_handles_width(sidebar_collapsed, details_collapsed);
+    let main_min = px(MAIN_MIN_PX);
+    let collapsed_w = px(PANE_COLLAPSED_PX);
+    let available_w = total_w - main_min - handles_w;
+    let other_width = if other_collapsed {
+        collapsed_w
+    } else {
+        other_width
+    };
+    let max_width = (available_w - other_width).max(min_width);
+    (min_width, max_width)
+}
+
+pub(in crate::view) fn next_pane_resize_drag_width(
+    state: &PaneResizeState,
+    current_x: Pixels,
+    total_w: Pixels,
+    sidebar_collapsed: bool,
+    details_collapsed: bool,
+) -> Pixels {
+    let dx = current_x - state.start_x;
+    let (min_width, max_width) =
+        state.drag_width_bounds(total_w, sidebar_collapsed, details_collapsed);
+    (state.start_width + (dx * state.drag_delta_sign))
+        .max(min_width)
+        .min(max_width)
+}
+
+/// Pure helper: compute the next diff-split ratio for a single drag step.
+///
+/// Returns `None` when the available width is too narrow for two columns
+/// (the caller should force 50/50 in that case).
+pub(in crate::view) fn next_diff_split_drag_ratio(
+    available: Pixels,
+    min_col_w: Pixels,
+    start_ratio: f32,
+    dx: Pixels,
+) -> Option<f32> {
+    if available <= min_col_w * 2.0 {
+        return None;
+    }
+    let max_left = available - min_col_w;
+    let next_left = ((available * start_ratio) + dx)
+        .max(min_col_w)
+        .min(max_left);
+    Some((next_left / available).clamp(0.0, 1.0))
+}
+
+/// Returns `(available, min_col_w)` for the diff-split layout given the main
+/// pane's content width.  Bundles the handle-width and column-min constants so
+/// callers do not need to reference them directly.
+#[inline]
+pub(in crate::view) fn diff_split_drag_params(main_pane_content_width: Pixels) -> (Pixels, Pixels) {
+    let handle_w = px(PANE_RESIZE_HANDLE_PX);
+    let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
+    let available = (main_pane_content_width - handle_w).max(px(0.0));
+    (available, min_col_w)
+}
+
+#[inline]
+pub(in crate::view) fn diff_split_column_widths_from_available(
+    available: Pixels,
+    min_col_w: Pixels,
+    ratio: f32,
+) -> (Pixels, Pixels) {
+    let left_w = if available <= min_col_w * 2.0 {
+        available * 0.5
+    } else {
+        (available * ratio)
+            .max(min_col_w)
+            .min(available - min_col_w)
+    };
+    let right_w = available - left_w;
+    (left_w, right_w)
+}
+
+#[inline]
+pub(in crate::view) fn diff_split_column_widths(
+    main_pane_content_width: Pixels,
+    ratio: f32,
+) -> (Pixels, Pixels) {
+    let (available, min_col_w) = diff_split_drag_params(main_pane_content_width);
+    diff_split_column_widths_from_available(available, min_col_w, ratio)
+}
 
 pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
 
@@ -306,18 +437,10 @@ impl GitCometView {
         // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
         // already-initialized store (notably in `gpui::test` setup).
         let store_preloaded = !store.snapshot().repos.is_empty();
-        let should_auto_restore = if view_mode == GitCometViewMode::FocusedMergetool {
-            false
-        } else {
-            #[cfg(test)]
-            {
-                false
-            }
-            #[cfg(not(test))]
-            {
-                !store_preloaded
-            }
-        };
+        let should_auto_restore = !crate::startup_probe::disable_auto_restore()
+            && view_mode != GitCometViewMode::FocusedMergetool
+            && cfg!(not(test))
+            && !store_preloaded;
 
         if should_auto_restore {
             if !ui_session.open_repos.is_empty() {
@@ -344,9 +467,13 @@ impl GitCometView {
 
         let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
+            let should_quit = crate::startup_probe::observe_app_state(next.as_ref());
             let should_notify = this.apply_state_snapshot(next, cx);
             if should_notify {
                 cx.notify();
+            }
+            if should_quit {
+                cx.quit();
             }
         });
 
@@ -714,20 +841,6 @@ impl GitCometView {
         self.schedule_ui_settings_persist(cx);
     }
 
-    fn visible_pane_resize_handles_width(&self) -> Pixels {
-        let sidebar_handle = if self.sidebar_collapsed {
-            px(0.0)
-        } else {
-            px(PANE_RESIZE_HANDLE_PX)
-        };
-        let details_handle = if self.details_collapsed {
-            px(0.0)
-        } else {
-            px(PANE_RESIZE_HANDLE_PX)
-        };
-        sidebar_handle + details_handle
-    }
-
     fn refresh_main_pane_after_panel_animation(&mut self, cx: &mut gpui::Context<Self>) {
         let main_pane = self.main_pane.clone();
         cx.defer(move |cx| {
@@ -969,12 +1082,15 @@ impl GitCometView {
                             this.details_render_width = this.details_width;
                         }
                     }
-                    this.pane_resize = Some(PaneResizeState {
+                    this.pane_resize = Some(PaneResizeState::new(
                         handle,
-                        start_x: e.position.x,
-                        start_sidebar: this.sidebar_width,
-                        start_details: this.details_width,
-                    });
+                        e.position.x,
+                        this.sidebar_width,
+                        this.details_width,
+                        this.last_window_size.width,
+                        this.sidebar_collapsed,
+                        this.details_collapsed,
+                    ));
                     cx.notify();
                 }),
             )
@@ -988,50 +1104,32 @@ impl GitCometView {
                     }
 
                     let total_w = this.last_window_size.width;
-                    let handles_w = this.visible_pane_resize_handles_width();
-                    let main_min = px(MAIN_MIN_PX);
-                    let sidebar_min = px(SIDEBAR_MIN_PX);
-                    let details_min = px(DETAILS_MIN_PX);
-                    let collapsed_w = px(PANE_COLLAPSED_PX);
-
-                    let dx = e.event.position.x - state.start_x;
+                    let next_width = next_pane_resize_drag_width(
+                        &state,
+                        e.event.position.x,
+                        total_w,
+                        this.sidebar_collapsed,
+                        this.details_collapsed,
+                    );
                     let mut changed = false;
                     match state.handle {
                         PaneResizeHandle::Sidebar => {
-                            let details_w = if this.details_collapsed {
-                                collapsed_w
-                            } else {
-                                state.start_details
-                            };
-                            let max_sidebar =
-                                (total_w - details_w - main_min - handles_w).max(sidebar_min);
-                            let next_sidebar =
-                                (state.start_sidebar + dx).max(sidebar_min).min(max_sidebar);
-                            if this.sidebar_width != next_sidebar {
-                                this.sidebar_width = next_sidebar;
+                            if this.sidebar_width != next_width {
+                                this.sidebar_width = next_width;
                                 changed = true;
                             }
-                            if this.sidebar_render_width != next_sidebar {
-                                this.sidebar_render_width = next_sidebar;
+                            if this.sidebar_render_width != next_width {
+                                this.sidebar_render_width = next_width;
                                 changed = true;
                             }
                         }
                         PaneResizeHandle::Details => {
-                            let sidebar_w = if this.sidebar_collapsed {
-                                collapsed_w
-                            } else {
-                                state.start_sidebar
-                            };
-                            let max_details =
-                                (total_w - sidebar_w - main_min - handles_w).max(details_min);
-                            let next_details =
-                                (state.start_details - dx).max(details_min).min(max_details);
-                            if this.details_width != next_details {
-                                this.details_width = next_details;
+                            if this.details_width != next_width {
+                                this.details_width = next_width;
                                 changed = true;
                             }
-                            if this.details_render_width != next_details {
-                                this.details_render_width = next_details;
+                            if this.details_render_width != next_width {
+                                this.details_render_width = next_width;
                                 changed = true;
                             }
                         }
@@ -1695,6 +1793,19 @@ impl Render for GitCometView {
         root = root.child(self.popover_host.clone());
 
         root = root.child(self.tooltip_host.clone());
+
+        if crate::startup_probe::is_enabled() {
+            root = root.on_children_prepainted(|_children_bounds, window, _cx| {
+                if crate::startup_probe::mark_first_paint() {
+                    window.on_next_frame(|_window, cx| {
+                        crate::startup_probe::mark_first_interactive();
+                        if crate::startup_probe::should_exit_after_first_interactive() {
+                            cx.quit();
+                        }
+                    });
+                }
+            });
+        }
 
         root
     }

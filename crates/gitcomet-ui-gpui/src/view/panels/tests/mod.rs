@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 pub(super) use super::main::{
     next_conflict_diff_split_ratio, show_conflict_save_stage_action,
     show_external_mergetool_actions,
@@ -159,16 +161,15 @@ pub(super) fn styled_debug_info(
     )
 }
 
+type StyledDebugSpan = (
+    std::ops::Range<usize>,
+    Option<gpui::Hsla>,
+    Option<gpui::Hsla>,
+);
+
 pub(super) fn styled_debug_info_with_styles(
     styled: &super::CachedDiffStyledText,
-) -> (
-    gpui::SharedString,
-    Vec<(
-        std::ops::Range<usize>,
-        Option<gpui::Hsla>,
-        Option<gpui::Hsla>,
-    )>,
-) {
+) -> (gpui::SharedString, Vec<StyledDebugSpan>) {
     (
         styled.text.clone(),
         styled
@@ -326,11 +327,11 @@ pub(super) fn seed_file_diff_state_with_rev(
             );
             repo.diff_state.diff_file_rev = diff_file_rev;
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: path.to_path_buf(),
-                    old: Some(old_text.to_string()),
-                    new: Some(new_text.to_string()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    path.to_path_buf(),
+                    Some(old_text.to_string()),
+                    Some(new_text.to_string()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -466,7 +467,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
             set_test_file_status(
                 &mut repo,
                 file_rel.clone(),
-                status_kind.clone(),
+                status_kind,
                 gitcomet_core::domain::DiffArea::Staged,
             );
 
@@ -505,7 +506,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     cx.simulate_keystrokes("ctrl-a ctrl-c");
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some(expected.into())
+        Some(expected)
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -545,11 +546,11 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
                 gitcomet_core::domain::DiffArea::Staged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: file_rel.clone(),
-                    old: old_text.map(|text| text.to_string()),
-                    new: new_text.map(|text| text.to_string()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    file_rel.clone(),
+                    old_text.map(|text| text.to_string()),
+                    new_text.map(|text| text.to_string()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -742,7 +743,7 @@ pub(super) fn set_test_conflict_file(
     repo.conflict_state.conflict_file_path = Some(path.clone());
     repo.conflict_state.conflict_file =
         gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
-            path,
+            path: path.into(),
             base_bytes: None,
             ours_bytes: None,
             theirs_bytes: None,
@@ -822,7 +823,7 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
 
         let ready = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            is_ready(&pane)
+            is_ready(pane)
         });
         if ready {
             return;
@@ -830,7 +831,7 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
         if std::time::Instant::now() >= deadline {
             let snapshot = cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                snapshot(&pane)
+                snapshot(pane)
             });
             panic!("timed out waiting for {description}: {snapshot:?}");
         }
@@ -861,6 +862,7 @@ pub(super) fn wait_for_file_image_diff_cache<Ready>(
 
 mod conflict;
 mod file_diff;
+mod file_preview;
 mod file_status;
 mod large_file_diff;
 mod markdown;

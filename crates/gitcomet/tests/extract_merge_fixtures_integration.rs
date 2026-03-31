@@ -1,4 +1,5 @@
 use gitcomet_core::process::background_command as no_window_command;
+#[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -14,10 +15,10 @@ fn apply_isolated_git_config_env(cmd: &mut Command) {
 
 fn gitcomet_bin() -> PathBuf {
     for env_key in ["CARGO_BIN_EXE_gitcomet"] {
-        if let Some(path) = std::env::var_os(env_key).map(PathBuf::from) {
-            if path.is_file() {
-                return path;
-            }
+        if let Some(path) = std::env::var_os(env_key).map(PathBuf::from)
+            && path.is_file()
+        {
+            return path;
         }
     }
 
@@ -36,7 +37,8 @@ fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
     let profile_dir = deps_dir.parent()?;
     let exe_suffix = std::env::consts::EXE_SUFFIX;
 
-    for bin_name in ["gitcomet"] {
+    {
+        let bin_name = "gitcomet";
         let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
         if candidate.is_file() {
             return Some(candidate);
@@ -193,7 +195,10 @@ fn extract_merge_fixtures_e2e_writes_fixture_sets() {
 
 #[test]
 fn extract_merge_fixtures_e2e_non_repo_exits_two() {
-    let non_repo = tempfile::tempdir().expect("create non-repo dir");
+    let non_repo = tempfile::Builder::new()
+        .prefix("gitcomet-extract-non-repo-it-")
+        .tempdir()
+        .expect("create non-repo dir outside repo");
     let out = tempfile::tempdir().expect("create output dir");
 
     let output = run_gitcomet([

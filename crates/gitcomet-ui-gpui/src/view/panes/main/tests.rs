@@ -16,6 +16,7 @@ use super::{
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
     split_target_conflict_block_into_subchunks, versioned_cached_diff_styled_text_is_current,
+    versioned_query_cached_diff_styled_text_is_current,
 };
 use crate::kit::text_model::TextModel;
 use crate::theme::AppTheme;
@@ -85,7 +86,7 @@ fn repo_with_conflict_file(
 
 fn text_conflict_file(path: &Path, current: &str) -> ConflictFile {
     ConflictFile {
-        path: path.to_path_buf(),
+        path: path.to_path_buf().into(),
         base_bytes: None,
         ours_bytes: None,
         theirs_bytes: None,
@@ -99,7 +100,7 @@ fn text_conflict_file(path: &Path, current: &str) -> ConflictFile {
 
 fn binary_conflict_file(path: &Path) -> ConflictFile {
     ConflictFile {
-        path: path.to_path_buf(),
+        path: path.to_path_buf().into(),
         base_bytes: Some(Arc::from(&b"base"[..])),
         ours_bytes: Some(Arc::from(&b"ours"[..])),
         theirs_bytes: Some(Arc::from(&b"theirs"[..])),
@@ -438,9 +439,10 @@ fn remap_line_keyed_cache_for_delta_preserves_versioned_preview_entries() {
     let mut cache: HashMap<usize, VersionedCachedDiffStyledText> = HashMap::default();
     let make_entry = |text: &str| VersionedCachedDiffStyledText {
         syntax_epoch: 7,
+        query_generation: 0,
         styled: crate::view::diff_text_model::CachedDiffStyledText {
             text: text.to_string().into(),
-            highlights: Arc::new(Vec::new()),
+            highlights: Arc::from(Vec::new()),
             highlights_hash: 11,
             text_hash: 22,
         },
@@ -457,19 +459,20 @@ fn remap_line_keyed_cache_for_delta_preserves_versioned_preview_entries() {
     let shifted = versioned_cached_diff_styled_text_is_current(cache.get(&5), 7)
         .expect("suffix entry should move and keep its syntax epoch");
     assert_eq!(shifted.text.as_ref(), "shift");
-    assert!(cache.get(&7).is_none());
+    assert!(!cache.contains_key(&7));
 }
 
 #[test]
 fn versioned_diff_style_cache_entry_only_matches_current_epoch() {
     let styled = crate::view::diff_text_model::CachedDiffStyledText {
         text: "styled".into(),
-        highlights: Arc::new(Vec::new()),
+        highlights: Arc::from(Vec::new()),
         highlights_hash: 11,
         text_hash: 22,
     };
     let entry = VersionedCachedDiffStyledText {
         syntax_epoch: 7,
+        query_generation: 0,
         styled: styled.clone(),
     };
 
@@ -486,6 +489,34 @@ fn versioned_diff_style_cache_entry_only_matches_current_epoch() {
     assert!(
         versioned_cached_diff_styled_text_is_current(None, 7).is_none(),
         "missing cache entries should stay missing"
+    );
+}
+
+#[test]
+fn versioned_query_diff_style_cache_entry_only_matches_current_generation() {
+    let styled = crate::view::diff_text_model::CachedDiffStyledText {
+        text: "styled".into(),
+        highlights: Arc::from(Vec::new()),
+        highlights_hash: 11,
+        text_hash: 22,
+    };
+    let entry = VersionedCachedDiffStyledText {
+        syntax_epoch: 7,
+        query_generation: 3,
+        styled: styled.clone(),
+    };
+
+    let current = versioned_query_cached_diff_styled_text_is_current(Some(&entry), 7, 3)
+        .expect("matching syntax epoch and query generation should return cached styled text");
+    assert_eq!(current.text, styled.text);
+
+    assert!(
+        versioned_query_cached_diff_styled_text_is_current(Some(&entry), 8, 3).is_none(),
+        "stale syntax epochs should invalidate query cache entries"
+    );
+    assert!(
+        versioned_query_cached_diff_styled_text_is_current(Some(&entry), 7, 4).is_none(),
+        "stale query generations should invalidate query cache entries"
     );
 }
 
@@ -1519,7 +1550,7 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
 
     assert_eq!(meta[1].source, ResolvedLineSource::B);
     assert_eq!(meta[1].input_line, Some(2));
-    assert_eq!(
+    assert!(
         conflict_resolver::build_resolved_output_line_sources_index(
             &meta,
             &output_lines,
@@ -1530,8 +1561,7 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
             ResolvedLineSource::B,
             2,
             "dup"
-        )),
-        true
+        ))
     );
 }
 
