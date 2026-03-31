@@ -275,7 +275,8 @@ impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
         row_hash
     }
 
-    #[cfg(feature = "benchmarks")]
+    #[cfg(any(test, feature = "benchmarks"))]
+    #[allow(dead_code)]
     pub(in crate::view) fn clear(&mut self) {
         self.cached = None;
     }

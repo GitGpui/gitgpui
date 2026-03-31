@@ -4720,9 +4720,9 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
     };
     let old_text =
-        git_show("67854d26ed94895faf9fe8fc4abe435f63f639e9^:.github/workflows/deployment-ci.yml");
+        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
     let new_text =
-        git_show("67854d26ed94895faf9fe8fc4abe435f63f639e9:.github/workflows/deployment-ci.yml");
+        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml");
 
     let baseline_path_line = 17u32;
     let affected_path_lines = [18u32, 22, 24, 26, 27, 28, 29, 30, 31, 32, 33];
@@ -5526,9 +5526,9 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
     };
     let old_text =
-        git_show("67854d26ed94895faf9fe8fc4abe435f63f639e9^:.github/workflows/deployment-ci.yml");
+        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
     let new_text =
-        git_show("67854d26ed94895faf9fe8fc4abe435f63f639e9:.github/workflows/deployment-ci.yml");
+        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml");
     let (old_shared_text, old_line_starts) = shared_text_and_line_starts(old_text.as_str());
     let (new_shared_text, new_line_starts) = shared_text_and_line_starts(new_text.as_str());
     let old_document = match rows::prepare_diff_syntax_document_with_budget_reuse_text(

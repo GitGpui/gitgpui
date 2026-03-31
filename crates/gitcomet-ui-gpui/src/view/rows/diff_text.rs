@@ -31,6 +31,7 @@ pub(super) use prepared::{
     build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette,
 };
 #[cfg(feature = "benchmarks")]
+#[allow(unused_imports)]
 pub(in crate::view) use prepared::{
     benchmark_diff_syntax_cache_drop_payload_timed_step,
     benchmark_diff_syntax_cache_replacement_drop_step,

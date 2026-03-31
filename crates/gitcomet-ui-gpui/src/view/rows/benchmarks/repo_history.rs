@@ -509,10 +509,14 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 let path_len = path
                     .to_str()
                     .map_or_else(|| path.to_string_lossy().len(), str::len);
-                branch
-                    .as_ref()
-                    .map(|branch| branch.as_ref().len())
-                    .hash(&mut h);
+                let path_label = path_display::path_display_shared_fast(path.as_path());
+                let label = crate::view::branch_sidebar::branch_sidebar_worktree_label(
+                    branch.as_ref().map(|value| value.as_ref()),
+                    *detached,
+                    path_label.as_ref(),
+                );
+                label.len().hash(&mut h);
+                path_label.len().hash(&mut h);
                 path_len.hash(&mut h);
                 detached.hash(&mut h);
                 is_active.hash(&mut h);
@@ -521,7 +525,9 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 let path_len = path
                     .to_str()
                     .map_or_else(|| path.to_string_lossy().len(), str::len);
+                let path_label = path_display::path_display_shared_fast(path.as_path());
                 path_len.hash(&mut h);
+                path_label.len().hash(&mut h);
             }
             BranchSidebarRow::StashItem {
                 index,

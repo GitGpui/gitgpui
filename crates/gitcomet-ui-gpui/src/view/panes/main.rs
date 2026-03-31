@@ -12,6 +12,7 @@ mod helpers;
 mod preview;
 
 #[cfg(feature = "benchmarks")]
+#[allow(unused_imports)]
 pub(in crate::view) use diff_search::{
     AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, diff_search_query_reuse,
 };
