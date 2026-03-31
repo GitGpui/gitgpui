@@ -52,7 +52,7 @@ fn run_report(cli: CliArgs) -> Result<(), String> {
         .map(load_artifact_freshness_reference)
         .transpose()?;
     let mut timing_results = Vec::with_capacity(PERF_BUDGETS.len());
-    for &spec in PERF_BUDGETS {
+    for spec in PERF_BUDGETS.iter().copied() {
         timing_results.push(evaluate_budget(
             spec,
             &cli.criterion_roots,
@@ -61,7 +61,7 @@ fn run_report(cli: CliArgs) -> Result<(), String> {
         ));
     }
     let mut structural_results = Vec::with_capacity(STRUCTURAL_BUDGETS.len());
-    for &spec in STRUCTURAL_BUDGETS {
+    for spec in STRUCTURAL_BUDGETS.iter().copied() {
         structural_results.push(evaluate_structural_budget(
             spec,
             &cli.criterion_roots,
