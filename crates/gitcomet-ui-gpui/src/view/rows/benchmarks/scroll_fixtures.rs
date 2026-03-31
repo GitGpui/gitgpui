@@ -302,7 +302,7 @@ impl HistoryListScrollFixture {
             build_branches_targeting_commits(&commits, local_branches, remote_branches);
         let graph_rows = history_graph::compute_graph(
             &commits,
-            AppTheme::zed_ayu_dark(),
+            AppTheme::gitcomet_dark(),
             &history_graph_heads_from_branches(&branches, &remote_branches),
             None,
         )

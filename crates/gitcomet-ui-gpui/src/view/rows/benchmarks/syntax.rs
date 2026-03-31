@@ -1289,7 +1289,7 @@ impl MarkdownPreviewScrollFixture {
         let profile = profile_markdown_preview_scroll_document(&document, 0);
         Self {
             document,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             profile,
         }
     }
@@ -1308,7 +1308,7 @@ impl MarkdownPreviewScrollFixture {
         );
         Self {
             document,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             profile,
         }
     }

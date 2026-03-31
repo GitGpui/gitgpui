@@ -292,7 +292,7 @@ impl RealRepoFixture {
         let branch_heads = empty_history_graph_heads();
         let graph = history_graph::compute_graph(
             commits.as_slice(),
-            AppTheme::zed_ayu_dark(),
+            AppTheme::gitcomet_dark(),
             &branch_heads,
             None,
         );
@@ -336,7 +336,7 @@ impl RealRepoFixture {
         let branch_heads = empty_history_graph_heads();
         let graph = history_graph::compute_graph(
             commits.as_slice(),
-            AppTheme::zed_ayu_dark(),
+            AppTheme::gitcomet_dark(),
             &branch_heads,
             None,
         );

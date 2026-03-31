@@ -20,7 +20,7 @@ pub enum MergetoolTraceStage {
     GenerateResolvedText,
     SideBySideRows,
     // Dead variant: never constructed in production. Matched only in test assertions.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
     BuildInlineRows,
     BuildThreeWayConflictMaps,
     ComputeThreeWayWordHighlights,
@@ -161,18 +161,18 @@ impl MergetoolTraceEvent {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MergetoolTraceSnapshot {
     pub events: Vec<MergetoolTraceEvent>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub struct MergetoolTraceCaptureGuard {
     previous_enabled: bool,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 impl Drop for MergetoolTraceCaptureGuard {
     fn drop(&mut self) {
         clear();
@@ -180,8 +180,8 @@ impl Drop for MergetoolTraceCaptureGuard {
     }
 }
 
-// Test-only: installs a capture guard that collects trace events for assertion.
-#[cfg(any(test, feature = "test-support"))]
+// Used by tests and benchmarks to collect trace events for assertions and metrics.
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn capture() -> MergetoolTraceCaptureGuard {
     let previous_enabled = MERGETOOL_TRACE_CAPTURE_ENABLED.swap(true, Ordering::Relaxed);
     clear();
@@ -211,8 +211,8 @@ pub fn record_with(f: impl FnOnce() -> MergetoolTraceEvent) {
     record(f());
 }
 
-// Used only by tests to observe trace events recorded during mergetool operations.
-#[cfg(any(test, feature = "test-support"))]
+// Used by tests and benchmarks to observe trace events recorded during mergetool operations.
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn snapshot() -> MergetoolTraceSnapshot {
     let events = MERGETOOL_TRACE_EVENTS
         .lock()
@@ -221,8 +221,8 @@ pub fn snapshot() -> MergetoolTraceSnapshot {
     MergetoolTraceSnapshot { events }
 }
 
-// Used internally by `capture()` which is test-only.
-#[cfg(any(test, feature = "test-support"))]
+// Used internally by `capture()` in tests and benchmarks.
+#[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
 pub fn clear() {
     if let Ok(mut events) = MERGETOOL_TRACE_EVENTS.lock() {
         events.clear();

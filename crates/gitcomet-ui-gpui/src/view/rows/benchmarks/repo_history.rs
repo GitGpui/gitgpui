@@ -1494,7 +1494,7 @@ impl HistoryCacheBuildFixture {
             tags: tags_vec,
             stashes: stash_entries,
             head_branch: Some("main".to_string()),
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
         }
     }
 
@@ -1510,7 +1510,7 @@ impl HistoryCacheBuildFixture {
             tags: tags_vec,
             stashes: Vec::new(),
             head_branch: Some("main".to_string()),
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
         }
     }
 
@@ -1532,7 +1532,7 @@ impl HistoryCacheBuildFixture {
             tags: tags_vec,
             stashes: Vec::new(),
             head_branch: Some("main".to_string()),
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
         }
     }
 
@@ -1553,7 +1553,7 @@ impl HistoryCacheBuildFixture {
             tags: Vec::new(),
             stashes: stash_entries,
             head_branch: Some("main".to_string()),
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
         }
     }
 
@@ -1583,7 +1583,7 @@ impl HistoryCacheBuildFixture {
             tags,
             stashes: stash_entries,
             head_branch: Some("main".to_string()),
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
         }
     }
 

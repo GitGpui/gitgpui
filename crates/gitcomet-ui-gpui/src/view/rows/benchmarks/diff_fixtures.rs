@@ -336,7 +336,7 @@ impl PatchDiffPagedRowsFixture {
             Arc::clone(&rows_provider),
             self.split_row_count,
         );
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
 
         // Compute per-provider deep offsets clamped to valid range.
