@@ -139,9 +139,10 @@ pub fn load_session_passphrases() -> Vec<CachedPassphraseEntry> {
 
 pub fn remember_passphrase_prompt_from_staged_git_auth(auth: &StagedGitAuth, prompt: Option<&str>) {
     if auth.kind == GitAuthKind::Passphrase
-        && let Some(prompt) = prompt {
-            remember_session_passphrase(prompt, &auth.secret);
-        }
+        && let Some(prompt) = prompt
+    {
+        remember_session_passphrase(prompt, &auth.secret);
+    }
 }
 
 #[cfg(test)]
