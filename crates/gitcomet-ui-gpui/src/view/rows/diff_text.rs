@@ -26,6 +26,7 @@ pub(super) use build::{
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) use prepared::prepare_diff_syntax_document_in_background_text;
 #[cfg(feature = "benchmarks")]
+#[allow(unused_imports)]
 pub(in crate::view) use prepared::{
     PreparedDiffSyntaxCacheMetrics, benchmark_diff_syntax_cache_drop_payload_timed_step,
     benchmark_diff_syntax_cache_replacement_drop_step,
@@ -504,55 +505,6 @@ struct FusedDiffTextBuildRequest<'a> {
 pub(in crate::view) struct PreparedDiffSyntaxLine {
     pub document: Option<PreparedDiffSyntaxDocument>,
     pub line_ix: usize,
-}
-
-#[cfg(feature = "benchmarks")]
-#[derive(Clone, Copy, Debug)]
-pub(super) struct DiffTextSourceIdentity(u64);
-
-#[cfg(feature = "benchmarks")]
-impl DiffTextSourceIdentity {
-    pub(super) fn from_str(text: &str) -> Self {
-        let mut hasher = FxHasher::default();
-        text.hash(&mut hasher);
-        Self(hasher.finish())
-    }
-}
-
-#[cfg(feature = "benchmarks")]
-#[derive(Clone, Copy, Debug)]
-pub(super) struct PreparedDiffSyntaxTextSource {
-    pub document: Option<PreparedDiffSyntaxDocument>,
-}
-
-#[cfg(feature = "benchmarks")]
-#[derive(Clone, Copy, Debug)]
-pub(super) struct InlineDiffSyntaxOnlyRow<'a> {
-    pub text: &'a str,
-    pub line: &'a AnnotatedDiffLine,
-}
-
-#[cfg(feature = "benchmarks")]
-pub(super) type SyntaxHighlightPalette = AppTheme;
-
-#[cfg(feature = "benchmarks")]
-pub(super) fn syntax_highlight_palette(theme: AppTheme) -> SyntaxHighlightPalette {
-    theme
-}
-
-#[cfg(feature = "benchmarks")]
-pub(super) struct DiffTextBuildRequest<'a> {
-    pub text: &'a str,
-    pub word_ranges: &'a [Range<usize>],
-    pub query: &'a str,
-    pub syntax: DiffSyntaxConfig,
-    pub word_color: Option<gpui::Rgba>,
-}
-
-#[cfg(feature = "benchmarks")]
-pub(super) struct PreparedDiffTextBuildRequest<'a> {
-    pub build: DiffTextBuildRequest<'a>,
-    pub prepared_line: PreparedDiffSyntaxLine,
 }
 
 #[cfg(test)]

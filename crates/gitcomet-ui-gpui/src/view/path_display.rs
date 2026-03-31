@@ -81,6 +81,24 @@ impl PathDisplayCache {
         self.recent_entries + self.previous_entries
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
+    #[allow(dead_code)]
+    pub(in crate::view) fn clear(&mut self) {
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
+
+        self.recent.clear();
+        self.previous.clear();
+        self.recent_entries = 0;
+        self.previous_entries = 0;
+
+        #[cfg(not(windows))]
+        {
+            self.present_hash_counts.clear();
+            self.overflow_tail_active = false;
+        }
+    }
+
     fn rotate_generations(&mut self) {
         #[cfg(any(debug_assertions, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);

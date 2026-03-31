@@ -830,48 +830,6 @@ fn build_cached_diff_styled_text_with_optional_palette(
     )
 }
 
-#[cfg(feature = "benchmarks")]
-pub(in super::super) fn build_cached_diff_styled_text_with_source_identity(
-    theme: AppTheme,
-    text: &str,
-    source_identity: Option<DiffTextSourceIdentity>,
-    word_ranges: &[Range<usize>],
-    query: &str,
-    language: Option<DiffSyntaxLanguage>,
-    syntax_mode: DiffSyntaxMode,
-    word_color: Option<gpui::Rgba>,
-) -> CachedDiffStyledText {
-    if let Some(identity) = source_identity {
-        let _ = identity.0;
-    }
-    build_cached_diff_styled_text(
-        theme,
-        text,
-        word_ranges,
-        query,
-        language,
-        syntax_mode,
-        word_color,
-    )
-}
-
-#[cfg(feature = "benchmarks")]
-pub(in super::super) fn build_cached_diff_styled_text_with_palette(
-    theme: AppTheme,
-    _palette: &SyntaxHighlightPalette,
-    request: DiffTextBuildRequest<'_>,
-) -> CachedDiffStyledText {
-    build_cached_diff_styled_text(
-        theme,
-        request.text,
-        request.word_ranges,
-        request.query,
-        request.syntax.language,
-        request.syntax.mode,
-        request.word_color,
-    )
-}
-
 pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
     theme: AppTheme,
     base: &CachedDiffStyledText,

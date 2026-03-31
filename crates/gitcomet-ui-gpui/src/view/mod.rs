@@ -270,6 +270,17 @@ pub(in crate::view) fn diff_split_column_widths_from_available(
     (left_w, right_w)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
+#[inline]
+#[allow(dead_code)]
+pub(in crate::view) fn diff_split_column_widths(
+    main_pane_content_width: Pixels,
+    ratio: f32,
+) -> (Pixels, Pixels) {
+    let (available, min_col_w) = diff_split_drag_params(main_pane_content_width);
+    diff_split_column_widths_from_available(available, min_col_w, ratio)
+}
+
 pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
 
 impl GitCometView {
