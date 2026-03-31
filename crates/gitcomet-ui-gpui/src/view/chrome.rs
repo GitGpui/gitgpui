@@ -61,6 +61,31 @@ pub(super) fn handle_titlebar_double_click(window: &mut Window) {
     }
 }
 
+pub(in crate::view) fn show_titlebar_secondary_menu<T: 'static>(
+    position: Point<Pixels>,
+    window: &Window,
+    cx: &mut gpui::Context<T>,
+) {
+    cx.stop_propagation();
+
+    #[cfg(target_os = "windows")]
+    if let Some(request) = crate::app::window_system_menu_request(window, position) {
+        // Run the native menu loop after the current GPUI event dispatch has fully unwound,
+        // and without holding an App borrow while Windows processes system commands.
+        cx.spawn(async move |_this, _cx: &mut gpui::AsyncApp| {
+            gitcomet_win32_window_utils::show_window_system_menu(
+                request.hwnd,
+                request.x,
+                request.y,
+            );
+        })
+        .detach();
+        return;
+    }
+
+    crate::app::show_window_system_menu(window, position);
+}
+
 pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> {
     let inset = window.client_inset().unwrap_or(px(0.0));
     match window.window_decorations() {
@@ -376,11 +401,10 @@ impl Render for TitleBarView {
                 let anchor = window_top_left_corner(window);
                 this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
             }))
-            .on_mouse_down(
+            .on_mouse_up(
                 MouseButton::Right,
-                cx.listener(|_this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    window.show_window_menu(window_top_left_corner(window));
+                cx.listener(|_this, e: &MouseUpEvent, window, cx| {
+                    show_titlebar_secondary_menu(e.position, window, cx);
                 }),
             );
 
@@ -410,6 +434,12 @@ impl Render for TitleBarView {
                                 .child("GITCOMET"),
                         ),
                 )
+                .on_mouse_up(
+                    MouseButton::Right,
+                    cx.listener(|_this, e: &MouseUpEvent, window, cx| {
+                        show_titlebar_secondary_menu(e.position, window, cx);
+                    }),
+                )
         };
 
         let drag_region = div()
@@ -431,6 +461,14 @@ impl Render for TitleBarView {
                 handle_titlebar_double_click(window);
                 cx.notify();
             }))
+            // GPUI synthesizes ClickEvent only from the left mouse button, so use mouse-up
+            // directly for the Windows title bar system menu.
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|_this, e: &MouseUpEvent, window, cx| {
+                    show_titlebar_secondary_menu(e.position, window, cx);
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _w, cx| {
@@ -602,6 +640,20 @@ impl Render for TitleBarView {
                     ),
             );
 
+        let leading = div()
+            .flex()
+            .items_center()
+            .h_full()
+            .gap_0p5()
+            .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
+            .when(is_macos, |d| d.child(macos_brand))
+            .when(!is_macos && workspace_actions_enabled, |d| {
+                d.child(menu_toggle).child(windows_brand())
+            })
+            .when(!is_macos && !workspace_actions_enabled, |d| {
+                d.child(windows_brand())
+            });
+
         div()
             .id("title_bar")
             .flex()
@@ -611,21 +663,7 @@ impl Render for TitleBarView {
             .bg(bar_bg)
             .border_b_1()
             .border_color(bar_border)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .h_full()
-                    .gap_0p5()
-                    .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
-                    .when(is_macos, |d| d.child(macos_brand))
-                    .when(!is_macos && workspace_actions_enabled, |d| {
-                        d.child(menu_toggle).child(windows_brand())
-                    })
-                    .when(!is_macos && !workspace_actions_enabled, |d| {
-                        d.child(windows_brand())
-                    }),
-            )
+            .child(leading)
             .child(drag_region)
             .child(
                 div()
