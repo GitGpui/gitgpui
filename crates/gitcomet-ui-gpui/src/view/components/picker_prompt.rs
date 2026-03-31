@@ -217,23 +217,6 @@ fn highlighted_label(
         .child(suffix.to_string())
 }
 
-#[allow(dead_code)]
-fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<Range<usize>> {
-    if needle.is_empty() {
-        return Some(0..0);
-    }
-
-    let haystack_bytes = haystack.as_bytes();
-    let needle_bytes = needle.as_bytes();
-    if needle_bytes.len() > haystack_bytes.len() {
-        return None;
-    }
-
-    let first_lower = needle_bytes[0].to_ascii_lowercase();
-    let first_upper = needle_bytes[0].to_ascii_uppercase();
-    find_ascii_case_insensitive_precomputed(haystack_bytes, needle_bytes, first_lower, first_upper)
-}
-
 /// Substring search with precomputed first-byte lowercase/uppercase values.
 /// Skips positions where the first byte cannot match, avoiding the inner loop
 /// overhead for most non-matching positions.

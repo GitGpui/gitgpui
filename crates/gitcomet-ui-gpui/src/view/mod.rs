@@ -90,7 +90,9 @@ use patch_split::build_patch_split_rows;
 use poller::Poller;
 use word_diff::capped_word_diff_ranges;
 
-use diff_text_model::{CachedDiffStyledText, CachedDiffTextSegment, SyntaxTokenKind};
+use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
+#[cfg(test)]
+use diff_text_model::CachedDiffTextSegment;
 use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
@@ -238,22 +240,6 @@ pub(in crate::view) fn next_diff_split_drag_ratio(
         .max(min_col_w)
         .min(max_left);
     Some((next_left / available).clamp(0.0, 1.0))
-}
-
-#[cfg(any(test, feature = "benchmarks"))]
-#[allow(dead_code)]
-#[inline]
-pub(in crate::view) fn diff_split_ratio_bounds(
-    available: Pixels,
-    min_col_w: Pixels,
-) -> Option<(f32, f32)> {
-    if available <= min_col_w * 2.0 {
-        return None;
-    }
-    let available_f: f32 = available.into();
-    let min_col_f: f32 = min_col_w.into();
-    let min_ratio = min_col_f / available_f;
-    Some((min_ratio, 1.0 - min_ratio))
 }
 
 /// Returns `(available, min_col_w)` for the diff-split layout given the main

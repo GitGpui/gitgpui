@@ -273,7 +273,7 @@ pub(in crate::view) struct PagedPatchSplitRows {
 }
 
 impl PagedPatchSplitRows {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(in crate::view) fn new(source: Arc<PagedPatchDiffRows>) -> Self {
         let len_hint = Self::count_rows(source.diff.lines.as_slice());
         Self::new_with_len_hint(source, len_hint)
@@ -290,7 +290,7 @@ impl PagedPatchSplitRows {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     fn count_rows(lines: &[gitcomet_core::domain::DiffLine]) -> usize {
         use gitcomet_core::domain::DiffLineKind as DK;
 

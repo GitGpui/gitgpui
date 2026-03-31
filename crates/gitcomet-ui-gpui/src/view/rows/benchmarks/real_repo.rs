@@ -289,7 +289,7 @@ impl RealRepoFixture {
         let sidebar_rows = GitCometView::branch_sidebar_rows(&repo_state);
         let graph = history_graph::compute_graph(
             commits.as_slice(),
-            AppTheme::zed_ayu_dark(),
+            AppTheme::gitcomet_dark(),
             std::iter::empty(),
             None,
         );
@@ -332,7 +332,7 @@ impl RealRepoFixture {
         );
         let graph = history_graph::compute_graph(
             commits.as_slice(),
-            AppTheme::zed_ayu_dark(),
+            AppTheme::gitcomet_dark(),
             std::iter::empty(),
             None,
         );

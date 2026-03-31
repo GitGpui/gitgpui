@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(super) struct CachedDiffTextSegment {
     pub(super) text: SharedString,

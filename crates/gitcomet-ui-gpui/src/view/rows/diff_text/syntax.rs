@@ -1931,7 +1931,7 @@ pub(super) fn syntax_tokens_for_line_shared(
     tokens
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(super) fn syntax_tokens_for_line(
     text: &str,
     language: DiffSyntaxLanguage,

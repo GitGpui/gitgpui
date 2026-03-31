@@ -110,12 +110,12 @@ pub(super) fn diff_target_preview_flags(target: &DiffTarget) -> DiffTargetPrevie
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(super) fn diff_target_wants_image_preview(target: &DiffTarget) -> bool {
     diff_target_preview_flags(target).wants_image
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
     diff_target_preview_flags(target).is_svg
 }

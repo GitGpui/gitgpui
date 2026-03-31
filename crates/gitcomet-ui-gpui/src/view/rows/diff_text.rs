@@ -779,7 +779,7 @@ fn segment_overlaps_sorted_ranges(
         .is_some_and(|range| segment_start < range.end && segment_end > range.start)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn build_diff_text_segments(
     text: &str,
     word_ranges: &[Range<usize>],
@@ -1139,7 +1139,7 @@ fn styled_text_to_cached_from_buf(
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn segments_to_cached_styled_text(
     theme: AppTheme,
     segments: &[CachedDiffTextSegment],
@@ -2792,7 +2792,7 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_byte_rang
     })
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn styled_text_for_diff_segments(
     theme: AppTheme,
     segments: &[CachedDiffTextSegment],
@@ -3482,7 +3482,7 @@ mod tests {
 
     #[test]
     fn cached_styled_text_syntax_only_expands_tabs_without_segment_build() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let styled = build_cached_diff_styled_text(
             theme,
             "\tlet value = 42;",

@@ -712,7 +712,7 @@ mod tests {
 
     #[test]
     fn inserted_secondary_parent_lane_has_no_previous_column() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("merge", vec!["base", "side"]),
             commit("side", vec!["root"]),
@@ -731,7 +731,7 @@ mod tests {
 
     #[test]
     fn parents_above_the_current_row_do_not_leave_dead_lanes() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![commit("base", Vec::new()), commit("tip", vec!["base"])];
 
         let graph = compute_graph(&commits, theme, std::iter::empty::<&str>(), None);
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn linear_visible_history_keeps_single_lane_shape() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("c2", vec!["c1"]),
             commit("c1", vec!["c0"]),
@@ -771,7 +771,7 @@ mod tests {
 
     #[test]
     fn active_head_target_later_in_linear_history_still_uses_seeded_lane() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("feature", vec!["main"]),
             commit("main", vec!["base"]),
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn duplicate_branch_heads_do_not_create_extra_lanes() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("feature", vec!["base"]),
             commit("main", vec!["base"]),

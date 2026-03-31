@@ -2409,7 +2409,7 @@ mod tests {
 
         let dark_highlights = Arc::clone(&markdown_preview_row_styled_text(theme, &row).highlights);
         let dark = markdown_preview_row_styled_text(theme, &row);
-        let light = markdown_preview_row_styled_text(AppTheme::zed_one_light(), &row);
+        let light = markdown_preview_row_styled_text(AppTheme::gitcomet_light(), &row);
 
         assert_eq!(dark.text.as_ref(), "fn    main() { let x = 1; }");
         assert!(

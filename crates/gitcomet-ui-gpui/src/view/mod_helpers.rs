@@ -2000,7 +2000,6 @@ pub(super) enum PopoverKind {
         message: String,
     },
     CloneRepo,
-    #[allow(dead_code)]
     Settings,
     SettingsThemeMenu,
     SettingsDateFormatMenu,
