@@ -685,6 +685,31 @@ fn build_original_pieces(text: &str, chunk_bytes: usize) -> Vec<Piece> {
 
 fn append_text_to_core(core: &mut TextModelCore, text: &str) -> Range<usize> {
     let start = core.len;
+    if text.is_empty() {
+        return start..start;
+    }
+
+    if core.len == 0 && core.pieces.is_empty() {
+        let add_chunks = Arc::make_mut(&mut core.add_chunks);
+        let chunk_index = add_chunks.len();
+        let chunk = Arc::new(String::from(text));
+        let len = chunk.len();
+        add_chunks.push(chunk);
+
+        core.ascii_only = text.is_ascii();
+        core.pieces.push(Piece {
+            buffer: BufferId::Add,
+            chunk_index,
+            start: 0,
+            len,
+        });
+        core.len = len;
+        core.line_index = LineIndex::from_text(text);
+        core.revision = core.revision.wrapping_add(1).max(1);
+        core.materialized = OnceLock::new();
+        return 0..len;
+    }
+
     if let Some(inserted_piece) = append_add_piece(core, text) {
         core.ascii_only &= text.is_ascii();
         push_piece_merged(&mut core.pieces, inserted_piece);

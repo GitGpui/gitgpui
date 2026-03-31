@@ -25,11 +25,15 @@ pub(super) enum HistoryColResizeHandle {
 pub(super) struct HistoryColResizeState {
     pub(super) handle: HistoryColResizeHandle,
     pub(super) start_x: Pixels,
-    pub(super) start_branch: Pixels,
-    pub(super) start_graph: Pixels,
-    pub(super) start_author: Pixels,
-    pub(super) start_date: Pixels,
-    pub(super) start_sha: Pixels,
+    pub(super) start_width: Pixels,
+    pub(super) current_width: Pixels,
+    pub(super) drag_delta_sign: f32,
+    pub(super) min_width: Pixels,
+    pub(super) static_max_width: Pixels,
+    pub(super) other_fixed_width: Pixels,
+    pub(super) bounds_available_width: Pixels,
+    pub(super) max_width: Pixels,
+    pub(super) visible_columns: (bool, bool, bool),
 }
 
 pub(super) struct ResizeDragGhost;
@@ -270,12 +274,13 @@ pub(super) enum PaneResizeHandle {
     Details,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PaneResizeState {
     pub(super) handle: PaneResizeHandle,
     pub(super) start_x: Pixels,
-    pub(super) start_sidebar: Pixels,
-    pub(super) start_details: Pixels,
+    pub(super) start_width: Pixels,
+    pub(super) other_width: Pixels,
+    pub(super) drag_delta_sign: f32,
     pub(super) bounds_total_w: Pixels,
     pub(super) bounds_sidebar_collapsed: bool,
     pub(super) bounds_details_collapsed: bool,
@@ -294,10 +299,26 @@ impl PaneResizeState {
         sidebar_collapsed: bool,
         details_collapsed: bool,
     ) -> Self {
-        let (min_width, max_width) = super::pane_resize_drag_width_bounds(
-            handle,
-            start_sidebar,
-            start_details,
+        let (min_width, start_width, other_width, other_collapsed, drag_delta_sign) = match handle {
+            PaneResizeHandle::Sidebar => (
+                px(super::SIDEBAR_MIN_PX),
+                start_sidebar,
+                start_details,
+                details_collapsed,
+                1.0,
+            ),
+            PaneResizeHandle::Details => (
+                px(super::DETAILS_MIN_PX),
+                start_details,
+                start_sidebar,
+                sidebar_collapsed,
+                -1.0,
+            ),
+        };
+        let (_, max_width) = super::pane_resize_drag_width_bounds_for_other_pane(
+            min_width,
+            other_width,
+            other_collapsed,
             total_w,
             sidebar_collapsed,
             details_collapsed,
@@ -305,8 +326,9 @@ impl PaneResizeState {
         Self {
             handle,
             start_x,
-            start_sidebar,
-            start_details,
+            start_width,
+            other_width,
+            drag_delta_sign,
             bounds_total_w: total_w,
             bounds_sidebar_collapsed: sidebar_collapsed,
             bounds_details_collapsed: details_collapsed,
@@ -328,10 +350,14 @@ impl PaneResizeState {
         {
             (self.min_width, self.max_width)
         } else {
-            super::pane_resize_drag_width_bounds(
-                self.handle,
-                self.start_sidebar,
-                self.start_details,
+            let other_collapsed = match self.handle {
+                PaneResizeHandle::Sidebar => details_collapsed,
+                PaneResizeHandle::Details => sidebar_collapsed,
+            };
+            super::pane_resize_drag_width_bounds_for_other_pane(
+                self.min_width,
+                self.other_width,
+                other_collapsed,
                 total_w,
                 sidebar_collapsed,
                 details_collapsed,
@@ -909,6 +935,8 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolver_pending_recompute_seq: u64,
     /// Resolved-output outline metadata (provenance, conflict markers, source index).
     pub(super) resolved_outline: ResolvedOutlineData,
+    /// Cached per-line gutter render state for resolved-output preview rows.
+    pub(super) resolved_outline_gutter_rows: Vec<conflict_resolver::ResolvedOutputGutterRow>,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Cached image previews for the merge-input sides.
@@ -953,6 +981,7 @@ impl Default for ConflictResolverUiState {
             conflict_rev: 0,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
+            resolved_outline_gutter_rows: Vec::new(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
@@ -1418,16 +1447,17 @@ impl ConflictResolverUiState {
             self.three_way_line_count(ThreeWayColumn::Ours),
             self.three_way_line_count(ThreeWayColumn::Theirs),
         );
+        let three_way_visible_projection =
+            conflict_resolver::build_three_way_visible_projection_with_resolved_flags(
+                self.three_way_len,
+                &maps.conflict_ranges[1],
+                &maps.conflict_resolved,
+                self.hide_resolved,
+            );
         self.apply_three_way_conflict_maps(maps);
         match &mut self.mode_state {
             ConflictModeState::Streamed(s) => {
-                s.three_way_visible_projection =
-                    conflict_resolver::build_three_way_visible_projection(
-                        self.three_way_len,
-                        &self.three_way_conflict_ranges[ThreeWayColumn::Ours],
-                        &self.marker_segments,
-                        self.hide_resolved,
-                    );
+                s.three_way_visible_projection = three_way_visible_projection;
             }
         }
         self.three_way_visible_state_ready = true;
@@ -1638,6 +1668,7 @@ mod conflict_resolver_ui_state_tests {
             conflict_ranges: [vec![0..3], vec![0..5], vec![0..4]],
             line_conflict_maps: [vec![Some(0); 3], vec![Some(0); 5], vec![Some(0); 4]],
             conflict_has_base: vec![true],
+            conflict_resolved: vec![true],
         };
         state.apply_three_way_conflict_maps(maps.clone());
 

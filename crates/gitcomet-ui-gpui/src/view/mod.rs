@@ -35,6 +35,7 @@ mod app_model;
 mod branch_sidebar;
 mod caches;
 mod chrome;
+pub(crate) mod clone_progress;
 mod color;
 pub(crate) mod components;
 pub(crate) mod conflict_resolver;
@@ -155,17 +156,8 @@ pub(in crate::view) fn pane_resize_handles_width(
     sidebar_collapsed: bool,
     details_collapsed: bool,
 ) -> Pixels {
-    let sidebar_handle = if sidebar_collapsed {
-        px(0.0)
-    } else {
-        px(PANE_RESIZE_HANDLE_PX)
-    };
-    let details_handle = if details_collapsed {
-        px(0.0)
-    } else {
-        px(PANE_RESIZE_HANDLE_PX)
-    };
-    sidebar_handle + details_handle
+    let visible_handles = u8::from(!sidebar_collapsed).saturating_add(u8::from(!details_collapsed));
+    px(f32::from(visible_handles) * PANE_RESIZE_HANDLE_PX)
 }
 
 pub(in crate::view) fn pane_resize_drag_width_bounds(
@@ -176,33 +168,40 @@ pub(in crate::view) fn pane_resize_drag_width_bounds(
     sidebar_collapsed: bool,
     details_collapsed: bool,
 ) -> (Pixels, Pixels) {
+    let (min_width, other_width, other_collapsed) = match handle {
+        PaneResizeHandle::Sidebar => (px(SIDEBAR_MIN_PX), start_details, details_collapsed),
+        PaneResizeHandle::Details => (px(DETAILS_MIN_PX), start_sidebar, sidebar_collapsed),
+    };
+    pane_resize_drag_width_bounds_for_other_pane(
+        min_width,
+        other_width,
+        other_collapsed,
+        total_w,
+        sidebar_collapsed,
+        details_collapsed,
+    )
+}
+
+#[inline]
+pub(in crate::view) fn pane_resize_drag_width_bounds_for_other_pane(
+    min_width: Pixels,
+    other_width: Pixels,
+    other_collapsed: bool,
+    total_w: Pixels,
+    sidebar_collapsed: bool,
+    details_collapsed: bool,
+) -> (Pixels, Pixels) {
     let handles_w = pane_resize_handles_width(sidebar_collapsed, details_collapsed);
     let main_min = px(MAIN_MIN_PX);
-    let sidebar_min = px(SIDEBAR_MIN_PX);
-    let details_min = px(DETAILS_MIN_PX);
     let collapsed_w = px(PANE_COLLAPSED_PX);
     let available_w = total_w - main_min - handles_w;
-
-    match handle {
-        PaneResizeHandle::Sidebar => {
-            let details_w = if details_collapsed {
-                collapsed_w
-            } else {
-                start_details
-            };
-            let max_sidebar = (available_w - details_w).max(sidebar_min);
-            (sidebar_min, max_sidebar)
-        }
-        PaneResizeHandle::Details => {
-            let sidebar_w = if sidebar_collapsed {
-                collapsed_w
-            } else {
-                start_sidebar
-            };
-            let max_details = (available_w - sidebar_w).max(details_min);
-            (details_min, max_details)
-        }
-    }
+    let other_width = if other_collapsed {
+        collapsed_w
+    } else {
+        other_width
+    };
+    let max_width = (available_w - other_width).max(min_width);
+    (min_width, max_width)
 }
 
 pub(in crate::view) fn next_pane_resize_drag_width(
@@ -215,11 +214,9 @@ pub(in crate::view) fn next_pane_resize_drag_width(
     let dx = current_x - state.start_x;
     let (min_width, max_width) =
         state.drag_width_bounds(total_w, sidebar_collapsed, details_collapsed);
-
-    match state.handle {
-        PaneResizeHandle::Sidebar => (state.start_sidebar + dx).max(min_width).min(max_width),
-        PaneResizeHandle::Details => (state.start_details - dx).max(min_width).min(max_width),
-    }
+    (state.start_width + (dx * state.drag_delta_sign))
+        .max(min_width)
+        .min(max_width)
 }
 
 /// Pure helper: compute the next diff-split ratio for a single drag step.
@@ -242,10 +239,26 @@ pub(in crate::view) fn next_diff_split_drag_ratio(
     Some((next_left / available).clamp(0.0, 1.0))
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
+#[allow(dead_code)]
+#[inline]
+pub(in crate::view) fn diff_split_ratio_bounds(
+    available: Pixels,
+    min_col_w: Pixels,
+) -> Option<(f32, f32)> {
+    if available <= min_col_w * 2.0 {
+        return None;
+    }
+    let available_f: f32 = available.into();
+    let min_col_f: f32 = min_col_w.into();
+    let min_ratio = min_col_f / available_f;
+    Some((min_ratio, 1.0 - min_ratio))
+}
+
 /// Returns `(available, min_col_w)` for the diff-split layout given the main
 /// pane's content width.  Bundles the handle-width and column-min constants so
 /// callers do not need to reference them directly.
-#[cfg(feature = "benchmarks")]
+#[inline]
 pub(in crate::view) fn diff_split_drag_params(main_pane_content_width: Pixels) -> (Pixels, Pixels) {
     let handle_w = px(PANE_RESIZE_HANDLE_PX);
     let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
@@ -253,13 +266,12 @@ pub(in crate::view) fn diff_split_drag_params(main_pane_content_width: Pixels) -
     (available, min_col_w)
 }
 
-/// Pure helper: compute left/right column widths from a diff-split ratio.
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) fn diff_split_column_widths(
-    main_pane_content_width: Pixels,
+#[inline]
+pub(in crate::view) fn diff_split_column_widths_from_available(
+    available: Pixels,
+    min_col_w: Pixels,
     ratio: f32,
 ) -> (Pixels, Pixels) {
-    let (available, min_col_w) = diff_split_drag_params(main_pane_content_width);
     let left_w = if available <= min_col_w * 2.0 {
         available * 0.5
     } else {

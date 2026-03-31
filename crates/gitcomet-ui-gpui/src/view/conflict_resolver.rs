@@ -1,6 +1,7 @@
 mod split_row_index;
 mod word_highlight;
 
+use super::CachedDiffStyledText;
 use split_row_index::SparseLineIndex;
 #[cfg(test)]
 use split_row_index::{CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES, CONFLICT_SPLIT_PAGE_SIZE};
@@ -45,6 +46,99 @@ impl ConflictRenderingMode {
 pub enum ConflictPickSide {
     Ours,
     Theirs,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ConflictSplitStyledTextCacheRow {
+    ours: Option<CachedDiffStyledText>,
+    theirs: Option<CachedDiffStyledText>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct ConflictSplitStyledTextCache {
+    rows: Vec<ConflictSplitStyledTextCacheRow>,
+    entries: usize,
+}
+
+impl ConflictSplitStyledTextCache {
+    pub(in crate::view) fn with_row_capacity(row_count: usize) -> Self {
+        let mut cache = Self::default();
+        cache
+            .rows
+            .resize_with(row_count, ConflictSplitStyledTextCacheRow::default);
+        cache
+    }
+
+    fn slot(
+        row: &ConflictSplitStyledTextCacheRow,
+        side: ConflictPickSide,
+    ) -> &Option<CachedDiffStyledText> {
+        match side {
+            ConflictPickSide::Ours => &row.ours,
+            ConflictPickSide::Theirs => &row.theirs,
+        }
+    }
+
+    fn slot_mut(
+        row: &mut ConflictSplitStyledTextCacheRow,
+        side: ConflictPickSide,
+    ) -> &mut Option<CachedDiffStyledText> {
+        match side {
+            ConflictPickSide::Ours => &mut row.ours,
+            ConflictPickSide::Theirs => &mut row.theirs,
+        }
+    }
+
+    fn ensure_row(&mut self, row_ix: usize) -> &mut ConflictSplitStyledTextCacheRow {
+        if row_ix >= self.rows.len() {
+            self.rows
+                .resize_with(row_ix + 1, ConflictSplitStyledTextCacheRow::default);
+        }
+        &mut self.rows[row_ix]
+    }
+
+    pub(in crate::view) fn get(
+        &self,
+        key: &(usize, ConflictPickSide),
+    ) -> Option<&CachedDiffStyledText> {
+        let (row_ix, side) = *key;
+        let row = self.rows.get(row_ix)?;
+        Self::slot(row, side).as_ref()
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::view) fn contains_key(&self, key: &(usize, ConflictPickSide)) -> bool {
+        self.get(key).is_some()
+    }
+
+    pub(in crate::view) fn insert(
+        &mut self,
+        key: (usize, ConflictPickSide),
+        value: CachedDiffStyledText,
+    ) -> Option<CachedDiffStyledText> {
+        let (row_ix, side) = key;
+        let slot = Self::slot_mut(self.ensure_row(row_ix), side);
+        let previous = slot.replace(value);
+        if previous.is_none() {
+            self.entries = self.entries.saturating_add(1);
+        }
+        previous
+    }
+
+    pub(in crate::view) fn clear(&mut self) {
+        self.rows.clear();
+        self.entries = 0;
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::view) fn len(&self) -> usize {
+        self.entries
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::view) fn is_empty(&self) -> bool {
+        self.entries == 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -171,15 +265,13 @@ impl AsRef<str> for ConflictText {
 
 impl From<String> for ConflictText {
     fn from(value: String) -> Self {
-        Self {
-            storage: ConflictTextStorage::Owned(value),
-        }
+        Self::shared(Arc::from(value))
     }
 }
 
 impl From<&str> for ConflictText {
     fn from(value: &str) -> Self {
-        value.to_string().into()
+        Self::shared(Arc::from(value))
     }
 }
 
@@ -267,6 +359,115 @@ impl ResolvedLineSource {
     }
 }
 
+/// Packed per-line gutter state for resolved-output preview rows.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) struct ResolvedOutputGutterRow(u32);
+
+impl ResolvedOutputGutterRow {
+    const SOURCE_MASK: u32 = 0b11;
+    const SOURCE_A: u32 = 0;
+    const SOURCE_B: u32 = 1;
+    const SOURCE_C: u32 = 2;
+    const SOURCE_MANUAL: u32 = 3;
+    const IS_START_FLAG: u32 = 1 << 2;
+    const IS_END_FLAG: u32 = 1 << 3;
+    const UNRESOLVED_FLAG: u32 = 1 << 4;
+    const CONFLICT_SHIFT: u32 = 5;
+    const CONFLICT_VALUE_MASK: u32 = u32::MAX >> Self::CONFLICT_SHIFT;
+
+    pub(in crate::view) fn new(
+        source: ResolvedLineSource,
+        marker_conflict_ix: Option<usize>,
+        is_start: bool,
+        is_end: bool,
+        unresolved: bool,
+    ) -> Self {
+        let mut bits = match source {
+            ResolvedLineSource::A => Self::SOURCE_A,
+            ResolvedLineSource::B => Self::SOURCE_B,
+            ResolvedLineSource::C => Self::SOURCE_C,
+            ResolvedLineSource::Manual => Self::SOURCE_MANUAL,
+        };
+
+        if let Some(conflict_ix) = marker_conflict_ix {
+            if is_start {
+                bits |= Self::IS_START_FLAG;
+            }
+            if is_end {
+                bits |= Self::IS_END_FLAG;
+            }
+            if unresolved {
+                bits |= Self::UNRESOLVED_FLAG;
+            }
+            let encoded_conflict = u32::try_from(conflict_ix)
+                .ok()
+                .and_then(|ix| ix.checked_add(1))
+                .unwrap_or(Self::CONFLICT_VALUE_MASK)
+                .min(Self::CONFLICT_VALUE_MASK);
+            bits |= encoded_conflict << Self::CONFLICT_SHIFT;
+        }
+
+        Self(bits)
+    }
+
+    #[inline(always)]
+    pub(in crate::view) fn source(self) -> ResolvedLineSource {
+        match self.0 & Self::SOURCE_MASK {
+            Self::SOURCE_A => ResolvedLineSource::A,
+            Self::SOURCE_B => ResolvedLineSource::B,
+            Self::SOURCE_C => ResolvedLineSource::C,
+            _ => ResolvedLineSource::Manual,
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::view) fn badge_char(self) -> char {
+        match self.0 & Self::SOURCE_MASK {
+            Self::SOURCE_A => 'A',
+            Self::SOURCE_B => 'B',
+            Self::SOURCE_C => 'C',
+            _ => 'M',
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::view) fn has_marker(self) -> bool {
+        (self.0 >> Self::CONFLICT_SHIFT) != 0
+    }
+
+    #[inline(always)]
+    pub(in crate::view) fn marker_conflict_ix(self) -> Option<usize> {
+        let encoded_conflict = self.0 >> Self::CONFLICT_SHIFT;
+        (encoded_conflict != 0).then(|| (encoded_conflict - 1) as usize)
+    }
+
+    #[inline(always)]
+    pub(in crate::view) fn is_start(self) -> bool {
+        (self.0 & Self::IS_START_FLAG) != 0
+    }
+
+    #[inline(always)]
+    pub(in crate::view) fn is_end(self) -> bool {
+        (self.0 & Self::IS_END_FLAG) != 0
+    }
+
+    #[inline(always)]
+    pub(in crate::view) fn unresolved(self) -> bool {
+        (self.0 & Self::UNRESOLVED_FLAG) != 0
+    }
+
+    #[inline(always)]
+    pub(in crate::view) fn manual_without_marker(self) -> bool {
+        !self.has_marker() && (self.0 & Self::SOURCE_MASK) == Self::SOURCE_MANUAL
+    }
+}
+
+impl Default for ResolvedOutputGutterRow {
+    fn default() -> Self {
+        Self(Self::SOURCE_MANUAL)
+    }
+}
+
 /// Per-line provenance metadata for the resolved output outline.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedLineMeta {
@@ -315,7 +516,10 @@ impl SourceLineKey {
 pub type WordHighlights = FxHashMap<usize, Vec<Range<usize>>>;
 
 /// Per-line pair of `(old, new)` word-highlight ranges for a two-way diff row.
-pub type TwoWayWordHighlightPair = (Vec<Range<usize>>, Vec<Range<usize>>);
+pub type TwoWayWordHighlightPair = (
+    crate::view::word_diff::WordDiffRanges,
+    crate::view::word_diff::WordDiffRanges,
+);
 
 /// Shared context rows kept around each block-local two-way conflict diff.
 ///
@@ -1241,9 +1445,11 @@ enum ResolvedOutputFragmentSource {
 }
 
 const RESOLVED_OUTPUT_SPARSE_LINE_INDEX_MIN_LINES: usize = LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
+const RESOLVED_OUTPUT_SPAN_CHECKPOINT_STRIDE: usize = 256;
 
 #[derive(Clone, Debug)]
 enum ResolvedOutputFragmentLineIndex {
+    SingleLine,
     Dense(Arc<[usize]>),
     Sparse(SparseLineIndex),
 }
@@ -1251,6 +1457,7 @@ enum ResolvedOutputFragmentLineIndex {
 impl ResolvedOutputFragmentLineIndex {
     fn line_text<'a>(&self, text: &'a str, line_ix: usize) -> Option<&'a str> {
         match self {
+            Self::SingleLine => (line_ix == 0).then_some(text.strip_suffix('\n').unwrap_or(text)),
             Self::Dense(line_starts) => {
                 Some(line_text_from_starts(text, line_starts.as_ref(), line_ix))
             }
@@ -1258,8 +1465,41 @@ impl ResolvedOutputFragmentLineIndex {
         }
     }
 
+    fn for_each_line_text<'a>(
+        &self,
+        text: &'a str,
+        range: Range<usize>,
+        mut visit: impl FnMut(usize, &'a str),
+    ) {
+        if range.start >= range.end {
+            return;
+        }
+
+        match self {
+            Self::SingleLine => {
+                if range.start == 0 {
+                    visit(0, text.strip_suffix('\n').unwrap_or(text));
+                }
+            }
+            Self::Dense(line_starts) => {
+                let line_starts = line_starts.as_ref();
+                for line_ix in range {
+                    visit(line_ix, line_text_from_starts(text, line_starts, line_ix));
+                }
+            }
+            Self::Sparse(line_index) => {
+                for line_ix in range {
+                    if let Some(line) = line_index.line_text(text, line_ix) {
+                        visit(line_ix, line);
+                    }
+                }
+            }
+        }
+    }
+
     fn indexed_line_start_count(&self, line_count: usize, ends_with_newline: bool) -> usize {
         match self {
+            Self::SingleLine => usize::from(line_count > 0) + usize::from(ends_with_newline),
             Self::Dense(line_starts) => line_starts.len(),
             Self::Sparse(_) => {
                 if line_count == 0 {
@@ -1274,6 +1514,7 @@ impl ResolvedOutputFragmentLineIndex {
     #[cfg(all(test, feature = "benchmarks"))]
     fn metadata_byte_size(&self) -> usize {
         match self {
+            Self::SingleLine => 0,
             Self::Dense(line_starts) => line_starts.len() * std::mem::size_of::<usize>(),
             Self::Sparse(line_index) => line_index.metadata_byte_size(),
         }
@@ -1292,38 +1533,62 @@ struct ResolvedOutputFragment {
 }
 
 impl ResolvedOutputFragment {
-    fn line_text<'a>(&self, segments: &'a [ConflictSegment], line_ix: usize) -> Option<&'a str> {
-        let text = match self.source {
+    fn source_text<'a>(&self, segments: &'a [ConflictSegment]) -> Option<&'a str> {
+        match self.source {
             ResolvedOutputFragmentSource::TextSegment { segment_ix } => {
                 match segments.get(segment_ix) {
-                    Some(ConflictSegment::Text(text)) => text.as_str(),
-                    _ => return None,
+                    Some(ConflictSegment::Text(text)) => Some(text.as_str()),
+                    _ => None,
                 }
             }
             ResolvedOutputFragmentSource::BlockBase { segment_ix } => {
                 match segments.get(segment_ix) {
-                    Some(ConflictSegment::Block(block)) => block.base.as_deref().unwrap_or(""),
-                    _ => return None,
+                    Some(ConflictSegment::Block(block)) => {
+                        Some(block.base.as_deref().unwrap_or(""))
+                    }
+                    _ => None,
                 }
             }
             ResolvedOutputFragmentSource::BlockOurs { segment_ix } => {
                 match segments.get(segment_ix) {
-                    Some(ConflictSegment::Block(block)) => block.ours.as_str(),
-                    _ => return None,
+                    Some(ConflictSegment::Block(block)) => Some(block.ours.as_str()),
+                    _ => None,
                 }
             }
             ResolvedOutputFragmentSource::BlockTheirs { segment_ix } => {
                 match segments.get(segment_ix) {
-                    Some(ConflictSegment::Block(block)) => block.theirs.as_str(),
-                    _ => return None,
+                    Some(ConflictSegment::Block(block)) => Some(block.theirs.as_str()),
+                    _ => None,
                 }
             }
-        };
+        }
+    }
+
+    fn line_text<'a>(&self, segments: &'a [ConflictSegment], line_ix: usize) -> Option<&'a str> {
+        let text = self.source_text(segments)?;
         if line_ix < self.line_count {
             self.line_index.line_text(text, line_ix)
         } else {
             None
         }
+    }
+
+    fn for_each_line_text<'a>(
+        &self,
+        segments: &'a [ConflictSegment],
+        range: Range<usize>,
+        mut visit: impl FnMut(usize, &'a str),
+    ) {
+        let Some(text) = self.source_text(segments) else {
+            return;
+        };
+        let start = range.start.min(self.line_count);
+        let end = range.end.min(self.line_count);
+        if start >= end {
+            return;
+        }
+        self.line_index
+            .for_each_line_text(text, start..end, visit);
     }
 
     fn widest_line(&self) -> Option<(usize, usize)> {
@@ -1375,6 +1640,7 @@ impl ResolvedOutputSpan {
 pub struct ResolvedOutputProjection {
     fragments: Vec<ResolvedOutputFragment>,
     spans: Vec<ResolvedOutputSpan>,
+    span_checkpoints: Vec<usize>,
     conflict_line_ranges: Vec<std::ops::Range<usize>>,
     line_count: usize,
     widest_line_ix: usize,
@@ -1408,14 +1674,36 @@ impl ResolvedOutputProjection {
             }
         }
 
-        fn dense_line_starts(text: &str) -> Arc<[usize]> {
+        fn dense_line_starts_and_widest_line(text: &str) -> (Arc<[usize]>, usize, usize, usize) {
             let bytes = text.as_bytes();
-            let mut starts = Vec::new();
+            let mut starts = Vec::with_capacity(bytes.len().saturating_div(64).saturating_add(1));
             starts.push(0usize);
+            let mut line_count = 0usize;
+            let mut line_start = 0usize;
+            let mut widest_line_ix = 0usize;
+            let mut widest_line_len = 0usize;
+
             for pos in memchr::memchr_iter(b'\n', bytes) {
-                starts.push(pos + 1);
+                let line_len = pos.saturating_sub(line_start);
+                if line_len > widest_line_len {
+                    widest_line_len = line_len;
+                    widest_line_ix = line_count;
+                }
+                line_count = line_count.saturating_add(1);
+                line_start = pos.saturating_add(1);
+                starts.push(line_start);
             }
-            starts.into()
+
+            if line_start < bytes.len() {
+                let line_len = bytes.len().saturating_sub(line_start);
+                if line_len > widest_line_len {
+                    widest_line_len = line_len;
+                    widest_line_ix = line_count;
+                }
+                line_count = line_count.saturating_add(1);
+            }
+
+            (starts.into(), line_count, widest_line_ix, widest_line_len)
         }
 
         fn fragment_line_stats(
@@ -1429,24 +1717,55 @@ impl ResolvedOutputProjection {
             usize,
         ) {
             let bytes = text.as_bytes();
-            let line_index = SparseLineIndex::for_text(text);
-            let line_count = line_index.line_count();
-            let (widest_line_ix, widest_line_len) = line_index.widest_line().unwrap_or((0, 0));
             let ends_with_newline = bytes.last().copied() == Some(b'\n');
-            let newline_count = if line_count == 0 {
-                0
-            } else if ends_with_newline {
+            let (line_index, line_count, widest_line_ix, widest_line_len) = if ends_with_newline
+                && bytes
+                    .iter()
+                    .take(bytes.len().saturating_sub(1))
+                    .all(|&b| b != b'\n')
+            {
+                (
+                    ResolvedOutputFragmentLineIndex::SingleLine,
+                    1,
+                    0,
+                    bytes.len() - 1,
+                )
+            } else if !ends_with_newline && bytes.iter().all(|&b| b != b'\n') {
+                (
+                    ResolvedOutputFragmentLineIndex::SingleLine,
+                    1,
+                    0,
+                    bytes.len(),
+                )
+            } else {
+                let (dense_line_starts, line_count, widest_line_ix, widest_line_len) =
+                    dense_line_starts_and_widest_line(text);
+                if line_count >= RESOLVED_OUTPUT_SPARSE_LINE_INDEX_MIN_LINES {
+                    let line_index = SparseLineIndex::for_text(text);
+                    let (widest_line_ix, widest_line_len) =
+                        line_index.widest_line().unwrap_or((0, 0));
+                    (
+                        ResolvedOutputFragmentLineIndex::Sparse(line_index),
+                        line_count,
+                        widest_line_ix,
+                        widest_line_len,
+                    )
+                } else {
+                    (
+                        ResolvedOutputFragmentLineIndex::Dense(dense_line_starts),
+                        line_count,
+                        widest_line_ix,
+                        widest_line_len,
+                    )
+                }
+            };
+            let newline_count = if ends_with_newline {
                 line_count
             } else {
                 line_count.saturating_sub(1)
             };
-            let fragment_index = if line_count >= RESOLVED_OUTPUT_SPARSE_LINE_INDEX_MIN_LINES {
-                ResolvedOutputFragmentLineIndex::Sparse(line_index)
-            } else {
-                ResolvedOutputFragmentLineIndex::Dense(dense_line_starts(text))
-            };
             (
-                fragment_index,
+                line_index,
                 newline_count,
                 ends_with_newline,
                 line_count,
@@ -1458,6 +1777,7 @@ impl ResolvedOutputProjection {
         fn structural_output_hash(
             fragments: &[ResolvedOutputFragment],
             spans: &[ResolvedOutputSpan],
+            span_checkpoints: &[usize],
             conflict_line_ranges: &[std::ops::Range<usize>],
             line_count: usize,
         ) -> u64 {
@@ -1467,6 +1787,7 @@ impl ResolvedOutputProjection {
             line_count.hash(&mut hasher);
             fragments.len().hash(&mut hasher);
             spans.len().hash(&mut hasher);
+            span_checkpoints.len().hash(&mut hasher);
             conflict_line_ranges.len().hash(&mut hasher);
             for fragment in fragments {
                 fragment.source.hash(&mut hasher);
@@ -1497,6 +1818,9 @@ impl ResolvedOutputProjection {
                         text.hash(&mut hasher);
                     }
                 }
+            }
+            for &checkpoint in span_checkpoints {
+                checkpoint.hash(&mut hasher);
             }
             for range in conflict_line_ranges {
                 range.start.hash(&mut hasher);
@@ -1558,6 +1882,33 @@ impl ResolvedOutputProjection {
                     Some(left)
                 }
             }
+        }
+
+        fn build_span_checkpoints(spans: &[ResolvedOutputSpan], line_count: usize) -> Vec<usize> {
+            if spans.is_empty() || line_count == 0 {
+                return Vec::new();
+            }
+
+            let checkpoint_count = line_count
+                .saturating_add(RESOLVED_OUTPUT_SPAN_CHECKPOINT_STRIDE - 1)
+                / RESOLVED_OUTPUT_SPAN_CHECKPOINT_STRIDE;
+            let mut checkpoints = Vec::with_capacity(checkpoint_count);
+            let mut span_ix = 0usize;
+
+            for checkpoint_ix in 0..checkpoint_count {
+                let visible_line = checkpoint_ix * RESOLVED_OUTPUT_SPAN_CHECKPOINT_STRIDE;
+                while span_ix + 1 < spans.len()
+                    && spans[span_ix]
+                        .visible_start()
+                        .saturating_add(spans[span_ix].len())
+                        <= visible_line
+                {
+                    span_ix = span_ix.saturating_add(1);
+                }
+                checkpoints.push(span_ix);
+            }
+
+            checkpoints
         }
 
         fn extend_conflict_line_range(
@@ -2008,9 +2359,11 @@ impl ResolvedOutputProjection {
             })
             .collect();
         let line_count = visible_line.max(1);
+        let span_checkpoints = build_span_checkpoints(&spans, line_count);
         let output_hash = structural_output_hash(
             &fragments,
             &spans,
+            &span_checkpoints,
             conflict_line_ranges.as_slice(),
             line_count,
         );
@@ -2018,6 +2371,7 @@ impl ResolvedOutputProjection {
         Self {
             fragments,
             spans,
+            span_checkpoints,
             conflict_line_ranges,
             line_count,
             widest_line_ix: widest_visible_line.0,
@@ -2056,9 +2410,34 @@ impl ResolvedOutputProjection {
                     ResolvedOutputSpan::MergedLine { text, .. } => text.capacity(),
                 })
                 .sum::<usize>();
+        let span_checkpoints = self.span_checkpoints.len() * std::mem::size_of::<usize>();
         let conflict_ranges =
             self.conflict_line_ranges.len() * std::mem::size_of::<std::ops::Range<usize>>();
-        fragments + spans + conflict_ranges
+        fragments + spans + span_checkpoints + conflict_ranges
+    }
+
+    fn span_ix_for_visible_line(&self, line_ix: usize) -> Option<usize> {
+        if self.spans.is_empty() || line_ix >= self.line_count {
+            return None;
+        }
+
+        let checkpoint_ix = line_ix / RESOLVED_OUTPUT_SPAN_CHECKPOINT_STRIDE;
+        let mut span_ix = self
+            .span_checkpoints
+            .get(checkpoint_ix)
+            .copied()
+            .unwrap_or_default();
+
+        while let Some(span) = self.spans.get(span_ix) {
+            let span_start = span.visible_start();
+            let span_end = span_start.saturating_add(span.len());
+            if line_ix < span_end {
+                return (line_ix >= span_start).then_some(span_ix);
+            }
+            span_ix = span_ix.saturating_add(1);
+        }
+
+        None
     }
 
     pub fn conflict_line_range(&self, conflict_ix: usize) -> Option<std::ops::Range<usize>> {
@@ -2069,15 +2448,83 @@ impl ResolvedOutputProjection {
         self.conflict_line_ranges.as_slice()
     }
 
+    pub fn for_each_line_text_in_range<'a>(
+        &'a self,
+        segments: &'a [ConflictSegment],
+        range: Range<usize>,
+        mut visit: impl FnMut(usize, &'a str),
+    ) {
+        if range.start >= range.end || range.start >= self.line_count || self.spans.is_empty() {
+            return;
+        }
+
+        let end = range.end.min(self.line_count);
+        let mut line_ix = range.start;
+        let mut span_ix = match self.span_ix_for_visible_line(line_ix) {
+            Some(span_ix) => span_ix,
+            None => return,
+        };
+
+        while line_ix < end {
+            let Some(span) = self.spans.get(span_ix) else {
+                break;
+            };
+            let span_start = span.visible_start();
+            let span_end = span_start.saturating_add(span.len());
+            if line_ix < span_start {
+                line_ix = span_start;
+                if line_ix >= end {
+                    break;
+                }
+            }
+
+            let visit_end = end.min(span_end);
+            match span {
+                ResolvedOutputSpan::SourceLines {
+                    visible_start,
+                    fragment_ix,
+                    fragment_line_start,
+                    ..
+                } => {
+                    let Some(fragment) = self.fragments.get(*fragment_ix) else {
+                        break;
+                    };
+                    let fragment_range_start =
+                        fragment_line_start.saturating_add(line_ix.saturating_sub(*visible_start));
+                    let fragment_range_end =
+                        fragment_range_start.saturating_add(visit_end.saturating_sub(line_ix));
+                    fragment.for_each_line_text(
+                        segments,
+                        fragment_range_start..fragment_range_end,
+                        |fragment_line_ix, line| {
+                            let visible_ix = visible_start.saturating_add(
+                                fragment_line_ix.saturating_sub(*fragment_line_start),
+                            );
+                            visit(visible_ix, line);
+                        },
+                    );
+                }
+                ResolvedOutputSpan::MergedLine {
+                    visible_index,
+                    text,
+                } => {
+                    if line_ix == *visible_index {
+                        visit(*visible_index, text.as_str());
+                    }
+                }
+            }
+
+            line_ix = visit_end;
+            span_ix = span_ix.saturating_add(1);
+        }
+    }
+
     pub fn line_text<'a>(
         &'a self,
         segments: &'a [ConflictSegment],
         line_ix: usize,
     ) -> Option<std::borrow::Cow<'a, str>> {
-        let span_ix = self
-            .spans
-            .partition_point(|span| span.visible_start() <= line_ix)
-            .checked_sub(1)?;
+        let span_ix = self.span_ix_for_visible_line(line_ix)?;
         let span = self.spans.get(span_ix)?;
         if line_ix >= span.visible_start().saturating_add(span.len()) {
             return None;
@@ -2240,29 +2687,215 @@ fn push_renumbered_block_diff_rows(
     old_line_offset: u32,
     new_line_offset: u32,
 ) -> bool {
-    let whole_block_diff_ran = text_line_count_usize(old_text)
-        > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES
-        || text_line_count_usize(new_text) > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
+    let old_line_count = text_line_count_usize(old_text);
+    let new_line_count = text_line_count_usize(new_text);
+    let whole_block_diff_ran = old_line_count > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES
+        || new_line_count > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
     debug_assert!(
         !whole_block_diff_ran,
         "bootstrap should not call side_by_side_rows on a giant conflict block"
     );
-    let block_rows = gitcomet_core::file_diff::side_by_side_rows(old_text, new_text);
-    for row in block_rows {
-        rows.push(gitcomet_core::file_diff::FileDiffRow {
-            kind: row.kind,
-            old_line: row
-                .old_line
-                .map(|l| l.saturating_add(old_line_offset).saturating_sub(1)),
-            new_line: row
-                .new_line
-                .map(|l| l.saturating_add(new_line_offset).saturating_sub(1)),
-            old: row.old,
-            new: row.new,
-            eof_newline: row.eof_newline,
-        });
+    if push_tiny_block_diff_rows(rows, old_text, new_text, old_line_offset, new_line_offset) {
+        return false;
     }
+    gitcomet_core::file_diff::append_side_by_side_rows_with_offsets(
+        rows,
+        old_text,
+        new_text,
+        old_line_offset,
+        new_line_offset,
+    );
     whole_block_diff_ran
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn collect_tiny_block_lines(text: &str) -> Option<([&str; 2], usize)> {
+    let mut lines = ["", ""];
+    let mut count = 0usize;
+    for line in text.lines() {
+        if count == lines.len() {
+            return None;
+        }
+        lines[count] = line;
+        count += 1;
+    }
+    Some((lines, count))
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn tiny_block_line_number(start: u32, offset: usize) -> u32 {
+    start.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX))
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_tiny_block_context_row(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    old_line: u32,
+    new_line: u32,
+    text: &str,
+) {
+    use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+
+    rows.push(FileDiffRow {
+        kind: FileDiffRowKind::Context,
+        old_line: Some(old_line),
+        new_line: Some(new_line),
+        old: Some(text.into()),
+        new: Some(text.into()),
+        eof_newline: None,
+    });
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_tiny_block_modify_row(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    old_line: u32,
+    new_line: u32,
+    old_text: &str,
+    new_text: &str,
+) {
+    use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+
+    rows.push(FileDiffRow {
+        kind: FileDiffRowKind::Modify,
+        old_line: Some(old_line),
+        new_line: Some(new_line),
+        old: Some(old_text.into()),
+        new: Some(new_text.into()),
+        eof_newline: None,
+    });
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_tiny_block_remove_row(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    old_line: u32,
+    text: &str,
+) {
+    use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+
+    rows.push(FileDiffRow {
+        kind: FileDiffRowKind::Remove,
+        old_line: Some(old_line),
+        new_line: None,
+        old: Some(text.into()),
+        new: None,
+        eof_newline: None,
+    });
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_tiny_block_add_row(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    new_line: u32,
+    text: &str,
+) {
+    use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+
+    rows.push(FileDiffRow {
+        kind: FileDiffRowKind::Add,
+        old_line: None,
+        new_line: Some(new_line),
+        old: None,
+        new: Some(text.into()),
+        eof_newline: None,
+    });
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_tiny_block_diff_rows(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    old_text: &str,
+    new_text: &str,
+    old_line_offset: u32,
+    new_line_offset: u32,
+) -> bool {
+    if (!old_text.is_empty() && !old_text.ends_with('\n'))
+        || (!new_text.is_empty() && !new_text.ends_with('\n'))
+    {
+        return false;
+    }
+
+    let Some((old_lines, old_len)) = collect_tiny_block_lines(old_text) else {
+        return false;
+    };
+    let Some((new_lines, new_len)) = collect_tiny_block_lines(new_text) else {
+        return false;
+    };
+    if old_len > 1 && new_len > 1 {
+        return false;
+    }
+
+    let mut prefix = 0usize;
+    while prefix < old_len && prefix < new_len && old_lines[prefix] == new_lines[prefix] {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while prefix + suffix < old_len
+        && prefix + suffix < new_len
+        && old_lines[old_len - 1 - suffix] == new_lines[new_len - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    for offset in 0..prefix {
+        push_tiny_block_context_row(
+            rows,
+            tiny_block_line_number(old_line_offset, offset),
+            tiny_block_line_number(new_line_offset, offset),
+            old_lines[offset],
+        );
+    }
+
+    let old_mid_start = prefix;
+    let new_mid_start = prefix;
+    let old_mid_len = old_len.saturating_sub(prefix + suffix);
+    let new_mid_len = new_len.saturating_sub(prefix + suffix);
+    let paired_len = old_mid_len.min(new_mid_len);
+
+    for offset in 0..paired_len {
+        let old_ix = old_mid_start + offset;
+        let new_ix = new_mid_start + offset;
+        push_tiny_block_modify_row(
+            rows,
+            tiny_block_line_number(old_line_offset, old_ix),
+            tiny_block_line_number(new_line_offset, new_ix),
+            old_lines[old_ix],
+            new_lines[new_ix],
+        );
+    }
+
+    for offset in paired_len..old_mid_len {
+        let old_ix = old_mid_start + offset;
+        push_tiny_block_remove_row(
+            rows,
+            tiny_block_line_number(old_line_offset, old_ix),
+            old_lines[old_ix],
+        );
+    }
+
+    for offset in paired_len..new_mid_len {
+        let new_ix = new_mid_start + offset;
+        push_tiny_block_add_row(
+            rows,
+            tiny_block_line_number(new_line_offset, new_ix),
+            new_lines[new_ix],
+        );
+    }
+
+    for offset in 0..suffix {
+        let old_ix = old_len - suffix + offset;
+        let new_ix = new_len - suffix + offset;
+        push_tiny_block_context_row(
+            rows,
+            tiny_block_line_number(old_line_offset, old_ix),
+            tiny_block_line_number(new_line_offset, new_ix),
+            old_lines[old_ix],
+        );
+    }
+
+    true
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -2312,8 +2945,8 @@ fn push_large_conflict_block_preview_rows(
             new_line: (omitted_theirs > 0).then(|| {
                 theirs_offset.saturating_add(u32::try_from(head_theirs_end).unwrap_or(u32::MAX))
             }),
-            old: Some(Arc::clone(&summary)),
-            new: Some(summary),
+            old: Some(Arc::clone(&summary).into()),
+            new: Some(summary.into()),
             eof_newline: None,
         });
     }
@@ -2391,7 +3024,10 @@ fn block_local_two_way_diff_rows_with_context_and_stats(
     Vec<gitcomet_core::file_diff::FileDiffRow>,
     BlockLocalTwoWayDiffStats,
 ) {
-    let mut rows = Vec::new();
+    let mut rows = Vec::with_capacity(estimate_block_local_two_way_row_capacity(
+        segments,
+        context_lines,
+    ));
     let mut stats = BlockLocalTwoWayDiffStats::default();
     let mut ours_line = 1u32;
     let mut theirs_line = 1u32;
@@ -2441,17 +3077,29 @@ fn block_local_two_way_diff_rows_with_context_and_stats(
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
+fn estimate_block_local_two_way_row_capacity(
+    segments: &[ConflictSegment],
+    context_lines: usize,
+) -> usize {
+    segments
+        .len()
+        .saturating_mul(context_lines.saturating_add(2))
+        .max(1)
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
 fn push_block_local_boundary_context_rows(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     segments: &[ConflictSegment],
     segment_ix: usize,
-    text: &str,
+    text: &ConflictText,
     old_line_start: u32,
     new_line_start: u32,
     context_lines: usize,
 ) -> u32 {
-    let line_count = text_line_count(text);
-    if text.is_empty() || context_lines == 0 {
+    let text_str = text.as_str();
+    let line_count = text_line_count(text_str);
+    if text_str.is_empty() || context_lines == 0 {
         return line_count;
     }
 
@@ -2485,7 +3133,7 @@ fn push_block_local_boundary_context_rows(
     // Leading context: scan forward for the first `leading_count` lines.
     push_block_local_context_lines(
         rows,
-        text.lines().enumerate().take(leading_count),
+        text_str.lines().enumerate().take(leading_count),
         old_line_start,
         new_line_start,
     );
@@ -2494,7 +3142,7 @@ fn push_block_local_boundary_context_rows(
     // by scanning backwards from the end, avoiding a full-text forward scan.
     let effective_trailing_start = leading_count.max(trailing_start);
     if trailing_count > 0 && effective_trailing_start < line_count_usize {
-        let bytes = text.as_bytes();
+        let bytes = text_str.as_bytes();
         // Find byte offset of the effective_trailing_start-th line by
         // reverse-scanning for the (line_count - effective_trailing_start)
         // newlines from the end.
@@ -2502,7 +3150,7 @@ fn push_block_local_boundary_context_rows(
         let byte_offset = byte_offset_of_nth_line_from_end(bytes, lines_from_end);
         push_block_local_context_lines(
             rows,
-            text[byte_offset..]
+            text_str[byte_offset..]
                 .lines()
                 .enumerate()
                 .map(move |(ix, line)| (effective_trailing_start + ix, line)),
@@ -2510,9 +3158,11 @@ fn push_block_local_boundary_context_rows(
             new_line_start,
         );
     }
+
     line_count
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 /// Find the byte offset of the `n`-th line from the end of the text.
 /// Returns the byte offset where the `n`-th-from-end line starts.
 #[cfg(any(test, feature = "benchmarks"))]
@@ -2564,8 +3214,8 @@ fn push_block_local_context_lines<'a>(
             kind: FileDiffRowKind::Context,
             old_line: Some(old_line_start.saturating_add(line_offset)),
             new_line: Some(new_line_start.saturating_add(line_offset)),
-            old: Some(Arc::clone(&content)),
-            new: Some(content),
+            old: Some(Arc::clone(&content).into()),
+            new: Some(content.into()),
             eof_newline: None,
         });
     }
@@ -2721,6 +3371,7 @@ pub struct ThreeWayConflictMaps {
     /// Per-side per-line conflict maps (populated only in eager mode).
     pub line_conflict_maps: [Vec<Option<usize>>; 3],
     pub conflict_has_base: Vec<bool>,
+    pub conflict_resolved: Vec<bool>,
 }
 
 /// Binary search on sorted, non-overlapping ranges to find which conflict a line belongs to.
@@ -2766,6 +3417,7 @@ fn build_three_way_conflict_maps_impl(
                 Default::default()
             },
             conflict_has_base: Vec::new(),
+            conflict_resolved: Vec::new(),
         };
     }
 
@@ -2789,6 +3441,7 @@ fn build_three_way_conflict_maps_impl(
             Default::default()
         },
         conflict_has_base: Vec::with_capacity(block_count),
+        conflict_resolved: Vec::with_capacity(block_count),
     };
 
     fn mark_range(map: &mut [Option<usize>], start: usize, end: usize, conflict_ix: usize) {
@@ -2827,6 +3480,7 @@ fn build_three_way_conflict_maps_impl(
                 maps.conflict_ranges[1].push(ours_offset..ours_end);
                 maps.conflict_ranges[2].push(theirs_offset..theirs_end);
                 maps.conflict_has_base.push(block.base.is_some());
+                maps.conflict_resolved.push(block.resolved);
 
                 mark_range(
                     &mut maps.line_conflict_maps[0],
@@ -3047,6 +3701,74 @@ pub struct ThreeWayVisibleProjection {
     visible_len: usize,
 }
 
+enum ThreeWayVisibleRun {
+    Lines { start: usize, end: usize },
+    Collapsed { conflict_ix: usize },
+}
+
+fn for_each_three_way_visible_run(
+    total_lines: usize,
+    conflict_ranges: &[std::ops::Range<usize>],
+    conflict_resolved: &[bool],
+    hide_resolved: bool,
+    mut visit: impl FnMut(ThreeWayVisibleRun),
+) {
+    if total_lines == 0 {
+        return;
+    }
+
+    if !hide_resolved {
+        visit(ThreeWayVisibleRun::Lines {
+            start: 0,
+            end: total_lines,
+        });
+        return;
+    }
+
+    let mut line_ix = 0usize;
+
+    for (range_ix, range) in conflict_ranges.iter().enumerate() {
+        if line_ix >= total_lines {
+            break;
+        }
+
+        let range_start = range.start.min(total_lines);
+        let range_end = range.end.min(total_lines);
+
+        if line_ix < range_start {
+            visit(ThreeWayVisibleRun::Lines {
+                start: line_ix,
+                end: range_start,
+            });
+            line_ix = range_start;
+        }
+
+        let resolved = conflict_resolved.get(range_ix).copied().unwrap_or(false);
+        if resolved && range_start < range_end && line_ix < range_end {
+            visit(ThreeWayVisibleRun::Collapsed {
+                conflict_ix: range_ix,
+            });
+            line_ix = range_end;
+            continue;
+        }
+
+        if line_ix < range_end {
+            visit(ThreeWayVisibleRun::Lines {
+                start: line_ix,
+                end: range_end,
+            });
+            line_ix = range_end;
+        }
+    }
+
+    if line_ix < total_lines {
+        visit(ThreeWayVisibleRun::Lines {
+            start: line_ix,
+            end: total_lines,
+        });
+    }
+}
+
 impl ThreeWayVisibleProjection {
     /// Total number of visible rows.
     pub fn len(&self) -> usize {
@@ -3125,14 +3847,24 @@ impl ThreeWayVisibleProjection {
     }
 }
 
+fn resolved_conflict_flags_from_segments(segments: &[ConflictSegment]) -> Vec<bool> {
+    segments
+        .iter()
+        .filter_map(|segment| match segment {
+            ConflictSegment::Block(block) => Some(block.resolved),
+            ConflictSegment::Text(_) => None,
+        })
+        .collect()
+}
+
 /// Build a span-based visible projection for three-way views.
 ///
 /// All lines in every conflict block are included (no preview gaps).
 /// Resolved blocks collapse to a single summary row when `hide_resolved` is true.
-pub fn build_three_way_visible_projection(
+pub(in crate::view) fn build_three_way_visible_projection_with_resolved_flags(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
-    segments: &[ConflictSegment],
+    conflict_resolved: &[bool],
     hide_resolved: bool,
 ) -> ThreeWayVisibleProjection {
     if total_lines == 0 {
@@ -3150,81 +3882,35 @@ pub fn build_three_way_visible_projection(
         };
     }
 
-    let resolved_blocks: Vec<bool> = segments
-        .iter()
-        .filter_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b.resolved),
-            _ => None,
-        })
-        .collect();
-
-    let mut spans: Vec<ThreeWayVisibleSpan> = Vec::new();
+    let mut spans: Vec<ThreeWayVisibleSpan> =
+        Vec::with_capacity(conflict_ranges.len().saturating_mul(2).saturating_add(1));
     let mut visible_ix = 0usize;
-    let mut line_ix = 0usize;
-    let mut range_ix = 0usize;
-
-    // Helper: flush a pending lines run.
-    let mut pending_lines_start: Option<usize> = None;
-
-    let flush_pending = |spans: &mut Vec<ThreeWayVisibleSpan>,
-                         pending: &mut Option<usize>,
-                         vis: &mut usize,
-                         line: usize| {
-        if let Some(start) = pending.take() {
-            let len = line - start;
-            if len > 0 {
+    for_each_three_way_visible_run(
+        total_lines,
+        conflict_ranges,
+        conflict_resolved,
+        true,
+        |run| match run {
+            ThreeWayVisibleRun::Lines { start, end } => {
+                let len = end.saturating_sub(start);
+                if len == 0 {
+                    return;
+                }
                 spans.push(ThreeWayVisibleSpan::Lines {
-                    visible_start: *vis - len,
+                    visible_start: visible_ix,
                     source_line_start: start,
                     len,
                 });
+                visible_ix += len;
             }
-        }
-    };
-
-    while line_ix < total_lines {
-        // Advance range_ix past completed ranges.
-        while let Some(range) = conflict_ranges.get(range_ix) {
-            if range.end <= line_ix {
-                range_ix += 1;
-                continue;
+            ThreeWayVisibleRun::Collapsed { conflict_ix } => {
+                spans.push(ThreeWayVisibleSpan::CollapsedResolvedBlock {
+                    visible_index: visible_ix,
+                    conflict_ix,
+                });
+                visible_ix += 1;
             }
-            break;
-        }
-
-        if let Some(range) = conflict_ranges.get(range_ix)
-            && range.contains(&line_ix)
-            && hide_resolved
-            && resolved_blocks.get(range_ix).copied().unwrap_or(false)
-        {
-            flush_pending(
-                &mut spans,
-                &mut pending_lines_start,
-                &mut visible_ix,
-                line_ix,
-            );
-            spans.push(ThreeWayVisibleSpan::CollapsedResolvedBlock {
-                visible_index: visible_ix,
-                conflict_ix: range_ix,
-            });
-            visible_ix += 1;
-            line_ix = range.end;
-            continue;
-        }
-
-        // Normal line.
-        if pending_lines_start.is_none() {
-            pending_lines_start = Some(line_ix);
-        }
-        visible_ix += 1;
-        line_ix += 1;
-    }
-
-    flush_pending(
-        &mut spans,
-        &mut pending_lines_start,
-        &mut visible_ix,
-        line_ix,
+        },
     );
 
     ThreeWayVisibleProjection {
@@ -3233,10 +3919,76 @@ pub fn build_three_way_visible_projection(
     }
 }
 
+pub fn build_three_way_visible_projection(
+    total_lines: usize,
+    conflict_ranges: &[std::ops::Range<usize>],
+    segments: &[ConflictSegment],
+    hide_resolved: bool,
+) -> ThreeWayVisibleProjection {
+    let conflict_resolved = resolved_conflict_flags_from_segments(segments);
+    build_three_way_visible_projection_with_resolved_flags(
+        total_lines,
+        conflict_ranges,
+        &conflict_resolved,
+        hide_resolved,
+    )
+}
+
 /// Build the mapping from visible row indices to actual three-way data items.
 ///
 /// When `hide_resolved` is false, every line maps directly.
 /// When true, resolved conflict ranges are collapsed to a single summary row.
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) fn build_three_way_visible_map_with_resolved_flags(
+    total_lines: usize,
+    conflict_ranges: &[std::ops::Range<usize>],
+    conflict_resolved: &[bool],
+    hide_resolved: bool,
+) -> Vec<ThreeWayVisibleItem> {
+    if total_lines == 0 {
+        return Vec::new();
+    }
+
+    if !hide_resolved {
+        return (0..total_lines).map(ThreeWayVisibleItem::Line).collect();
+    }
+
+    let mut visible_len = 0usize;
+    for_each_three_way_visible_run(
+        total_lines,
+        conflict_ranges,
+        conflict_resolved,
+        true,
+        |run| match run {
+            ThreeWayVisibleRun::Lines { start, end } => {
+                visible_len += end.saturating_sub(start);
+            }
+            ThreeWayVisibleRun::Collapsed { .. } => {
+                visible_len += 1;
+            }
+        },
+    );
+
+    let mut visible = Vec::with_capacity(visible_len);
+    for_each_three_way_visible_run(
+        total_lines,
+        conflict_ranges,
+        conflict_resolved,
+        true,
+        |run| match run {
+            ThreeWayVisibleRun::Lines { start, end } => {
+                for line_ix in start..end {
+                    visible.push(ThreeWayVisibleItem::Line(line_ix));
+                }
+            }
+            ThreeWayVisibleRun::Collapsed { conflict_ix } => {
+                visible.push(ThreeWayVisibleItem::CollapsedBlock(conflict_ix));
+            }
+        },
+    );
+    visible
+}
+
 #[cfg(any(test, feature = "benchmarks"))]
 pub fn build_three_way_visible_map(
     total_lines: usize,
@@ -3244,45 +3996,13 @@ pub fn build_three_way_visible_map(
     segments: &[ConflictSegment],
     hide_resolved: bool,
 ) -> Vec<ThreeWayVisibleItem> {
-    if !hide_resolved {
-        return (0..total_lines).map(ThreeWayVisibleItem::Line).collect();
-    }
-
-    let resolved_blocks: Vec<bool> = segments
-        .iter()
-        .filter_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b.resolved),
-            _ => None,
-        })
-        .collect();
-
-    let mut visible = Vec::with_capacity(total_lines);
-    let mut line_ix = 0usize;
-    let mut range_ix = 0usize;
-
-    while line_ix < total_lines {
-        while let Some(range) = conflict_ranges.get(range_ix) {
-            if range.end <= line_ix {
-                range_ix += 1;
-                continue;
-            }
-            break;
-        }
-
-        if let Some(range) = conflict_ranges.get(range_ix)
-            && range.contains(&line_ix)
-            && resolved_blocks.get(range_ix).copied().unwrap_or(false)
-        {
-            // Emit one collapsed summary row and skip the rest of the range.
-            visible.push(ThreeWayVisibleItem::CollapsedBlock(range_ix));
-            line_ix = range.end;
-            continue;
-        }
-
-        visible.push(ThreeWayVisibleItem::Line(line_ix));
-        line_ix += 1;
-    }
-    visible
+    let conflict_resolved = resolved_conflict_flags_from_segments(segments);
+    build_three_way_visible_map_with_resolved_flags(
+        total_lines,
+        conflict_ranges,
+        &conflict_resolved,
+        hide_resolved,
+    )
 }
 
 /// Find the visible index for the first line of a conflict range, or the
@@ -3414,11 +4134,21 @@ pub fn conflict_stage_safety_check(
     }
 }
 
+/// Count logical resolved-output rows while preserving a trailing empty row
+/// after a final newline.
+pub fn resolved_output_outline_line_count(output: &str) -> usize {
+    memchr::memchr_iter(b'\n', output.as_bytes())
+        .count()
+        .saturating_add(1)
+}
+
 /// Split resolved output into one logical row per newline for outline rendering.
 ///
 /// Uses `split('\n')` so trailing newlines are preserved as a final empty row.
 pub fn split_output_lines_for_outline(output: &str) -> Vec<String> {
-    output.split('\n').map(|line| line.to_string()).collect()
+    let mut lines = Vec::with_capacity(resolved_output_outline_line_count(output));
+    lines.extend(output.split('\n').map(str::to_string));
+    lines
 }
 
 #[cfg(test)]

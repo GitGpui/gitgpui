@@ -4933,12 +4933,7 @@ fn bench_window_resize_layout(c: &mut Criterion) {
     group.sample_size(100);
     group.warm_up_time(Duration::from_millis(500));
 
-    group.bench_function("sidebar_main_details", |b| {
-        b.iter(|| {
-            let (hash, _metrics) = fixture.run_with_metrics();
-            hash
-        })
-    });
+    group.bench_function("sidebar_main_details", |b| b.iter(|| fixture.run()));
 
     // Emit sidecar from a final run.
     let (_, metrics) = measure_sidecar_allocations(|| fixture.run_with_metrics());
@@ -5353,7 +5348,8 @@ fn bench_search(c: &mut Criterion) {
         measure_sidecar_allocations(|| diff_fixture.run_search_with_metrics(&diff_query));
     emit_in_diff_text_search_sidecar("in_diff_text_search_100k_lines", &diff_metrics);
     let (_, refinement_metrics) = measure_sidecar_allocations(|| {
-        diff_fixture.run_refinement_with_metrics(&diff_query, &diff_refined_query)
+        diff_fixture
+            .run_refinement_from_matches_with_metrics(&diff_refined_query, &diff_refinement_matches)
     });
     emit_in_diff_text_search_sidecar(
         "in_diff_text_search_incremental_refinement",
@@ -5731,7 +5727,8 @@ fn bench_display(c: &mut Criterion) {
             let mut elapsed = Duration::ZERO;
             for _ in 0..iters {
                 let started_at = Instant::now();
-                let _ = two_win_fixture.run_with_metrics();
+                let hash = two_win_fixture.run();
+                std::hint::black_box(hash);
                 elapsed += started_at.elapsed();
             }
             let (_, metrics) = measure_sidecar_allocations(|| two_win_fixture.run_with_metrics());
@@ -5747,7 +5744,8 @@ fn bench_display(c: &mut Criterion) {
                 let mut elapsed = Duration::ZERO;
                 for _ in 0..iters {
                     let started_at = Instant::now();
-                    let _ = dpi_move_fixture.run_with_metrics();
+                    let hash = dpi_move_fixture.run();
+                    std::hint::black_box(hash);
                     elapsed += started_at.elapsed();
                 }
                 let (_, metrics) =

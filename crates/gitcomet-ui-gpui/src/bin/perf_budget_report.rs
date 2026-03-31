@@ -355,9 +355,9 @@ const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         estimate_path: "merge_open_bootstrap/50k_lines_500_conflicts_streamed/new/estimates.json",
         threshold_ns: 500.0 * NANOS_PER_MILLISECOND,
     },
-    // diff_refresh_rev_only_same_content/rekey — signature check + rev bump
-    // The rekey path hashes the full file content (~5k lines) to compute the signature.
-    // Measured at ~12 µs; budget allows headroom for shared-runner noise.
+    // diff_refresh_rev_only_same_content/rekey — cached signature check + rev bump
+    // The rekey path now reads a precomputed content signature from `FileDiffText`.
+    // Keep a generous budget because this benchmark can approach the measurement floor.
     PerfBudgetSpec {
         label: "diff_refresh_rev_only_same_content/rekey",
         estimate_path: "diff_refresh_rev_only_same_content/rekey/new/estimates.json",
@@ -468,7 +468,7 @@ const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         estimate_path: "diff_open_markdown_preview_first_window/200/new/estimates.json",
         threshold_ns: 20.0 * NANOS_PER_MILLISECOND,
     },
-    // --- diff_open_image_preview_first_paint --- ready-image cache build + two-cell layout
+    // --- diff_open_image_preview_first_paint --- ready-image two-cell layout from cached previews
     PerfBudgetSpec {
         label: "diff_open_image_preview_first_paint",
         estimate_path: "diff_open_image_preview_first_paint/new/estimates.json",

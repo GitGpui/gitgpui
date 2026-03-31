@@ -478,7 +478,7 @@ pub enum InternalMsg {
         error: String,
     },
     CloneRepoProgress {
-        dest: PathBuf,
+        dest: Arc<PathBuf>,
         line: String,
     },
     CloneRepoFinished {

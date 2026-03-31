@@ -82,6 +82,22 @@ fn next_pane_resize_drag_width_recomputes_bounds_when_window_changes() {
 }
 
 #[test]
+fn diff_split_column_widths_from_available_clamps_to_min_widths() {
+    let (left, right) = diff_split_column_widths_from_available(px(556.0), px(160.0), 0.95);
+
+    assert_eq!(left, px(396.0));
+    assert_eq!(right, px(160.0));
+}
+
+#[test]
+fn diff_split_column_widths_from_available_falls_back_to_even_split_when_narrow() {
+    let (left, right) = diff_split_column_widths_from_available(px(300.0), px(160.0), 0.95);
+
+    assert_eq!(left, px(150.0));
+    assert_eq!(right, px(150.0));
+}
+
+#[test]
 fn restore_session_mode_does_not_seed_empty_session_from_initial_repository() {
     assert!(!should_seed_initial_repository_from_session(
         GitCometViewMode::Normal,

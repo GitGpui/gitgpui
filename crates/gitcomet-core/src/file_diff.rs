@@ -1,4 +1,7 @@
+use crate::domain::SharedLineText;
 use std::cell::OnceCell;
+use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,6 +22,8 @@ const ASCII_BITPARALLEL_MAX_PATTERN_LEN: usize = 128;
 const SIDE_BY_SIDE_HISTOGRAM_LINE_THRESHOLD: usize = 1_024;
 const SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD: usize = 100_000;
 const PATIENCE_POSITIONAL_FALLBACK_LINE_THRESHOLD: usize = 2_048;
+const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_CHANGED_RATIO_DENOMINATOR: usize = 4;
+const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_BLOCK_LEN: usize = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffEofNewline {
@@ -26,13 +31,154 @@ pub enum FileDiffEofNewline {
     MissingInNew,
 }
 
+#[derive(Clone, Debug)]
+enum FileDiffLineTextStorage {
+    Owned(Arc<str>),
+    SharedSlice { text: Arc<str>, range: Range<usize> },
+    SharedLine(SharedLineText),
+}
+
+#[derive(Clone, Debug)]
+pub struct FileDiffLineText {
+    storage: FileDiffLineTextStorage,
+}
+
+impl FileDiffLineText {
+    pub fn shared(text: Arc<str>) -> Self {
+        Self {
+            storage: FileDiffLineTextStorage::Owned(text),
+        }
+    }
+
+    pub fn shared_slice(text: Arc<str>, range: Range<usize>) -> Self {
+        debug_assert!(
+            text.get(range.clone()).is_some(),
+            "shared file-diff line range should stay within bounds"
+        );
+        Self {
+            storage: FileDiffLineTextStorage::SharedSlice { text, range },
+        }
+    }
+
+    pub fn shared_line(text: SharedLineText) -> Self {
+        Self {
+            storage: FileDiffLineTextStorage::SharedLine(text),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.as_ref(),
+            FileDiffLineTextStorage::SharedSlice { text, range } => text
+                .get(range.clone())
+                .expect("shared file-diff line range should stay valid"),
+            FileDiffLineTextStorage::SharedLine(text) => text.as_ref(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_str().is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.as_str().len()
+    }
+
+    pub fn shares_backing_with(&self, other: &Self) -> bool {
+        match (&self.storage, &other.storage) {
+            (FileDiffLineTextStorage::Owned(a), FileDiffLineTextStorage::Owned(b))
+            | (
+                FileDiffLineTextStorage::Owned(a),
+                FileDiffLineTextStorage::SharedSlice { text: b, .. },
+            )
+            | (
+                FileDiffLineTextStorage::SharedSlice { text: a, .. },
+                FileDiffLineTextStorage::Owned(b),
+            )
+            | (
+                FileDiffLineTextStorage::SharedSlice { text: a, .. },
+                FileDiffLineTextStorage::SharedSlice { text: b, .. },
+            ) => Arc::ptr_eq(a, b),
+            (FileDiffLineTextStorage::SharedLine(a), FileDiffLineTextStorage::SharedLine(b)) => {
+                a.shares_storage_with(b)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl AsRef<str> for FileDiffLineText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::ops::Deref for FileDiffLineText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl PartialEq for FileDiffLineText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for FileDiffLineText {}
+
+impl Hash for FileDiffLineText {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl From<&str> for FileDiffLineText {
+    fn from(value: &str) -> Self {
+        Self::shared(Arc::from(value))
+    }
+}
+
+impl From<String> for FileDiffLineText {
+    fn from(value: String) -> Self {
+        Self::shared(value.into())
+    }
+}
+
+impl From<Arc<str>> for FileDiffLineText {
+    fn from(value: Arc<str>) -> Self {
+        Self::shared(value)
+    }
+}
+
+impl From<SharedLineText> for FileDiffLineText {
+    fn from(value: SharedLineText) -> Self {
+        Self::shared_line(value)
+    }
+}
+
+impl From<FileDiffLineText> for Arc<str> {
+    fn from(value: FileDiffLineText) -> Self {
+        match value.storage {
+            FileDiffLineTextStorage::Owned(text) => text,
+            FileDiffLineTextStorage::SharedSlice { text, range } => Arc::from(
+                text.get(range)
+                    .expect("shared file-diff line range should stay valid"),
+            ),
+            FileDiffLineTextStorage::SharedLine(text) => text.to_arc(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffRow {
     pub kind: FileDiffRowKind,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
-    pub old: Option<Arc<str>>,
-    pub new: Option<Arc<str>>,
+    pub old: Option<FileDiffLineText>,
+    pub new: Option<FileDiffLineText>,
     pub eof_newline: Option<FileDiffEofNewline>,
 }
 
@@ -286,16 +432,54 @@ pub fn benchmark_side_by_side_plan_with_replacement_backend(
 }
 
 pub fn side_by_side_rows(old: &str, new: &str) -> Vec<FileDiffRow> {
-    let old_lines = split_lines(old);
-    let new_lines = split_lines(new);
+    let old_text: Arc<str> = Arc::from(old);
+    let new_text: Arc<str> = Arc::from(new);
+    let old_lines = split_lines(old_text.as_ref());
+    let new_lines = split_lines(new_text.as_ref());
     let plan = build_side_by_side_plan_with_pair_cost(
-        old,
-        new,
+        old_text.as_ref(),
+        new_text.as_ref(),
         old_lines.as_slice(),
         new_lines.as_slice(),
         replacement_pair_cost,
     );
-    materialize_rows_from_plan(&plan, old_lines.as_slice(), new_lines.as_slice())
+    materialize_rows_from_plan(
+        &plan,
+        &old_text,
+        old_lines.as_slice(),
+        &new_text,
+        new_lines.as_slice(),
+    )
+}
+
+pub fn append_side_by_side_rows_with_offsets(
+    rows: &mut Vec<FileDiffRow>,
+    old: &str,
+    new: &str,
+    old_line_offset: u32,
+    new_line_offset: u32,
+) {
+    let old_text: Arc<str> = Arc::from(old);
+    let new_text: Arc<str> = Arc::from(new);
+    let old_lines = split_lines(old_text.as_ref());
+    let new_lines = split_lines(new_text.as_ref());
+    let plan = build_side_by_side_plan_with_pair_cost(
+        old_text.as_ref(),
+        new_text.as_ref(),
+        old_lines.as_slice(),
+        new_lines.as_slice(),
+        replacement_pair_cost,
+    );
+    materialize_rows_from_plan_into(
+        rows,
+        &plan,
+        &old_text,
+        old_lines.as_slice(),
+        &new_text,
+        new_lines.as_slice(),
+        old_line_offset,
+        new_line_offset,
+    )
 }
 
 pub fn side_by_side_rows_with_anchors(old: &str, new: &str) -> FileDiffRowsWithAnchors {
@@ -1060,16 +1244,31 @@ fn push_plan_run(runs: &mut Vec<FileDiffPlanRun>, run: FileDiffPlanRun) {
     }
 }
 
+fn push_plan_run_with_counts(
+    runs: &mut Vec<FileDiffPlanRun>,
+    row_count: &mut usize,
+    inline_row_count: &mut usize,
+    run: FileDiffPlanRun,
+) {
+    let len = run.row_len();
+    if len == 0 {
+        return;
+    }
+    *row_count = row_count.saturating_add(len);
+    *inline_row_count = inline_row_count.saturating_add(run.inline_row_len());
+    push_plan_run(runs, run);
+}
+
 fn apply_eof_newline_to_plan(
     runs: &mut Vec<FileDiffPlanRun>,
     eof_newline: Option<FileDiffEofNewline>,
-) {
+) -> bool {
     if eof_newline.is_none() {
-        return;
+        return false;
     }
 
     let Some(last_run) = runs.pop() else {
-        return;
+        return false;
     };
     match last_run {
         FileDiffPlanRun::Context {
@@ -1087,6 +1286,7 @@ fn apply_eof_newline_to_plan(
                 new_start: new_start.saturating_add(len.saturating_sub(1)),
                 len: 1,
             });
+            true
         }
         FileDiffPlanRun::Context {
             old_start,
@@ -1098,9 +1298,95 @@ fn apply_eof_newline_to_plan(
                 new_start,
                 len: 1,
             });
+            true
         }
-        other => runs.push(other),
+        other => {
+            runs.push(other);
+            false
+        }
     }
+}
+
+fn build_sparse_positional_side_by_side_plan(
+    old_text: &str,
+    new_text: &str,
+    old_lines: &[&str],
+    new_lines: &[&str],
+) -> Option<FileDiffPlan> {
+    if old_lines.len() != new_lines.len() {
+        return None;
+    }
+    let line_count = old_lines.len();
+    if line_count == 0
+        || line_count.saturating_add(line_count) < SIDE_BY_SIDE_HISTOGRAM_LINE_THRESHOLD
+    {
+        return None;
+    }
+
+    let mut runs = Vec::with_capacity(line_count / 8 + 1);
+    let mut row_count = 0usize;
+    let mut inline_row_count = 0usize;
+    let mut changed_lines = 0usize;
+    let mut ix = 0usize;
+
+    while ix < line_count {
+        if old_lines[ix] == new_lines[ix] {
+            let start = ix;
+            ix += 1;
+            while ix < line_count && old_lines[ix] == new_lines[ix] {
+                ix += 1;
+            }
+            push_plan_run_with_counts(
+                &mut runs,
+                &mut row_count,
+                &mut inline_row_count,
+                FileDiffPlanRun::Context {
+                    old_start: start,
+                    new_start: start,
+                    len: ix.saturating_sub(start),
+                },
+            );
+            continue;
+        }
+
+        let block_start = ix;
+        ix += 1;
+        while ix < line_count && old_lines[ix] != new_lines[ix] {
+            ix += 1;
+        }
+        let block_len = ix.saturating_sub(block_start);
+        changed_lines = changed_lines.saturating_add(block_len);
+        if block_len > SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_BLOCK_LEN
+            || changed_lines
+                .saturating_mul(SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_CHANGED_RATIO_DENOMINATOR)
+                > line_count
+        {
+            return None;
+        }
+
+        push_plan_run_with_counts(
+            &mut runs,
+            &mut row_count,
+            &mut inline_row_count,
+            FileDiffPlanRun::Modify {
+                old_start: block_start,
+                new_start: block_start,
+                len: block_len,
+            },
+        );
+    }
+
+    let eof_newline = eof_newline_delta(old_text, new_text);
+    if apply_eof_newline_to_plan(&mut runs, eof_newline) {
+        inline_row_count = inline_row_count.saturating_add(1);
+    }
+
+    Some(FileDiffPlan {
+        runs,
+        row_count,
+        inline_row_count,
+        eof_newline,
+    })
 }
 
 fn push_paired_replacement_runs_by_position_to_plan(
@@ -1109,11 +1395,15 @@ fn push_paired_replacement_runs_by_position_to_plan(
     new_start: usize,
     new_len: usize,
     runs: &mut Vec<FileDiffPlanRun>,
+    row_count: &mut usize,
+    inline_row_count: &mut usize,
 ) {
     let paired = old_len.min(new_len);
     if paired > 0 {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Modify {
                 old_start,
                 new_start,
@@ -1122,8 +1412,10 @@ fn push_paired_replacement_runs_by_position_to_plan(
         );
     }
     if old_len > paired {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Remove {
                 old_start: old_start.saturating_add(paired),
                 len: old_len.saturating_sub(paired),
@@ -1131,8 +1423,10 @@ fn push_paired_replacement_runs_by_position_to_plan(
         );
     }
     if new_len > paired {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Add {
                 new_start: new_start.saturating_add(paired),
                 len: new_len.saturating_sub(paired),
@@ -1147,6 +1441,8 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
     old_range: std::ops::Range<usize>,
     new_range: std::ops::Range<usize>,
     runs: &mut Vec<FileDiffPlanRun>,
+    row_count: &mut usize,
+    inline_row_count: &mut usize,
     pair_cost_fn: F,
 ) where
     F: Copy
@@ -1162,8 +1458,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
     let inserts = &new_lines[new_range.start..new_range.end];
 
     if deletes.is_empty() {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Add {
                 new_start,
                 len: inserts.len(),
@@ -1172,8 +1470,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
         return;
     }
     if inserts.is_empty() {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Remove {
                 old_start,
                 len: deletes.len(),
@@ -1189,6 +1489,8 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
             new_start,
             inserts.len(),
             runs,
+            row_count,
+            inline_row_count,
         );
         return;
     }
@@ -1201,8 +1503,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
     for op in replacement_alignment_ops_with_pair_cost(&deletes, &inserts, pair_cost_fn) {
         match op {
             PlannedReplacementOp::Pair => {
-                push_plan_run(
+                push_plan_run_with_counts(
                     runs,
+                    row_count,
+                    inline_row_count,
                     FileDiffPlanRun::Modify {
                         old_start: old_start.saturating_add(local_old),
                         new_start: new_start.saturating_add(local_new),
@@ -1213,8 +1517,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
                 local_new += 1;
             }
             PlannedReplacementOp::Delete => {
-                push_plan_run(
+                push_plan_run_with_counts(
                     runs,
+                    row_count,
+                    inline_row_count,
                     FileDiffPlanRun::Remove {
                         old_start: old_start.saturating_add(local_old),
                         len: 1,
@@ -1223,8 +1529,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
                 local_old += 1;
             }
             PlannedReplacementOp::Insert => {
-                push_plan_run(
+                push_plan_run_with_counts(
                     runs,
+                    row_count,
+                    inline_row_count,
                     FileDiffPlanRun::Add {
                         new_start: new_start.saturating_add(local_new),
                         len: 1,
@@ -1233,6 +1541,88 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
                 local_new += 1;
             }
         }
+    }
+}
+
+fn build_linear_fallback_side_by_side_plan_with_pair_cost<F>(
+    old_text: &str,
+    new_text: &str,
+    old_lines: &[&str],
+    new_lines: &[&str],
+    pair_cost_fn: F,
+) -> FileDiffPlan
+where
+    F: Copy
+        + for<'a> Fn(
+            &PreparedReplacementLine<'a>,
+            &PreparedReplacementLine<'a>,
+            &mut LevenshteinScratch,
+        ) -> u32,
+{
+    let mut prefix = 0usize;
+    while prefix < old_lines.len()
+        && prefix < new_lines.len()
+        && old_lines[prefix] == new_lines[prefix]
+    {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while prefix + suffix < old_lines.len()
+        && prefix + suffix < new_lines.len()
+        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let old_mid_end = old_lines.len().saturating_sub(suffix);
+    let new_mid_end = new_lines.len().saturating_sub(suffix);
+    let mut runs = Vec::with_capacity(3);
+    let mut row_count = 0usize;
+    let mut inline_row_count = 0usize;
+
+    push_plan_run_with_counts(
+        &mut runs,
+        &mut row_count,
+        &mut inline_row_count,
+        FileDiffPlanRun::Context {
+            old_start: 0,
+            new_start: 0,
+            len: prefix,
+        },
+    );
+
+    push_aligned_replacement_runs_to_plan_with_pair_cost(
+        old_lines,
+        new_lines,
+        prefix..old_mid_end,
+        prefix..new_mid_end,
+        &mut runs,
+        &mut row_count,
+        &mut inline_row_count,
+        pair_cost_fn,
+    );
+
+    push_plan_run_with_counts(
+        &mut runs,
+        &mut row_count,
+        &mut inline_row_count,
+        FileDiffPlanRun::Context {
+            old_start: old_mid_end,
+            new_start: new_mid_end,
+            len: suffix,
+        },
+    );
+
+    let eof_newline = eof_newline_delta(old_text, new_text);
+    if apply_eof_newline_to_plan(&mut runs, eof_newline) {
+        inline_row_count = inline_row_count.saturating_add(1);
+    }
+    FileDiffPlan {
+        runs,
+        row_count,
+        inline_row_count,
+        eof_newline,
     }
 }
 
@@ -1251,8 +1641,27 @@ where
             &mut LevenshteinScratch,
         ) -> u32,
 {
+    if old_lines.len().saturating_add(new_lines.len())
+        >= SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD
+    {
+        return build_linear_fallback_side_by_side_plan_with_pair_cost(
+            old_text,
+            new_text,
+            old_lines,
+            new_lines,
+            pair_cost_fn,
+        );
+    }
+    if let Some(plan) =
+        build_sparse_positional_side_by_side_plan(old_text, new_text, old_lines, new_lines)
+    {
+        return plan;
+    }
+
     let edits = select_side_by_side_edits(old_lines, new_lines);
-    let mut runs = Vec::new();
+    let mut runs = Vec::with_capacity(edits.len());
+    let mut row_count = 0usize;
+    let mut inline_row_count = 0usize;
     let mut old_ix = 0usize;
     let mut new_ix = 0usize;
     let mut i = 0usize;
@@ -1267,8 +1676,10 @@ where
                     new_ix += 1;
                     i += 1;
                 }
-                push_plan_run(
+                push_plan_run_with_counts(
                     &mut runs,
+                    &mut row_count,
+                    &mut inline_row_count,
                     FileDiffPlanRun::Context {
                         old_start: run_old_start,
                         new_start: run_new_start,
@@ -1290,8 +1701,10 @@ where
                 }
 
                 if insert_start == new_ix {
-                    push_plan_run(
+                    push_plan_run_with_counts(
                         &mut runs,
+                        &mut row_count,
+                        &mut inline_row_count,
                         FileDiffPlanRun::Remove {
                             old_start: delete_start,
                             len: old_ix.saturating_sub(delete_start),
@@ -1304,6 +1717,8 @@ where
                         delete_start..old_ix,
                         insert_start..new_ix,
                         &mut runs,
+                        &mut row_count,
+                        &mut inline_row_count,
                         pair_cost_fn,
                     );
                 }
@@ -1314,8 +1729,10 @@ where
                     new_ix += 1;
                     i += 1;
                 }
-                push_plan_run(
+                push_plan_run_with_counts(
                     &mut runs,
+                    &mut row_count,
+                    &mut inline_row_count,
                     FileDiffPlanRun::Add {
                         new_start: insert_start,
                         len: new_ix.saturating_sub(insert_start),
@@ -1326,10 +1743,9 @@ where
     }
 
     let eof_newline = eof_newline_delta(old_text, new_text);
-    apply_eof_newline_to_plan(&mut runs, eof_newline);
-
-    let row_count = runs.iter().map(FileDiffPlanRun::row_len).sum();
-    let inline_row_count = runs.iter().map(FileDiffPlanRun::inline_row_len).sum();
+    if apply_eof_newline_to_plan(&mut runs, eof_newline) {
+        inline_row_count = inline_row_count.saturating_add(1);
+    }
     FileDiffPlan {
         runs,
         row_count,
@@ -1443,10 +1859,41 @@ fn for_each_plan_row_meta(plan: &FileDiffPlan, mut f: impl FnMut(usize, DiffRowM
 
 fn materialize_rows_from_plan(
     plan: &FileDiffPlan,
+    old_text: &Arc<str>,
     old_lines: &[&str],
+    new_text: &Arc<str>,
     new_lines: &[&str],
 ) -> Vec<FileDiffRow> {
     let mut rows = Vec::with_capacity(plan.row_count);
+    materialize_rows_from_plan_into(
+        &mut rows, plan, old_text, old_lines, new_text, new_lines, 0, 0,
+    );
+    rows
+}
+
+fn shared_line_text(text: &Arc<str>, line: &str) -> FileDiffLineText {
+    let base_ptr = text.as_ptr() as usize;
+    let line_ptr = line.as_ptr() as usize;
+    let start = line_ptr.saturating_sub(base_ptr);
+    let end = start.saturating_add(line.len());
+    debug_assert_eq!(text.get(start..end), Some(line));
+    FileDiffLineText::shared_slice(Arc::clone(text), start..end)
+}
+
+fn materialize_rows_from_plan_into(
+    rows: &mut Vec<FileDiffRow>,
+    plan: &FileDiffPlan,
+    old_text: &Arc<str>,
+    old_lines: &[&str],
+    new_text: &Arc<str>,
+    new_lines: &[&str],
+    old_line_offset: u32,
+    new_line_offset: u32,
+) {
+    let old_line_delta = old_line_offset.saturating_sub(1);
+    let new_line_delta = new_line_offset.saturating_sub(1);
+    rows.reserve(plan.row_count);
+    let row_start = rows.len();
 
     for run in &plan.runs {
         match run {
@@ -1458,12 +1905,17 @@ fn materialize_rows_from_plan(
                 for offset in 0..*len {
                     let old_ix = old_start.saturating_add(offset);
                     let new_ix = new_start.saturating_add(offset);
-                    let text: Arc<str> = old_lines.get(old_ix).copied().unwrap_or_default().into();
+                    let text = shared_line_text(
+                        old_text,
+                        old_lines.get(old_ix).copied().unwrap_or_default(),
+                    );
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Context,
-                        old_line: one_based_line_number(old_ix),
-                        new_line: one_based_line_number(new_ix),
-                        old: Some(Arc::clone(&text)),
+                        old_line: one_based_line_number(old_ix)
+                            .map(|line| line.saturating_add(old_line_delta)),
+                        new_line: one_based_line_number(new_ix)
+                            .map(|line| line.saturating_add(new_line_delta)),
+                        old: Some(text.clone()),
                         new: Some(text),
                         eof_newline: None,
                     });
@@ -1474,9 +1926,13 @@ fn materialize_rows_from_plan(
                     let old_ix = old_start.saturating_add(offset);
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Remove,
-                        old_line: one_based_line_number(old_ix),
+                        old_line: one_based_line_number(old_ix)
+                            .map(|line| line.saturating_add(old_line_delta)),
                         new_line: None,
-                        old: Some(old_lines.get(old_ix).copied().unwrap_or_default().into()),
+                        old: Some(shared_line_text(
+                            old_text,
+                            old_lines.get(old_ix).copied().unwrap_or_default(),
+                        )),
                         new: None,
                         eof_newline: None,
                     });
@@ -1488,9 +1944,13 @@ fn materialize_rows_from_plan(
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Add,
                         old_line: None,
-                        new_line: one_based_line_number(new_ix),
+                        new_line: one_based_line_number(new_ix)
+                            .map(|line| line.saturating_add(new_line_delta)),
                         old: None,
-                        new: Some(new_lines.get(new_ix).copied().unwrap_or_default().into()),
+                        new: Some(shared_line_text(
+                            new_text,
+                            new_lines.get(new_ix).copied().unwrap_or_default(),
+                        )),
                         eof_newline: None,
                     });
                 }
@@ -1505,10 +1965,18 @@ fn materialize_rows_from_plan(
                     let new_ix = new_start.saturating_add(offset);
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Modify,
-                        old_line: one_based_line_number(old_ix),
-                        new_line: one_based_line_number(new_ix),
-                        old: Some(old_lines.get(old_ix).copied().unwrap_or_default().into()),
-                        new: Some(new_lines.get(new_ix).copied().unwrap_or_default().into()),
+                        old_line: one_based_line_number(old_ix)
+                            .map(|line| line.saturating_add(old_line_delta)),
+                        new_line: one_based_line_number(new_ix)
+                            .map(|line| line.saturating_add(new_line_delta)),
+                        old: Some(shared_line_text(
+                            old_text,
+                            old_lines.get(old_ix).copied().unwrap_or_default(),
+                        )),
+                        new: Some(shared_line_text(
+                            new_text,
+                            new_lines.get(new_ix).copied().unwrap_or_default(),
+                        )),
                         eof_newline: None,
                     });
                 }
@@ -1517,7 +1985,7 @@ fn materialize_rows_from_plan(
     }
 
     if let Some(marker) = plan.eof_newline {
-        if let Some(last) = rows.last_mut() {
+        if let Some(last) = rows[row_start..].last_mut() {
             last.eof_newline = Some(marker);
         } else {
             rows.push(FileDiffRow {
@@ -1530,8 +1998,6 @@ fn materialize_rows_from_plan(
             });
         }
     }
-
-    rows
 }
 
 #[cfg(test)]
@@ -2466,6 +2932,37 @@ mod tests {
         (old_line_to_row, new_line_to_row)
     }
 
+    #[test]
+    fn side_by_side_rows_share_backing_for_context_and_reuse_row_storage_on_clone() {
+        let rows = side_by_side_rows("alpha\nbeta\n", "alpha\nbeta changed\n");
+        assert_eq!(rows.len(), 2);
+
+        let context = &rows[0];
+        assert!(
+            context
+                .old
+                .as_ref()
+                .unwrap()
+                .shares_backing_with(context.new.as_ref().unwrap())
+        );
+
+        let cloned = rows[1].clone();
+        assert!(
+            rows[1]
+                .old
+                .as_ref()
+                .unwrap()
+                .shares_backing_with(cloned.old.as_ref().unwrap())
+        );
+        assert!(
+            rows[1]
+                .new
+                .as_ref()
+                .unwrap()
+                .shares_backing_with(cloned.new.as_ref().unwrap())
+        );
+    }
+
     fn emitted_line_prefix_counts_from_rows(rows: &[FileDiffRow]) -> (Vec<usize>, Vec<usize>) {
         let mut old_prefix = Vec::with_capacity(rows.len().saturating_add(1));
         let mut new_prefix = Vec::with_capacity(rows.len().saturating_add(1));
@@ -2874,16 +3371,63 @@ mod tests {
     }
 
     #[test]
+    fn append_side_by_side_rows_with_offsets_matches_materialized_rows() {
+        let old = "keep\nold-only\nchange-me\n";
+        let new = "keep\nchange-you\nnew-only\n";
+        let mut appended = vec![FileDiffRow {
+            kind: FileDiffRowKind::Context,
+            old_line: Some(1),
+            new_line: Some(1),
+            old: Some("prefix".into()),
+            new: Some("prefix".into()),
+            eof_newline: None,
+        }];
+
+        append_side_by_side_rows_with_offsets(&mut appended, old, new, 10, 20);
+
+        let mut expected = vec![FileDiffRow {
+            kind: FileDiffRowKind::Context,
+            old_line: Some(1),
+            new_line: Some(1),
+            old: Some("prefix".into()),
+            new: Some("prefix".into()),
+            eof_newline: None,
+        }];
+        expected.extend(side_by_side_rows(old, new).into_iter().map(|row| {
+            FileDiffRow {
+                kind: row.kind,
+                old_line: row
+                    .old_line
+                    .map(|line| line.saturating_add(10).saturating_sub(1)),
+                new_line: row
+                    .new_line
+                    .map(|line| line.saturating_add(20).saturating_sub(1)),
+                old: row.old,
+                new: row.new,
+                eof_newline: row.eof_newline,
+            }
+        }));
+
+        assert_eq!(appended, expected);
+    }
+
+    #[test]
     fn plan_metadata_helpers_match_materialized_rows() {
         let old = "keep\nremove only\nbefore change\nshared tail\n";
         let new = "keep\ninsert only\nafter change\nshared tail\nextra add\n";
 
         let plan = side_by_side_plan(old, new);
         let rows = side_by_side_rows(old, new);
+        let inline_row_count = rows.len()
+            + rows
+                .iter()
+                .filter(|row| row.kind == FileDiffRowKind::Modify)
+                .count();
         let old_line_count = old.lines().count();
         let new_line_count = new.lines().count();
 
         assert_eq!(plan.row_count, rows.len());
+        assert_eq!(plan.inline_row_count, inline_row_count);
         assert_eq!(
             plan_row_region_anchors(&plan),
             compute_row_region_anchors(&rows)
@@ -3112,6 +3656,60 @@ mod tests {
         assert_eq!(changed[0].new_line, Some((first_change_ix + 1) as u32));
         assert_eq!(changed[1].old_line, Some((second_change_ix + 1) as u32));
         assert_eq!(changed[1].new_line, Some((second_change_ix + 1) as u32));
+    }
+
+    #[test]
+    fn plan_inline_row_count_tracks_eof_newline_rewrite() {
+        let old = "keep\nshared tail\n";
+        let new = "keep\nshared tail";
+
+        let plan = side_by_side_plan(old, new);
+        let rows = side_by_side_rows(old, new);
+        let inline_row_count = rows.len()
+            + rows
+                .iter()
+                .filter(|row| row.kind == FileDiffRowKind::Modify)
+                .count();
+
+        assert_eq!(plan.eof_newline, Some(FileDiffEofNewline::MissingInNew));
+        assert_eq!(plan.row_count, rows.len());
+        assert_eq!(plan.inline_row_count, inline_row_count);
+    }
+
+    #[test]
+    fn direct_linear_fallback_plan_merges_prefix_middle_and_suffix_runs() {
+        let old_text = "keep-1\nkeep-2\nold-a\nold-b\nkeep-3\n";
+        let new_text = "keep-1\nkeep-2\nnew-a\nnew-b\nkeep-3\n";
+        let old_lines = split_lines(old_text);
+        let new_lines = split_lines(new_text);
+        let plan = build_linear_fallback_side_by_side_plan_with_pair_cost(
+            old_text,
+            new_text,
+            old_lines.as_slice(),
+            new_lines.as_slice(),
+            replacement_pair_cost,
+        );
+
+        assert_eq!(
+            plan.runs,
+            vec![
+                FileDiffPlanRun::Context {
+                    old_start: 0,
+                    new_start: 0,
+                    len: 2,
+                },
+                FileDiffPlanRun::Modify {
+                    old_start: 2,
+                    new_start: 2,
+                    len: 2,
+                },
+                FileDiffPlanRun::Context {
+                    old_start: 4,
+                    new_start: 4,
+                    len: 1,
+                },
+            ]
+        );
     }
 
     #[cfg(feature = "benchmarks")]

@@ -1,5 +1,25 @@
 use super::*;
 
+const MULTILINE_TEXT_COPY_BYTES_PER_LINE_ESTIMATE: usize = 64;
+const DIFF_TEXT_TAB_WIDTH: usize = 4;
+
+pub(in crate::view) fn multiline_text_copy_capacity_hint(line_count: usize) -> usize {
+    line_count.saturating_mul(MULTILINE_TEXT_COPY_BYTES_PER_LINE_ESTIMATE)
+}
+
+pub(in crate::view) fn diff_text_display_len(text: &str) -> usize {
+    if !text.contains('\t') {
+        return text.len();
+    }
+
+    text.chars().fold(0usize, |len, ch| {
+        len.saturating_add(match ch {
+            '\t' => DIFF_TEXT_TAB_WIDTH,
+            _ => ch.len_utf8(),
+        })
+    })
+}
+
 pub(super) fn scrollbar_markers_from_flags(
     len: usize,
     mut flag_at_index: impl FnMut(usize) -> u8,
@@ -68,6 +88,23 @@ pub(super) fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
             &line.text
         }
     }
+}
+
+pub(super) fn diff_content_line_text(
+    line: &AnnotatedDiffLine,
+) -> gitcomet_core::file_diff::FileDiffLineText {
+    let content_start = match line.kind {
+        gitcomet_core::domain::DiffLineKind::Add
+        | gitcomet_core::domain::DiffLineKind::Remove
+        | gitcomet_core::domain::DiffLineKind::Context => 1,
+        gitcomet_core::domain::DiffLineKind::Header | gitcomet_core::domain::DiffLineKind::Hunk => {
+            0
+        }
+    };
+    line.text
+        .slice(content_start..line.text.len())
+        .unwrap_or_else(|| line.text.clone())
+        .into()
 }
 
 pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
@@ -1128,5 +1165,11 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn diff_text_display_len_expands_tabs_without_allocating() {
+        assert_eq!(diff_text_display_len("hello"), 5);
+        assert_eq!(diff_text_display_len("\twide\tcell"), 16);
     }
 }

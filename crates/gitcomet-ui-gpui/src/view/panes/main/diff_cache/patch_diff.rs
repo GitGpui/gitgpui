@@ -1,5 +1,7 @@
 use super::super::*;
+use crate::view::diff_utils::diff_content_line_text;
 use gitcomet_core::domain::DiffRowProvider;
+use smallvec::SmallVec;
 
 pub(in crate::view) const PATCH_DIFF_PAGE_SIZE: usize = 256;
 
@@ -7,6 +9,57 @@ pub(in crate::view) const PATCH_DIFF_PAGE_SIZE: usize = 256;
 struct DiffLineNumberState {
     old_line: Option<u32>,
     new_line: Option<u32>,
+}
+
+pub(crate) struct PagedPatchDiffRowsSliceIter<'a> {
+    provider: &'a PagedPatchDiffRows,
+    next_ix: usize,
+    end_ix: usize,
+    current_page_ix: Option<usize>,
+    current_page: Option<Arc<[AnnotatedDiffLine]>>,
+}
+
+impl<'a> PagedPatchDiffRowsSliceIter<'a> {
+    fn empty(provider: &'a PagedPatchDiffRows) -> Self {
+        Self {
+            provider,
+            next_ix: 0,
+            end_ix: 0,
+            current_page_ix: None,
+            current_page: None,
+        }
+    }
+
+    fn new(provider: &'a PagedPatchDiffRows, start: usize, end: usize) -> Self {
+        Self {
+            provider,
+            next_ix: start,
+            end_ix: end,
+            current_page_ix: None,
+            current_page: None,
+        }
+    }
+}
+
+impl Iterator for PagedPatchDiffRowsSliceIter<'_> {
+    type Item = AnnotatedDiffLine;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_ix >= self.end_ix {
+            return None;
+        }
+
+        let page_ix = self.next_ix / self.provider.page_size;
+        if self.current_page_ix != Some(page_ix) {
+            self.current_page = self.provider.load_page(page_ix);
+            self.current_page_ix = Some(page_ix);
+        }
+
+        let page_row_ix = self.next_ix % self.provider.page_size;
+        let row = self.current_page.as_ref()?.get(page_row_ix)?.clone();
+        self.next_ix += 1;
+        Some(row)
+    }
 }
 
 #[derive(Debug)]
@@ -179,7 +232,7 @@ impl PagedPatchDiffRows {
 impl gitcomet_core::domain::DiffRowProvider for PagedPatchDiffRows {
     type RowRef = AnnotatedDiffLine;
     type SliceIter<'a>
-        = std::vec::IntoIter<AnnotatedDiffLine>
+        = PagedPatchDiffRowsSliceIter<'a>
     where
         Self: 'a;
 
@@ -193,36 +246,22 @@ impl gitcomet_core::domain::DiffRowProvider for PagedPatchDiffRows {
 
     fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_> {
         if start >= end || start >= self.diff.lines.len() {
-            return Vec::new().into_iter();
+            return PagedPatchDiffRowsSliceIter::empty(self);
         }
         let end = end.min(self.diff.lines.len());
-        let mut rows = Vec::with_capacity(end - start);
-        let first_page = start / self.page_size;
-        let last_page = (end - 1) / self.page_size;
-        for page_ix in first_page..=last_page {
-            let Some(page) = self.load_page(page_ix) else {
-                break;
-            };
-            let page_start = page_ix * self.page_size;
-            let slice_start = start.saturating_sub(page_start);
-            let slice_end = (end - page_start).min(page.len());
-            if slice_start < slice_end {
-                rows.extend(page[slice_start..slice_end].iter().cloned());
-            }
-        }
-        rows.into_iter()
+        PagedPatchDiffRowsSliceIter::new(self, start, end)
     }
 }
 
 #[derive(Debug, Default)]
 struct PatchSplitMaterializationState {
-    rows: Vec<PatchSplitRow>,
+    rows: SmallVec<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>,
     /// Logical index of `rows[0]`. Rows before this index were skipped via
     /// the fast-forward scan and are not stored.
     row_base: usize,
     next_src_ix: usize,
-    pending_removes: Vec<(usize, AnnotatedDiffLine)>,
-    pending_adds: Vec<(usize, AnnotatedDiffLine)>,
+    pending_removes: SmallVec<[(usize, AnnotatedDiffLine); 8]>,
+    pending_adds: SmallVec<[(usize, AnnotatedDiffLine); 8]>,
     done: bool,
 }
 
@@ -234,8 +273,16 @@ pub(in crate::view) struct PagedPatchSplitRows {
 }
 
 impl PagedPatchSplitRows {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::view) fn new(source: Arc<PagedPatchDiffRows>) -> Self {
         let len_hint = Self::count_rows(source.diff.lines.as_slice());
+        Self::new_with_len_hint(source, len_hint)
+    }
+
+    pub(in crate::view) fn new_with_len_hint(
+        source: Arc<PagedPatchDiffRows>,
+        len_hint: usize,
+    ) -> Self {
         Self {
             source,
             len_hint,
@@ -243,6 +290,7 @@ impl PagedPatchSplitRows {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn count_rows(lines: &[gitcomet_core::domain::DiffLine]) -> usize {
         use gitcomet_core::domain::DiffLineKind as DK;
 
@@ -342,8 +390,8 @@ impl PagedPatchSplitRows {
                     kind,
                     old_line: left.and_then(|(_, line)| line.old_line),
                     new_line: right.and_then(|(_, line)| line.new_line),
-                    old: left.map(|(_, line)| diff_content_text(line).into()),
-                    new: right.map(|(_, line)| diff_content_text(line).into()),
+                    old: left.map(|(_, line)| diff_content_line_text(line)),
+                    new: right.map(|(_, line)| diff_content_line_text(line)),
                     eof_newline: None,
                 },
                 old_src_ix: left.map(|(ix, _)| *ix),
@@ -359,13 +407,13 @@ impl PagedPatchSplitRows {
         src_ix: usize,
         line: AnnotatedDiffLine,
     ) {
-        let text: Arc<str> = diff_content_text(&line).into();
+        let text = diff_content_line_text(&line);
         state.rows.push(PatchSplitRow::Aligned {
             row: FileDiffRow {
                 kind: gitcomet_core::file_diff::FileDiffRowKind::Context,
                 old_line: line.old_line,
                 new_line: line.new_line,
-                old: Some(Arc::clone(&text)),
+                old: Some(text.clone()),
                 new: Some(text),
                 eof_newline: None,
             },
@@ -441,20 +489,14 @@ impl PagedPatchSplitRows {
             return;
         }
 
-        // Fast-forward on first access when the target is deep. Scans only
-        // DiffLineKind values to find a block boundary, skipping all Arc<str>
-        // allocations and page-cache overhead for rows before the window.
-        if state.rows.is_empty()
-            && state.next_src_ix == 0
-            && state.row_base == 0
-            && target_ix > self.source.page_size
-        {
-            let (skip_src, skip_rows) =
-                Self::scan_to_block_boundary(&self.source.diff.lines, target_ix);
-            if skip_rows > 0 {
-                state.row_base = skip_rows;
-                state.next_src_ix = skip_src;
-            }
+        self.maybe_fast_forward_to(&mut state, target_ix);
+
+        if state.rows.is_empty() {
+            let reserve_rows = target_ix
+                .saturating_sub(state.row_base)
+                .saturating_add(1)
+                .min(self.len_hint.saturating_sub(state.row_base));
+            state.rows.reserve(reserve_rows);
         }
 
         while logical_len(&state) <= target_ix && !state.done {
@@ -494,12 +536,32 @@ impl PagedPatchSplitRows {
     pub(in crate::view) fn materialized_row_count(&self) -> usize {
         self.state.lock().map(|state| state.rows.len()).unwrap_or(0)
     }
+
+    fn maybe_fast_forward_to(&self, state: &mut PatchSplitMaterializationState, target_ix: usize) {
+        // On a fresh deep access, skip directly to the last clean block
+        // boundary before the requested row so we only materialize rows that
+        // can actually land in the requested window.
+        if !state.rows.is_empty()
+            || state.next_src_ix != 0
+            || state.row_base != 0
+            || target_ix <= self.source.page_size
+        {
+            return;
+        }
+
+        let (skip_src, skip_rows) =
+            Self::scan_to_block_boundary(&self.source.diff.lines, target_ix);
+        if skip_rows > 0 {
+            state.row_base = skip_rows;
+            state.next_src_ix = skip_src;
+        }
+    }
 }
 
 impl gitcomet_core::domain::DiffRowProvider for PagedPatchSplitRows {
     type RowRef = PatchSplitRow;
     type SliceIter<'a>
-        = std::vec::IntoIter<PatchSplitRow>
+        = smallvec::IntoIter<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>
     where
         Self: 'a;
 
@@ -513,16 +575,20 @@ impl gitcomet_core::domain::DiffRowProvider for PagedPatchSplitRows {
 
     fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_> {
         if start >= end || start >= self.len_hint {
-            return Vec::new().into_iter();
+            return SmallVec::<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>::new().into_iter();
         }
         let end = end.min(self.len_hint);
 
-        // If start is before the skip window, trigger a reset first.
-        if let Ok(state) = self.state.lock()
-            && start < state.row_base
-        {
-            drop(state);
-            self.materialize_until(start);
+        if let Ok(mut state) = self.state.lock() {
+            if start < state.row_base {
+                state.rows.clear();
+                state.row_base = 0;
+                state.next_src_ix = 0;
+                state.pending_removes.clear();
+                state.pending_adds.clear();
+                state.done = false;
+            }
+            self.maybe_fast_forward_to(&mut state, start);
         }
 
         self.materialize_until(end.saturating_sub(1));
@@ -531,57 +597,96 @@ impl gitcomet_core::domain::DiffRowProvider for PagedPatchSplitRows {
             let local_start = start.saturating_sub(state.row_base);
             let local_end = end.saturating_sub(state.row_base).min(state.rows.len());
             if local_start < local_end {
-                let mut rows = Vec::with_capacity(local_end - local_start);
+                let mut rows = SmallVec::<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>::with_capacity(
+                    local_end - local_start,
+                );
                 rows.extend(state.rows[local_start..local_end].iter().cloned());
                 return rows.into_iter();
             }
         }
-        Vec::new().into_iter()
+        SmallVec::<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>::new().into_iter()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PatchInlineVisibleRun {
+    start_visible_ix: usize,
+    start_src_ix: usize,
+    len: usize,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct PatchInlineVisibleMap {
-    src_len: usize,
-    hidden_src_ixs: Vec<usize>,
+    visible_len: usize,
+    visible_runs: Vec<PatchInlineVisibleRun>,
 }
 
 impl PatchInlineVisibleMap {
     pub(in crate::view) fn from_hidden_flags(hidden_flags: &[bool]) -> Self {
-        let mut hidden_src_ixs = Vec::new();
+        let mut visible_runs = Vec::new();
+        let mut visible_len = 0usize;
+        let mut run_start_src_ix = None;
+
         for (src_ix, hide) in hidden_flags.iter().copied().enumerate() {
             if hide {
-                hidden_src_ixs.push(src_ix);
+                if let Some(start_src_ix) = run_start_src_ix.take() {
+                    let len = src_ix.saturating_sub(start_src_ix);
+                    if len > 0 {
+                        visible_runs.push(PatchInlineVisibleRun {
+                            start_visible_ix: visible_len,
+                            start_src_ix,
+                            len,
+                        });
+                        visible_len += len;
+                    }
+                }
+            } else if run_start_src_ix.is_none() {
+                run_start_src_ix = Some(src_ix);
             }
         }
+
+        if let Some(start_src_ix) = run_start_src_ix {
+            let len = hidden_flags.len().saturating_sub(start_src_ix);
+            if len > 0 {
+                visible_runs.push(PatchInlineVisibleRun {
+                    start_visible_ix: visible_len,
+                    start_src_ix,
+                    len,
+                });
+                visible_len += len;
+            }
+        }
+
         Self {
-            src_len: hidden_flags.len(),
-            hidden_src_ixs,
+            visible_len,
+            visible_runs,
         }
     }
 
     pub(in crate::view) fn visible_len(&self) -> usize {
-        self.src_len.saturating_sub(self.hidden_src_ixs.len())
+        self.visible_len
+    }
+
+    pub(in crate::view) fn for_each_visible_src_ix(&self, mut visit: impl FnMut(usize, usize)) {
+        for run in &self.visible_runs {
+            for offset in 0..run.len {
+                visit(run.start_visible_ix + offset, run.start_src_ix + offset);
+            }
+        }
     }
 
     pub(in crate::view) fn src_ix_for_visible_ix(&self, visible_ix: usize) -> Option<usize> {
-        if visible_ix >= self.visible_len() {
+        if visible_ix >= self.visible_len {
             return None;
         }
 
-        let mut lo = 0usize;
-        let mut hi = self.src_len;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let hidden_through_mid = self.hidden_src_ixs.partition_point(|&ix| ix <= mid);
-            let visible_through_mid = mid + 1 - hidden_through_mid;
-            if visible_through_mid <= visible_ix {
-                lo = mid.saturating_add(1);
-            } else {
-                hi = mid;
-            }
-        }
-        (lo < self.src_len).then_some(lo)
+        let run_ix = self
+            .visible_runs
+            .partition_point(|run| run.start_visible_ix <= visible_ix)
+            .checked_sub(1)?;
+        let run = self.visible_runs.get(run_ix)?;
+        let offset = visible_ix.saturating_sub(run.start_visible_ix);
+        (offset < run.len).then_some(run.start_src_ix + offset)
     }
 }
 
@@ -905,6 +1010,55 @@ index 1111111..2222222 100644\n\
         assert_eq!(rows_provider.materialized_row_count(), 256);
         assert!(split_provider.materialized_row_count() < 256);
         assert!(split_provider.materialized_row_count() < split_provider.len_hint());
+    }
+
+    #[test]
+    fn paged_patch_split_rows_deep_window_returns_full_requested_slice() {
+        let line_count = 20_000usize;
+        let mut text = String::new();
+        text.push_str("diff --git a/src/lib.rs b/src/lib.rs\n");
+        text.push_str("index 1111111..2222222 100644\n");
+        text.push_str("--- a/src/lib.rs\n");
+        text.push_str("+++ b/src/lib.rs\n");
+        text.push_str(&format!(
+            "@@ -1,{} +1,{} @@ fn synthetic() {{\n",
+            line_count.saturating_mul(2),
+            line_count.saturating_mul(2)
+        ));
+        for ix in 0..line_count {
+            if ix % 7 == 0 {
+                text.push_str(&format!("-let old_{ix} = old_call({ix});\n"));
+                text.push_str(&format!("+let new_{ix} = new_call({ix});\n"));
+            } else {
+                text.push_str(&format!(" let shared_{ix} = keep({ix});\n"));
+            }
+        }
+
+        let diff = Arc::new(Diff::from_unified(
+            DiffTarget::WorkingTree {
+                path: PathBuf::from("src/lib.rs"),
+                area: DiffArea::Unstaged,
+            },
+            text.as_str(),
+        ));
+        let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&diff), 256));
+        let split_provider = PagedPatchSplitRows::new(Arc::clone(&rows_provider));
+        let window = 200usize;
+        let start = split_provider
+            .len_hint()
+            .saturating_mul(9)
+            .checked_div(10)
+            .unwrap_or(0)
+            .min(split_provider.len_hint().saturating_sub(window));
+
+        let deep_window = split_provider
+            .slice(start, start + window)
+            .collect::<Vec<_>>();
+
+        assert_eq!(deep_window.len(), window);
+        assert!(split_provider.materialized_row_count() >= window);
+        assert!(split_provider.materialized_row_count() < split_provider.len_hint());
+        assert!(rows_provider.cached_page_count() > 0);
     }
 
     #[test]

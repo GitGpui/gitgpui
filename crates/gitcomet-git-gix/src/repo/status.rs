@@ -9,6 +9,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -54,6 +55,7 @@ impl GixRepo {
 
     pub(super) fn status_impl(&self) -> Result<RepoStatus> {
         let repo = self._repo.to_thread_local();
+        let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo);
 
         // Check whether HEAD and the index file are unchanged since the last
         // status call.  When both match, the staged (Tree→Index) result is
@@ -81,7 +83,8 @@ impl GixRepo {
             // Fast path: HEAD and index unchanged — skip Tree→Index comparison and
             // collect Index→Worktree changes directly without the generic iterator's
             // extra thread/channel hop.
-            let direct = collect_index_worktree_status_direct(&repo, &mut unstaged)?;
+            let direct =
+                collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
             has_conflicted_unstaged = direct.has_conflicted_unstaged;
             (cached_staged, direct.index_stamp_after_write)
         } else {
@@ -173,7 +176,6 @@ impl GixRepo {
         // Only shell out for gitlink/submodule status when the repo is likely
         // to contain submodules or gitlinks.  This avoids a full `git status`
         // subprocess on every refresh for the common case.
-        let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo);
         if may_have_gitlinks {
             supplement_gitlink_status_from_porcelain(
                 &self.spec.workdir,
@@ -370,10 +372,20 @@ fn collect_index_worktree_item(
 fn collect_index_worktree_status_direct(
     repo: &gix::Repository,
     unstaged: &mut Vec<FileStatus>,
+    may_have_gitlinks: bool,
 ) -> Result<DirectIndexWorktreeStatus> {
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    collect_index_worktree_status_direct_from_index(repo, &index, unstaged, may_have_gitlinks)
+}
+
+fn collect_index_worktree_status_direct_from_index(
+    repo: &gix::Repository,
+    index: &gix::worktree::Index,
+    unstaged: &mut Vec<FileStatus>,
+    may_have_gitlinks: bool,
+) -> Result<DirectIndexWorktreeStatus> {
     let dirwalk_options = repo
         .dirwalk_options()
         .map_err(|e| {
@@ -382,30 +394,159 @@ fn collect_index_worktree_status_direct(
             )))
         })?
         .emit_untracked(gix::dir::walk::EmissionMode::Matching);
-    let submodule = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
-        repo.clone().into_sync(),
-        gix::status::Submodule::Given {
-            ignore: gix::submodule::config::Ignore::All,
-            check_dirty: false,
+    let collection = if may_have_gitlinks {
+        let submodule = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+            repo.clone().into_sync(),
+            gix::status::Submodule::Given {
+                ignore: gix::submodule::config::Ignore::All,
+                check_dirty: false,
+            },
+        )
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status submodules: {e}"))))?;
+        collect_index_worktree_status_direct_with_submodule(
+            repo,
+            index,
+            dirwalk_options,
+            unstaged,
+            submodule,
+        )?
+    } else {
+        collect_index_worktree_status_direct_with_submodule(
+            repo,
+            index,
+            dirwalk_options,
+            unstaged,
+            NoopSubmoduleStatus,
+        )?
+    };
+    let index_stamp_after_write =
+        maybe_persist_direct_index_changes(repo, index, collection.index_changes);
+    Ok(DirectIndexWorktreeStatus {
+        has_conflicted_unstaged: collection.has_conflicted_unstaged,
+        index_stamp_after_write,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct NoopSubmoduleStatus;
+
+impl gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus for NoopSubmoduleStatus {
+    type Output = gix::submodule::Status;
+    type Error = Infallible;
+
+    fn status(
+        &mut self,
+        _entry: &gix::index::Entry,
+        _rela_path: &gix::bstr::BStr,
+    ) -> std::result::Result<Option<Self::Output>, Self::Error> {
+        Ok(None)
+    }
+}
+
+fn collect_index_worktree_status_direct_with_submodule<S, E>(
+    repo: &gix::Repository,
+    index: &gix::worktree::Index,
+    dirwalk_options: gix::dirwalk::Options,
+    unstaged: &mut Vec<FileStatus>,
+    submodule: S,
+) -> Result<StatusEntryCollection>
+where
+    S: gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus<
+            Output = gix::submodule::Status,
+            Error = E,
+        > + Send
+        + Clone,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| Error::new(ErrorKind::Backend("gix status missing workdir".into())))?;
+    let attrs_and_excludes = repo
+        .attributes(
+            index,
+            gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+            gix::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            None,
+        )
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status attributes: {e}"))))?;
+    let (pathspec, _pathspec_attr_stack) = gix::Pathspec::new(
+        repo,
+        false,
+        std::iter::empty::<gix::bstr::BString>(),
+        true,
+        || -> std::result::Result<
+            gix::worktree::Stack,
+            Box<dyn std::error::Error + Send + Sync + 'static>,
+        > {
+            unreachable!("empty direct-status patterns never require pathspec attributes")
         },
     )
-    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status submodules: {e}"))))?;
+    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status pathspec: {e}"))))?
+    .into_parts();
+    let git_dir_realpath = gix::path::realpath_opts(
+        repo.git_dir(),
+        repo.current_dir(),
+        gix::path::realpath::MAX_SYMLINKS,
+    )
+    .map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix status git dir realpath: {e}"
+        )))
+    })?;
+    let fs_caps = repo
+        .filesystem_options()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status fs options: {e}"))))?;
+    let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
+    let resource_cache = gix::diff::resource_cache(
+        repo,
+        gix::diff::blob::pipeline::Mode::ToGit,
+        attrs_and_excludes.detach(),
+        gix::diff::blob::pipeline::WorktreeRoots {
+            old_root: None,
+            new_root: Some(workdir.to_owned()),
+        },
+    )
+    .map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix status resource cache: {e}"
+        )))
+    })?;
     let mut collector = StatusEntryCollector::new(unstaged);
     let mut progress = gix::progress::Discard;
     let should_interrupt = AtomicBool::new(false);
-    repo.index_worktree_status(
-        &index,
-        std::iter::empty::<gix::bstr::BString>(),
+    gix::status::plumbing::index_as_worktree_with_renames(
+        index,
+        workdir,
         &mut collector,
         gix::status::plumbing::index_as_worktree::traits::FastEq,
         submodule,
+        repo.objects
+            .clone()
+            .into_arc()
+            .expect("arc conversion always works"),
         &mut progress,
-        &should_interrupt,
-        gix::status::index_worktree::Options {
+        gix::status::plumbing::index_as_worktree_with_renames::Context {
+            pathspec,
+            resource_cache,
+            should_interrupt: &should_interrupt,
+            dirwalk: gix::status::plumbing::index_as_worktree_with_renames::DirwalkContext {
+                git_dir_realpath: git_dir_realpath.as_path(),
+                current_dir: repo.current_dir(),
+                ignore_case_index_lookup: accelerate_lookup.as_ref(),
+            },
+        },
+        gix::status::plumbing::index_as_worktree_with_renames::Options {
             sorting: None,
-            dirwalk_options: Some(dirwalk_options),
+            object_hash: repo.object_hash(),
+            tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
+                fs: fs_caps,
+                thread_limit: None,
+                stat: repo.stat_options().map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
+                })?,
+            },
+            dirwalk: Some(dirwalk_options.into()),
             rewrites: None,
-            thread_limit: None,
         },
     )
     .map_err(|e| {
@@ -414,13 +555,7 @@ fn collect_index_worktree_status_direct(
         )))
     })?;
 
-    let collection = collector.finish()?;
-    let index_stamp_after_write =
-        maybe_persist_direct_index_changes(repo, &index, collection.index_changes);
-    Ok(DirectIndexWorktreeStatus {
-        has_conflicted_unstaged: collection.has_conflicted_unstaged,
-        index_stamp_after_write,
-    })
+    collector.finish()
 }
 
 struct StatusEntryCollector<'a> {

@@ -826,11 +826,11 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
         Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
             repo_id: RepoId(1),
             target: target.clone(),
-            result: Ok(Some(gitcomet_core::domain::FileDiffText {
-                path: PathBuf::from("img.png"),
-                old: Some("old".to_string()),
-                new: Some("new".to_string()),
-            })),
+            result: Ok(Some(gitcomet_core::domain::FileDiffText::new(
+                PathBuf::from("img.png"),
+                Some("old".to_string()),
+                Some("new".to_string()),
+            ))),
         }),
     );
     assert!(matches!(

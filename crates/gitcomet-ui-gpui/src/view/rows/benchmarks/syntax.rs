@@ -14,6 +14,7 @@ use crate::view::markdown_preview::{
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
     MarkdownPreviewRowStyledTextCache, MarkdownPreviewRowWidthCache,
 };
+use crate::view::panes::main::diff_cache::render_svg_image_diff_preview;
 
 pub struct FileDiffSyntaxPrepareFixture {
     lines: Vec<String>,
@@ -1198,32 +1199,41 @@ pub struct ImagePreviewFirstPaintMetrics {
 
 /// Benchmark fixture for the ready-image path in `render_selected_file_diff`.
 ///
-/// The production image-diff cache stores raw file bytes inside `gpui::Image`
-/// objects. `gpui::Image::from_bytes` hashes and retains those bytes without
-/// decoding them, so a PNG-signature payload with deterministic padding is
-/// sufficient to model the byte-copy/hash cost of first paint in bench builds.
+/// The production diff renderer consumes already-built image preview cache
+/// entries. Keep the synthetic byte payloads around for metrics, but prebuild
+/// the ready `gpui::Image` handles once so the hot loop only fingerprints the
+/// two cached cells plus their divider.
 pub struct ImagePreviewFirstPaintFixture {
-    old_png: Vec<u8>,
-    new_png: Vec<u8>,
+    old_bytes: usize,
+    new_bytes: usize,
+    cells: [Option<Arc<gpui::Image>>; 2],
 }
 
 impl ImagePreviewFirstPaintFixture {
     pub fn new(old_bytes: usize, new_bytes: usize) -> Self {
+        let old_png =
+            build_synthetic_png_like_payload(old_bytes.max(64 * 1024), 0x4f4c_445f_504e_4701);
+        let new_png =
+            build_synthetic_png_like_payload(new_bytes.max(64 * 1024), 0x4e45_575f_504e_4702);
         Self {
-            old_png: build_synthetic_png_like_payload(
-                old_bytes.max(64 * 1024),
-                0x4f4c_445f_504e_4701,
-            ),
-            new_png: build_synthetic_png_like_payload(
-                new_bytes.max(64 * 1024),
-                0x4e45_575f_504e_4702,
-            ),
+            old_bytes: old_png.len(),
+            new_bytes: new_png.len(),
+            cells: [
+                Some(Arc::new(gpui::Image::from_bytes(
+                    gpui::ImageFormat::Png,
+                    old_png,
+                ))),
+                Some(Arc::new(gpui::Image::from_bytes(
+                    gpui::ImageFormat::Png,
+                    new_png,
+                ))),
+            ],
         }
     }
 
     pub fn measure_first_paint(&self) -> ImagePreviewFirstPaintMetrics {
-        let old_bytes = bench_counter_u64(self.old_png.len());
-        let new_bytes = bench_counter_u64(self.new_png.len());
+        let old_bytes = bench_counter_u64(self.old_bytes);
+        let new_bytes = bench_counter_u64(self.new_bytes);
         ImagePreviewFirstPaintMetrics {
             old_bytes,
             new_bytes,
@@ -1235,19 +1245,8 @@ impl ImagePreviewFirstPaintFixture {
     }
 
     pub fn run_first_paint_step(&self) -> u64 {
-        let cells = [
-            Some(Arc::new(gpui::Image::from_bytes(
-                gpui::ImageFormat::Png,
-                self.old_png.clone(),
-            ))),
-            Some(Arc::new(gpui::Image::from_bytes(
-                gpui::ImageFormat::Png,
-                self.new_png.clone(),
-            ))),
-        ];
-
         let mut h = FxHasher::default();
-        for (cell_ix, image) in cells.iter().enumerate() {
+        for (cell_ix, image) in self.cells.iter().enumerate() {
             cell_ix.hash(&mut h);
             match image {
                 Some(image) => {
@@ -2162,8 +2161,8 @@ pub struct SvgDualPathFirstWindowMetrics {
 ///
 /// Production SVG image diffs take one of two paths:
 ///
-/// 1. **Rasterize path** — valid SVG is parsed by `resvg::usvg`, rendered to a
-///    pixmap, encoded as PNG, and wrapped in `gpui::Image::from_bytes`.
+/// 1. **Rasterize path** — valid SVG is parsed by `resvg::usvg` and rendered to
+///    the `RenderImage` preview that file-diff rendering consumes.
 /// 2. **Fallback path** — invalid or oversized SVG fails rasterization and is
 ///    written to a temp file for external viewing.
 ///
@@ -2217,12 +2216,12 @@ impl SvgDualPathFirstWindowFixture {
     pub fn run_first_window_step(&self, _window: usize) -> u64 {
         let mut h = FxHasher::default();
 
-        // Path 1: rasterize the valid SVG → PNG → Image.
-        if let Some(png) = crate::view::diff_utils::rasterize_svg_preview_png(&self.old_svg) {
-            let image = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
+        // Path 1: render the valid SVG through the live file-diff preview path.
+        if let Some(render) = render_svg_image_diff_preview(&self.old_svg) {
+            let size = render.size(0);
             1u8.hash(&mut h); // rasterize-success marker
-            image.id().hash(&mut h);
-            image.bytes.len().hash(&mut h);
+            size.width.0.hash(&mut h);
+            size.height.0.hash(&mut h);
         } else {
             0u8.hash(&mut h); // should not happen for valid SVG
         }

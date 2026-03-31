@@ -17,6 +17,7 @@ use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, GitRepository};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use smallvec::SmallVec;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,6 +26,9 @@ use std::time::{Duration, SystemTime};
 const HOT_REPO_SWITCH_SECONDARY_REFRESH_WINDOW: Duration = Duration::from_secs(5);
 pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 16;
 pub(crate) type SetActiveRepoEffects = SmallVec<[Effect; SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY]>;
+pub(crate) const REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY: usize = 1;
+pub(crate) type ReorderRepoTabsEffects =
+    SmallVec<[Effect; REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY]>;
 
 fn repo_switch_secondary_metadata_ready(repo_state: &RepoState) -> bool {
     matches!(repo_state.branches, Loadable::Ready(_))
@@ -367,54 +371,77 @@ pub(super) fn reorder_repo_tabs(
     repo_id: RepoId,
     insert_before: Option<RepoId>,
 ) -> Vec<Effect> {
+    let mut effects = ReorderRepoTabsEffects::new();
+    fill_reorder_repo_tabs_inline(state, repo_id, insert_before, &mut effects);
+    effects.into_vec()
+}
+
+pub(super) fn fill_reorder_repo_tabs_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    insert_before: Option<RepoId>,
+    effects: &mut ReorderRepoTabsEffects,
+) {
     if state.repos.len() <= 1 {
-        return Vec::new();
+        return;
     }
 
-    let Some(from_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
-        return Vec::new();
+    if insert_before == Some(repo_id) {
+        return;
+    }
+
+    let mut from_ix = None;
+    let mut before_ix = None;
+    for (ix, repo) in state.repos.iter().enumerate() {
+        if repo.id == repo_id {
+            from_ix = Some(ix);
+        }
+        if insert_before == Some(repo.id) {
+            before_ix = Some(ix);
+        }
+        if from_ix.is_some() && (insert_before.is_none() || before_ix.is_some()) {
+            break;
+        }
+    }
+
+    let Some(from_ix) = from_ix else {
+        return;
     };
 
-    if let Some(before_repo_id) = insert_before {
-        if before_repo_id == repo_id {
-            return Vec::new();
-        }
-        if let Some(before_ix) = state.repos.iter().position(|r| r.id == before_repo_id)
-            && from_ix + 1 == before_ix
-        {
+    match before_ix {
+        Some(before_ix) if from_ix + 1 == before_ix => {
             // Already immediately before the target.
-            return Vec::new();
+            return;
         }
-    } else if from_ix + 1 == state.repos.len() {
-        // Already last.
-        return Vec::new();
-    }
-
-    let moved = state.repos.remove(from_ix);
-    let insert_ix = match insert_before {
-        Some(before_repo_id) => state
-            .repos
-            .iter()
-            .position(|r| r.id == before_repo_id)
-            .unwrap_or(state.repos.len()),
-        None => state.repos.len(),
+        Some(before_ix) if from_ix < before_ix => {
+            state.repos[from_ix..before_ix].rotate_left(1);
+        }
+        Some(before_ix) => {
+            state.repos[before_ix..=from_ix].rotate_right(1);
+        }
+        None if from_ix + 1 == state.repos.len() => {
+            // Already last.
+            return;
+        }
+        None => {
+            state.repos[from_ix..].rotate_left(1);
+        }
     };
-    state.repos.insert(insert_ix, moved);
 
-    vec![persist_session_effect(
+    effects.push(persist_session_effect(
         state,
         state.active_repo,
         "reordering repository tabs",
-    )]
+    ));
 }
 
 pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Vec<Effect> {
     state.clone = Some(CloneOpState {
-        url: url.clone(),
-        dest: dest.clone(),
+        url: Arc::<str>::from(url.as_str()),
+        dest: Arc::new(dest.clone()),
         status: CloneOpStatus::Running,
         seq: 0,
-        output_tail: Vec::new(),
+        output_tail: VecDeque::new(),
     });
     vec![Effect::CloneRepo {
         url,
@@ -425,21 +452,25 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
 
 pub(super) fn clone_repo_progress(
     state: &mut AppState,
-    dest: PathBuf,
+    dest: Arc<PathBuf>,
     line: String,
 ) -> Vec<Effect> {
+    const MAX_LINES: usize = 80;
+
     if let Some(op) = state.clone.as_mut()
         && matches!(op.status, CloneOpStatus::Running)
-        && op.dest == dest
+        && op.dest.as_ref() == dest.as_ref()
     {
         op.seq = op.seq.wrapping_add(1);
         if !line.trim().is_empty() {
-            op.output_tail.push(line);
-            const MAX_LINES: usize = 80;
-            if op.output_tail.len() > MAX_LINES {
-                let drain = op.output_tail.len() - MAX_LINES;
-                op.output_tail.drain(0..drain);
+            if op.output_tail.capacity() < MAX_LINES {
+                op.output_tail
+                    .reserve(MAX_LINES.saturating_sub(op.output_tail.capacity()));
             }
+            if op.output_tail.len() == MAX_LINES {
+                op.output_tail.pop_front();
+            }
+            op.output_tail.push_back(line);
         }
     }
     Vec::new()
@@ -452,9 +483,9 @@ pub(super) fn clone_repo_finished(
     result: std::result::Result<CommandOutput, Error>,
 ) -> Vec<Effect> {
     if let Some(op) = state.clone.as_mut()
-        && op.dest == dest
+        && op.dest.as_ref() == &dest
     {
-        op.url = url;
+        op.url = Arc::<str>::from(url.as_str());
         op.status = match result {
             Ok(_) => CloneOpStatus::FinishedOk,
             Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
@@ -462,14 +493,14 @@ pub(super) fn clone_repo_finished(
         op.seq = op.seq.wrapping_add(1);
     } else {
         state.clone = Some(CloneOpState {
-            url,
-            dest,
+            url: Arc::<str>::from(url.as_str()),
+            dest: Arc::new(dest),
             status: match result {
                 Ok(_) => CloneOpStatus::FinishedOk,
                 Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
             },
             seq: 1,
-            output_tail: Vec::new(),
+            output_tail: VecDeque::new(),
         });
     }
     Vec::new()

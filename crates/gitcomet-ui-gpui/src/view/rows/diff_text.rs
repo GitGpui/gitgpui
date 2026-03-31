@@ -75,14 +75,40 @@ const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 27] = [
 ];
 
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 4_096;
+const PREPARED_READY_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 32_768;
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_SOURCE_BYTES: usize = 512;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct DiffTextSourceIdentity {
+    source_ptr: usize,
+    source_len: usize,
+}
+
+impl DiffTextSourceIdentity {
+    pub(super) fn from_str(text: &str) -> Self {
+        Self {
+            source_ptr: text.as_ptr() as usize,
+            source_len: text.len(),
+        }
+    }
+
+    pub(super) fn from_arc_text(text: &Arc<str>) -> Self {
+        Self::from_str(text.as_ref())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum SingleLineTextSourceCacheKey {
+    Hashed(u64),
+    Identity(DiffTextSourceIdentity),
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct SingleLineStyledTextCacheKey {
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
     theme_signature: u64,
-    source_hash: u64,
+    source: SingleLineTextSourceCacheKey,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -94,9 +120,25 @@ struct PreparedReadyLineStyledTextCacheKey {
     tokens_len: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct SingleLineWordHighlightedTextCacheKey {
+    language: Option<DiffSyntaxLanguage>,
+    mode: DiffSyntaxMode,
+    theme_signature: u64,
+    source: SingleLineTextSourceCacheKey,
+    word_ranges_hash: u64,
+}
+
 #[derive(Clone)]
 struct CachedSingleLineStyledText {
-    source_text: Arc<str>,
+    source_text: Option<Arc<str>>,
+    styled: CachedDiffStyledText,
+}
+
+#[derive(Clone)]
+struct CachedSingleLineWordHighlightedText {
+    source_text: Option<Arc<str>>,
+    word_ranges: Arc<[Range<usize>]>,
     styled: CachedDiffStyledText,
 }
 
@@ -115,6 +157,8 @@ struct CachedSingleLineThemeSignature {
 
 struct SingleLineStyledTextCache {
     by_key: FxLruCache<SingleLineStyledTextCacheKey, CachedSingleLineStyledText>,
+    word_highlighted_by_key:
+        FxLruCache<SingleLineWordHighlightedTextCacheKey, CachedSingleLineWordHighlightedText>,
     prepared_by_key:
         FxLruCache<PreparedReadyLineStyledTextCacheKey, CachedPreparedReadyLineStyledText>,
     cached_theme_signature: Option<CachedSingleLineThemeSignature>,
@@ -124,7 +168,12 @@ impl SingleLineStyledTextCache {
     fn new() -> Self {
         Self {
             by_key: new_fx_lru_cache(SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES),
-            prepared_by_key: new_fx_lru_cache(SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES),
+            word_highlighted_by_key: new_fx_lru_cache(SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES),
+            // Prepared ready-line scroll workloads can revisit tens of thousands
+            // of line/side pairs before cycling back to the starting window.
+            // Keep a larger LRU here so large prepared documents retain their
+            // warmed row styles instead of thrashing after a single sweep.
+            prepared_by_key: new_fx_lru_cache(PREPARED_READY_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES),
             cached_theme_signature: None,
         }
     }
@@ -147,12 +196,13 @@ impl SingleLineStyledTextCache {
         language: DiffSyntaxLanguage,
         mode: DiffSyntaxMode,
         text: &str,
+        source_identity: Option<DiffTextSourceIdentity>,
     ) -> SingleLineStyledTextCacheKey {
         SingleLineStyledTextCacheKey {
             language,
             mode,
             theme_signature: self.theme_signature(theme),
-            source_hash: hash_text_content(text),
+            source: Self::source_key(text, source_identity),
         }
     }
 
@@ -171,6 +221,36 @@ impl SingleLineStyledTextCache {
         }
     }
 
+    fn word_highlighted_key_for(
+        &mut self,
+        theme: AppTheme,
+        language: Option<DiffSyntaxLanguage>,
+        mode: DiffSyntaxMode,
+        text: &str,
+        source_identity: Option<DiffTextSourceIdentity>,
+        word_ranges: &[Range<usize>],
+    ) -> SingleLineWordHighlightedTextCacheKey {
+        SingleLineWordHighlightedTextCacheKey {
+            language,
+            mode,
+            theme_signature: self.theme_signature(theme),
+            source: Self::source_key(text, source_identity),
+            word_ranges_hash: hash_word_ranges(word_ranges),
+        }
+    }
+
+    fn source_key(
+        text: &str,
+        source_identity: Option<DiffTextSourceIdentity>,
+    ) -> SingleLineTextSourceCacheKey {
+        source_identity
+            .filter(|identity| identity.source_len == text.len())
+            .map_or_else(
+                || SingleLineTextSourceCacheKey::Hashed(hash_text_content(text)),
+                SingleLineTextSourceCacheKey::Identity,
+            )
+    }
+
     fn get(
         &mut self,
         key: SingleLineStyledTextCacheKey,
@@ -178,7 +258,32 @@ impl SingleLineStyledTextCache {
     ) -> Option<CachedDiffStyledText> {
         self.by_key
             .get(&key)
-            .filter(|entry| entry.source_text.as_ref() == text)
+            .filter(|entry| {
+                entry
+                    .source_text
+                    .as_deref()
+                    .unwrap_or(entry.styled.text.as_ref())
+                    == text
+            })
+            .map(|entry| entry.styled.clone())
+    }
+
+    fn get_word_highlighted(
+        &mut self,
+        key: SingleLineWordHighlightedTextCacheKey,
+        text: &str,
+        word_ranges: &[Range<usize>],
+    ) -> Option<CachedDiffStyledText> {
+        self.word_highlighted_by_key
+            .get(&key)
+            .filter(|entry| {
+                entry
+                    .source_text
+                    .as_deref()
+                    .unwrap_or(entry.styled.text.as_ref())
+                    == text
+                    && entry.word_ranges.as_ref() == word_ranges
+            })
             .map(|entry| entry.styled.clone())
     }
 
@@ -205,7 +310,24 @@ impl SingleLineStyledTextCache {
         self.by_key.put(
             key,
             CachedSingleLineStyledText {
-                source_text: Arc::<str>::from(text),
+                source_text: text.contains('\t').then(|| Arc::<str>::from(text)),
+                styled,
+            },
+        );
+    }
+
+    fn insert_word_highlighted(
+        &mut self,
+        key: SingleLineWordHighlightedTextCacheKey,
+        text: &str,
+        word_ranges: &[Range<usize>],
+        styled: CachedDiffStyledText,
+    ) {
+        self.word_highlighted_by_key.put(
+            key,
+            CachedSingleLineWordHighlightedText {
+                source_text: text.contains('\t').then(|| Arc::<str>::from(text)),
+                word_ranges: Arc::<[Range<usize>]>::from(word_ranges),
                 styled,
             },
         );
@@ -1184,6 +1306,34 @@ pub(super) fn build_cached_diff_styled_text(
             },
             word_color,
         },
+        None,
+    )
+}
+
+pub(super) fn build_cached_diff_styled_text_with_source_identity(
+    theme: AppTheme,
+    text: &str,
+    source_identity: Option<DiffTextSourceIdentity>,
+    word_ranges: &[Range<usize>],
+    query: &str,
+    language: Option<DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    word_color: Option<gpui::Rgba>,
+) -> CachedDiffStyledText {
+    build_cached_diff_styled_text_with_optional_palette(
+        theme,
+        None,
+        DiffTextBuildRequest {
+            text,
+            word_ranges,
+            query,
+            syntax: DiffSyntaxConfig {
+                language,
+                mode: syntax_mode,
+            },
+            word_color,
+        },
+        source_identity,
     )
 }
 
@@ -1192,7 +1342,12 @@ pub(super) fn build_cached_diff_styled_text_with_palette(
     highlight_palette: &SyntaxHighlightPalette,
     request: DiffTextBuildRequest<'_>,
 ) -> CachedDiffStyledText {
-    build_cached_diff_styled_text_with_optional_palette(theme, Some(highlight_palette), request)
+    build_cached_diff_styled_text_with_optional_palette(
+        theme,
+        Some(highlight_palette),
+        request,
+        None,
+    )
 }
 
 pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_syntax_kind(
@@ -1253,6 +1408,7 @@ fn build_cached_diff_styled_text_with_optional_palette(
     theme: AppTheme,
     highlight_palette: Option<&SyntaxHighlightPalette>,
     request: DiffTextBuildRequest<'_>,
+    source_identity: Option<DiffTextSourceIdentity>,
 ) -> CachedDiffStyledText {
     let text = request.text;
     let word_ranges = request.word_ranges;
@@ -1304,7 +1460,7 @@ fn build_cached_diff_styled_text_with_optional_palette(
         {
             let (key, cached) = SINGLE_LINE_STYLED_TEXT_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
-                let key = cache.key_for(theme, language, syntax_mode, text);
+                let key = cache.key_for(theme, language, syntax_mode, text, source_identity);
                 let styled = cache.get(key, text);
                 (key, styled)
             });
@@ -1320,6 +1476,44 @@ fn build_cached_diff_styled_text_with_optional_palette(
         }
 
         return build_syntax_only();
+    }
+
+    if highlight_palette.is_none()
+        && query.is_empty()
+        && request.word_color.is_none()
+        && !word_ranges.is_empty()
+        && should_cache_single_line_styled_text(text)
+    {
+        let (key, cached) = SINGLE_LINE_STYLED_TEXT_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let key = cache.word_highlighted_key_for(
+                theme,
+                language,
+                syntax_mode,
+                text,
+                source_identity,
+                word_ranges,
+            );
+            let styled = cache.get_word_highlighted(key, text, word_ranges);
+            (key, styled)
+        });
+        if let Some(styled) = cached {
+            return styled;
+        }
+
+        let styled = build_styled_text_fused(
+            theme,
+            FusedDiffTextBuildRequest {
+                build: request,
+                syntax_tokens_override: None,
+            },
+        );
+        SINGLE_LINE_STYLED_TEXT_CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .insert_word_highlighted(key, text, word_ranges, styled.clone());
+        });
+        return styled;
     }
 
     build_styled_text_fused(
@@ -1510,7 +1704,6 @@ pub(super) fn build_cached_diff_query_overlay_styled_text(
 
     thread_local! {
         static QUERY_OVERLAY_RANGES_BUF: RefCell<Vec<Range<usize>>> = const { RefCell::new(Vec::new()) };
-        static QUERY_OVERLAY_BOUNDARY_BUF: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
     }
 
     QUERY_OVERLAY_RANGES_BUF.with_borrow_mut(|query_ranges| {
@@ -1523,19 +1716,19 @@ pub(super) fn build_cached_diff_query_overlay_styled_text(
         let query_bg =
             with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into();
         if base_highlights.is_empty() {
-            let merged = query_ranges
-                .iter()
-                .map(|range| {
-                    (
-                        range.clone(),
-                        gpui::HighlightStyle {
-                            background_color: Some(query_bg),
-                            ..gpui::HighlightStyle::default()
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
-            let highlights_hash = hash_highlights(&merged);
+            let mut merged = Vec::with_capacity(query_ranges.len());
+            for range in query_ranges.iter().cloned() {
+                push_or_extend_highlight(
+                    &mut merged,
+                    range,
+                    gpui::HighlightStyle {
+                        background_color: Some(query_bg),
+                        ..gpui::HighlightStyle::default()
+                    },
+                );
+            }
+            let highlights_hash =
+                hash_query_overlay_highlights(base.highlights_hash, query_ranges, query_bg);
             return CachedDiffStyledText {
                 text: base.text.clone(),
                 highlights: Arc::from(merged),
@@ -1544,71 +1737,56 @@ pub(super) fn build_cached_diff_query_overlay_styled_text(
             };
         }
 
-        let merged = QUERY_OVERLAY_BOUNDARY_BUF.with_borrow_mut(|boundaries| {
-            boundaries.clear();
-            boundaries.push(0);
-            boundaries.push(base.text.len());
-            for (range, _) in base_highlights.iter() {
-                boundaries.push(range.start.min(base.text.len()));
-                boundaries.push(range.end.min(base.text.len()));
+        let mut merged: Vec<(Range<usize>, gpui::HighlightStyle)> =
+            Vec::with_capacity(base_highlights.len() + query_ranges.len() * 2);
+        let mut base_ix = 0usize;
+        let mut query_ix = 0usize;
+        let mut cursor = 0usize;
+        let text_len = base.text.len();
+        let default_style = gpui::HighlightStyle::default();
+
+        while cursor < text_len {
+            while base_ix < base_highlights.len() && base_highlights[base_ix].0.end <= cursor {
+                base_ix += 1;
             }
-            for range in query_ranges.iter() {
-                boundaries.push(range.start.min(base.text.len()));
-                boundaries.push(range.end.min(base.text.len()));
-            }
-            boundaries.sort_unstable();
-            boundaries.dedup();
-
-            let mut merged: Vec<(Range<usize>, gpui::HighlightStyle)> =
-                Vec::with_capacity(boundaries.len().saturating_sub(1));
-            let mut base_ix = 0usize;
-            let mut query_ix = 0usize;
-            let default_style = gpui::HighlightStyle::default();
-
-            for window in boundaries.windows(2) {
-                let (a, b) = (window[0], window[1]);
-                if a >= b || a >= base.text.len() {
-                    continue;
-                }
-                let b = b.min(base.text.len());
-                if a >= b {
-                    continue;
-                }
-
-                while base_ix < base_highlights.len() && base_highlights[base_ix].0.end <= a {
-                    base_ix += 1;
-                }
-                let base_style = base_highlights
-                    .get(base_ix)
-                    .filter(|(range, _)| range.start <= a && range.end >= b)
-                    .map(|(_, style)| *style);
-
-                while query_ix < query_ranges.len() && query_ranges[query_ix].end <= a {
-                    query_ix += 1;
-                }
-                let in_query = query_ranges
-                    .get(query_ix)
-                    .is_some_and(|range| range.start <= a && range.end >= b);
-
-                let mut style = base_style.unwrap_or_default();
-                if in_query {
-                    style.background_color = Some(query_bg);
-                }
-
-                if style != default_style {
-                    if let Some(last) = merged.last_mut()
-                        && last.0.end == a
-                        && last.1 == style
-                    {
-                        last.0.end = b;
-                        continue;
-                    }
-                    merged.push((a..b, style));
-                }
+            while query_ix < query_ranges.len() && query_ranges[query_ix].end <= cursor {
+                query_ix += 1;
             }
 
-            merged
-        });
+            let active_base = base_highlights
+                .get(base_ix)
+                .filter(|(range, _)| range.start <= cursor && range.end > cursor);
+            let active_query = query_ranges
+                .get(query_ix)
+                .filter(|range| range.start <= cursor && range.end > cursor);
+
+            let mut next_boundary = text_len;
+            if let Some((range, _)) = active_base {
+                next_boundary = next_boundary.min(range.end.min(text_len));
+            } else if let Some((range, _)) = base_highlights.get(base_ix) {
+                next_boundary = next_boundary.min(range.start.min(text_len));
+            }
+            if let Some(range) = active_query {
+                next_boundary = next_boundary.min(range.end.min(text_len));
+            } else if let Some(range) = query_ranges.get(query_ix) {
+                next_boundary = next_boundary.min(range.start.min(text_len));
+            }
+
+            if next_boundary <= cursor {
+                break;
+            }
+
+            let mut style = active_base.map(|(_, style)| *style).unwrap_or_default();
+            if active_query.is_some() {
+                style.background_color = Some(query_bg);
+            }
+
+            if style != default_style {
+                push_or_extend_highlight(&mut merged, cursor..next_boundary, style);
+            }
+
+            cursor = next_boundary;
+        }
 
         if merged.is_empty() {
             return CachedDiffStyledText {
@@ -1619,7 +1797,8 @@ pub(super) fn build_cached_diff_query_overlay_styled_text(
             };
         }
 
-        let highlights_hash = hash_highlights(&merged);
+        let highlights_hash =
+            hash_query_overlay_highlights(base.highlights_hash, query_ranges, query_bg);
         CachedDiffStyledText {
             text: base.text.clone(),
             highlights: Arc::from(merged),
@@ -1629,11 +1808,53 @@ pub(super) fn build_cached_diff_query_overlay_styled_text(
     })
 }
 
+fn push_or_extend_highlight(
+    merged: &mut Vec<DiffTextHighlight>,
+    range: Range<usize>,
+    style: gpui::HighlightStyle,
+) {
+    if range.is_empty() {
+        return;
+    }
+
+    if let Some(last) = merged.last_mut()
+        && last.0.end == range.start
+        && last.1 == style
+    {
+        last.0.end = range.end;
+        return;
+    }
+
+    merged.push((range, style));
+}
+
 fn hash_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
     let mut hasher = FxHasher::default();
     for (range, style) in highlights {
         range.hash(&mut hasher);
         style.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn hash_query_overlay_highlights(
+    base_highlights_hash: u64,
+    query_ranges: &[Range<usize>],
+    query_bg: gpui::Hsla,
+) -> u64 {
+    let mut hasher = FxHasher::default();
+    base_highlights_hash.hash(&mut hasher);
+    query_bg.hash(&mut hasher);
+    for range in query_ranges {
+        range.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn hash_word_ranges(ranges: &[Range<usize>]) -> u64 {
+    let mut hasher = FxHasher::default();
+    for range in ranges {
+        range.hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -3174,6 +3395,41 @@ mod tests {
     }
 
     #[test]
+    fn repeated_word_highlighted_line_styled_text_reuses_cached_highlights() {
+        let theme = AppTheme::gitcomet_dark();
+        let text = "let cached_value = replacement_value;";
+        let word_ranges = [4..16, 19..36];
+
+        let first = build_cached_diff_styled_text(
+            theme,
+            text,
+            &word_ranges,
+            "",
+            Some(DiffSyntaxLanguage::Rust),
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+        let second = build_cached_diff_styled_text(
+            theme,
+            text,
+            &word_ranges,
+            "",
+            Some(DiffSyntaxLanguage::Rust),
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+
+        assert!(
+            !first.highlights.is_empty(),
+            "word-highlighted syntax styling should produce at least one highlight segment"
+        );
+        assert!(
+            Arc::ptr_eq(&first.highlights, &second.highlights),
+            "repeated word-highlighted lines should reuse the cached highlight arc"
+        );
+    }
+
+    #[test]
     fn repeated_prepared_ready_line_styled_text_reuses_cached_text_and_highlights() {
         let theme = AppTheme::gitcomet_dark();
         let highlight_palette = syntax_highlight_palette(theme);
@@ -3930,5 +4186,59 @@ mod tests {
         );
         assert!(overlaid.highlights[1].1.background_color.is_some());
         assert_ne!(overlaid.highlights_hash, base.highlights_hash);
+    }
+
+    #[test]
+    fn query_overlay_splits_across_base_and_query_boundaries_without_sorting() {
+        let theme = AppTheme::gitcomet_dark();
+        let text: SharedString = "abcdefghij".into();
+        let mut text_hasher = FxHasher::default();
+        text.as_ref().hash(&mut text_hasher);
+        let text_hash = text_hasher.finish();
+        let left = gpui::HighlightStyle {
+            color: Some(theme.colors.warning.into()),
+            ..Default::default()
+        };
+        let right = gpui::HighlightStyle {
+            color: Some(theme.colors.success.into()),
+            ..Default::default()
+        };
+        let base = CachedDiffStyledText {
+            text,
+            highlights: Arc::from(vec![(1..3, left), (5..8, right)]),
+            highlights_hash: 11,
+            text_hash,
+        };
+
+        let overlaid = build_cached_diff_query_overlay_styled_text(theme, &base, "cdefg");
+        assert_eq!(overlaid.highlights.len(), 5);
+
+        assert_eq!(overlaid.highlights[0], (1..2, left));
+        assert_eq!(overlaid.highlights[1].0, 2..3);
+        assert_eq!(
+            overlaid.highlights[1].1.color,
+            Some(theme.colors.warning.into())
+        );
+        assert!(overlaid.highlights[1].1.background_color.is_some());
+        assert_eq!(
+            overlaid.highlights[2],
+            (
+                3..5,
+                gpui::HighlightStyle {
+                    background_color: Some(
+                        with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 })
+                            .into()
+                    ),
+                    ..Default::default()
+                }
+            )
+        );
+        assert_eq!(overlaid.highlights[3].0, 5..7);
+        assert_eq!(
+            overlaid.highlights[3].1.color,
+            Some(theme.colors.success.into())
+        );
+        assert!(overlaid.highlights[3].1.background_color.is_some());
+        assert_eq!(overlaid.highlights[4], (7..8, right));
     }
 }

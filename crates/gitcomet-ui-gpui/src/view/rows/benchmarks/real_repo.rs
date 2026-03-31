@@ -152,7 +152,8 @@ impl RealRepoFixture {
         configure_git_identity(&worktree);
 
         if let Some(checkout_ref) = metadata.checkout_ref.as_deref() {
-            run_git(&worktree, &["checkout", "--quiet", checkout_ref]);
+            let checkout_ref = resolve_cloned_ref(&worktree, checkout_ref);
+            run_git(&worktree, &["checkout", "--quiet", checkout_ref.as_str()]);
         }
 
         if scenario == RealRepoScenario::MidMergeConflictListAndOpen {
@@ -162,11 +163,8 @@ impl RealRepoFixture {
                     scenario.case_name()
                 )
             })?;
-            run_git_allow_codes(
-                &worktree,
-                &["merge", "--no-commit", "--no-ff", "--quiet", merge_ref],
-                &[0, 1],
-            )?;
+            let merge_ref = resolve_cloned_ref(&worktree, merge_ref);
+            run_git_merge_allow_conflict(&worktree, merge_ref.as_str())?;
         }
 
         let backend = GixBackend;
@@ -561,27 +559,56 @@ fn configure_git_identity(repo: &Path) {
     run_git(repo, &["config", "commit.gpgsign", "false"]);
 }
 
-fn run_git_allow_codes(repo: &Path, args: &[&str], accepted: &[i32]) -> Result<(), String> {
-    let output = git_command(repo)
-        .args(args)
+fn resolve_commitish(repo: &Path, commitish: &str) -> String {
+    git_stdout(repo, &["rev-parse", commitish])
+}
+
+fn resolve_cloned_ref(repo: &Path, reference: &str) -> String {
+    if git_ref_exists(repo, reference) {
+        return reference.to_string();
+    }
+
+    let remote_tracking = format!("origin/{reference}");
+    if git_ref_exists(repo, remote_tracking.as_str()) {
+        return remote_tracking;
+    }
+
+    reference.to_string()
+}
+
+fn git_ref_exists(repo: &Path, reference: &str) -> bool {
+    git_command(repo)
+        .args(["rev-parse", "--verify", "--quiet", reference])
         .output()
-        .map_err(|err| format!("run git {:?} in {}: {err}", args, repo.display()))?;
-    let code = output.status.code().unwrap_or(-1);
-    if output.status.success() || accepted.contains(&code) {
+        .is_ok_and(|output| output.status.success())
+}
+
+fn run_git_merge_allow_conflict(repo: &Path, reference: &str) -> Result<(), String> {
+    let output = git_command(repo)
+        .args(["merge", "--no-commit", "--no-ff", "--quiet", reference])
+        .output()
+        .map_err(|err| format!("run git merge {reference:?} in {}: {err}", repo.display()))?;
+    if output.status.success() {
         return Ok(());
     }
+
+    let merge_head_exists = repo.join(".git").join("MERGE_HEAD").exists();
+    let has_unmerged_entries = git_command(repo)
+        .args(["ls-files", "--unmerged"])
+        .output()
+        .is_ok_and(|stdout| stdout.status.success() && !stdout.stdout.is_empty());
+    if output.status.code() == Some(1) && (merge_head_exists || has_unmerged_entries) {
+        return Ok(());
+    }
+
     Err(format!(
-        "git {:?} failed in {} with code {}:\nstdout:\n{}\nstderr:\n{}",
-        args,
+        "git merge {:?} failed in {} with code {}:\nstdout:\n{}\nstderr:\n{}",
+        reference,
         repo.display(),
-        code,
+        output.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     ))
-}
-
-fn resolve_commitish(repo: &Path, commitish: &str) -> String {
-    git_stdout(repo, &["rev-parse", commitish])
 }
 
 fn count_worktree_files(root: &Path) -> Result<usize, String> {
@@ -878,7 +905,9 @@ mod tests {
 
         let (hash, metrics) = fixture.run_with_metrics();
         assert_ne!(hash, 0);
+        assert!(metrics.status_entries >= 1);
         assert!(metrics.conflict_files >= 1);
+        assert!(metrics.conflict_regions >= 1);
         assert!(metrics.selected_conflict_bytes >= 1);
         assert!(metrics.status_calls >= 1);
     }

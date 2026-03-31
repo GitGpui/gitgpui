@@ -167,8 +167,8 @@ fn clone_repo_popover_enter_from_parent_input_submits_and_closes(cx: &mut gpui::
         .clone
         .as_ref()
         .expect("expected clone op to be recorded");
-    assert_eq!(op.url, url);
-    assert_eq!(op.dest, expected_dest);
+    assert_eq!(&*op.url, url);
+    assert_eq!(op.dest.as_ref(), &expected_dest);
 }
 
 #[gpui::test]

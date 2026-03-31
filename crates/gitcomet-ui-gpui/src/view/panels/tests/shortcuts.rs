@@ -136,7 +136,7 @@ fn shortcut_fixture_repo(
         gitcomet_core::domain::LogPage {
             commits: vec![gitcomet_core::domain::Commit {
                 id: commit_id.clone(),
-                parent_ids: vec![],
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                 summary: "Initial commit".into(),
                 author: "Alice".into(),
                 time: std::time::SystemTime::UNIX_EPOCH,

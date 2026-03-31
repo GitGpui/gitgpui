@@ -664,7 +664,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "s1".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
@@ -761,7 +761,7 @@ fn set_history_scope_retains_ready_log_while_loading() {
     let retained_page = Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "s1".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
@@ -809,7 +809,7 @@ fn load_more_history_noops_when_no_next_cursor() {
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "s1".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
@@ -847,7 +847,7 @@ fn log_loaded_appends_when_loading_more() {
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "s1".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
@@ -873,7 +873,7 @@ fn log_loaded_appends_when_loading_more() {
             result: Ok(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c2".into()),
-                    parent_ids: Vec::new(),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                     summary: "s2".into(),
                     author: "a".into(),
                     time: SystemTime::UNIX_EPOCH,
@@ -912,7 +912,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
     repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "s1".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
@@ -938,7 +938,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
             result: Ok(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c2".into()),
-                    parent_ids: Vec::new(),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                     summary: "s2".into(),
                     author: "a".into(),
                     time: SystemTime::UNIX_EPOCH,
@@ -989,7 +989,7 @@ fn log_loaded_clears_retained_scope_switch_log() {
     repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("old".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "old".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
@@ -1025,7 +1025,7 @@ fn log_loaded_clears_retained_scope_switch_log() {
             result: Ok(LogPage {
                 commits: vec![Commit {
                     id: CommitId("new".into()),
-                    parent_ids: Vec::new(),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                     summary: "new".into(),
                     author: "a".into(),
                     time: SystemTime::UNIX_EPOCH,
@@ -1061,7 +1061,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
     let commits: Vec<Commit> = (0..600)
         .map(|ix| Commit {
             id: CommitId(format!("{ix:040x}").into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: format!("s{ix}").into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
@@ -1123,7 +1123,7 @@ fn log_loaded_bumps_log_rev() {
             result: Ok(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c1".into()),
-                    parent_ids: Vec::new(),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                     summary: "s1".into(),
                     author: "a".into(),
                     time: SystemTime::UNIX_EPOCH,
@@ -1176,14 +1176,14 @@ fn detached_head_target_tracks_current_branch_log_head() {
                 commits: vec![
                     Commit {
                         id: CommitId("c1".into()),
-                        parent_ids: vec![CommitId("c0".into())],
+                        parent_ids: smallvec::smallvec![CommitId("c0".into())],
                         summary: "s1".into(),
                         author: "a".into(),
                         time: SystemTime::UNIX_EPOCH,
                     },
                     Commit {
                         id: CommitId("c0".into()),
-                        parent_ids: Vec::new(),
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                         summary: "s0".into(),
                         author: "a".into(),
                         time: SystemTime::UNIX_EPOCH,

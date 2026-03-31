@@ -258,7 +258,7 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
             repo.conflict_state.conflict_file_path = Some(file_rel.clone());
             repo.conflict_state.conflict_file =
                 gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
-                    path: file_rel.clone(),
+                    path: file_rel.clone().into(),
                     base_bytes: None,
                     ours_bytes: None,
                     theirs_bytes: None,
@@ -394,7 +394,7 @@ fn svg_conflict_preview_rasterizes_off_the_ui_thread(cx: &mut gpui::TestAppConte
             repo.conflict_state.conflict_file_path = Some(file_rel.clone());
             repo.conflict_state.conflict_file =
                 gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
-                    path: file_rel.clone(),
+                    path: file_rel.clone().into(),
                     base_bytes: None,
                     ours_bytes: None,
                     theirs_bytes: None,

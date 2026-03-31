@@ -943,7 +943,7 @@ pub(super) fn resolved_output_markers_for_text(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
-    let output_line_count = conflict_resolver::split_output_lines_for_outline(output_text).len();
+    let output_line_count = conflict_resolver::resolved_output_outline_line_count(output_text);
     build_resolved_output_conflict_markers(marker_segments, output_text, output_line_count)
 }
 
@@ -2141,6 +2141,8 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_search_active: bool,
     pub(in crate::view) diff_search_query: SharedString,
     pub(in crate::view) diff_search_matches: Vec<usize>,
+    pub(in crate::view) diff_search_inline_patch_trigram_index:
+        Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) diff_search_match_ix: Option<usize>,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(super) _diff_search_subscription: gpui::Subscription,
@@ -2200,6 +2202,8 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) worktree_preview: Loadable<usize>,
     pub(in crate::view) worktree_preview_text: SharedString,
     pub(in crate::view) worktree_preview_line_starts: Arc<[usize]>,
+    pub(in crate::view) worktree_preview_search_trigram_index:
+        Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) worktree_preview_content_rev: u64,
     pub(in crate::view) worktree_markdown_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_markdown_preview_source_rev: u64,
@@ -2227,9 +2231,9 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_diff_split_col_widths: [Pixels; 2],
     pub(in crate::view) conflict_canvas_rows_enabled: bool,
     pub(in crate::view) conflict_diff_segments_cache_split:
-        HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        crate::view::conflict_resolver::ConflictSplitStyledTextCache,
     pub(in crate::view) conflict_diff_query_segments_cache_split:
-        HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        crate::view::conflict_resolver::ConflictSplitStyledTextCache,
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
     pub(in crate::view) conflict_three_way_segments_cache:
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,

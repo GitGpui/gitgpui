@@ -5,7 +5,8 @@ use crate::util::{
     run_git_capture, unix_seconds_to_system_time, unix_seconds_to_system_time_or_epoch,
 };
 use gitcomet_core::domain::{
-    Commit, CommitDetails, CommitFileChange, CommitId, LogCursor, LogPage, ReflogEntry, StashEntry,
+    Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, LogCursor, LogPage,
+    ReflogEntry, StashEntry,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::Result;
@@ -180,7 +181,8 @@ fn commit_from_walk_info(
         .next_commit_id_cache
         .reuse_or_new(id.as_ref(), || CommitId(oid_to_arc_str(id.as_ref())));
 
-    let mut parent_ids = Vec::with_capacity(info.parent_ids.len());
+    let mut parent_ids = CommitParentIds::new();
+    parent_ids.reserve(info.parent_ids.len());
     if info.parent_ids.is_empty() {
         decode_state.next_commit_id_cache.clear();
     }
@@ -461,6 +463,48 @@ where
 }
 
 impl GixRepo {
+    fn log_head_page_cache_key(
+        head_oid: Option<gix::ObjectId>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> super::LogHeadPageCacheKey {
+        super::LogHeadPageCacheKey {
+            head_oid,
+            limit,
+            last_seen: cursor.map(|cursor| cursor.last_seen.clone()),
+            resume_from: cursor.and_then(|cursor| cursor.resume_from.clone()),
+        }
+    }
+
+    fn cached_log_head_page(&self, key: &super::LogHeadPageCacheKey) -> Option<LogPage> {
+        let mut cache = self
+            .log_head_page_cache
+            .lock()
+            .expect("log head page cache");
+        let index = cache.iter().position(|entry| &entry.key == key)?;
+        let entry = cache.remove(index);
+        let page = entry.page.clone();
+        cache.push(entry);
+        Some(page)
+    }
+
+    fn store_log_head_page(&self, key: super::LogHeadPageCacheKey, page: &LogPage) {
+        let mut cache = self
+            .log_head_page_cache
+            .lock()
+            .expect("log head page cache");
+        if let Some(index) = cache.iter().position(|entry| entry.key == key) {
+            cache.remove(index);
+        }
+        if cache.len() >= super::LOG_HEAD_PAGE_CACHE_LIMIT {
+            cache.remove(0);
+        }
+        cache.push(super::LogHeadPageCacheEntry {
+            key,
+            page: page.clone(),
+        });
+    }
+
     fn log_follow_commits(&self, path: &Path, max_count: Option<usize>) -> Result<Vec<Commit>> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("log")
@@ -486,7 +530,13 @@ impl GixRepo {
         }
 
         let repo = self._repo.to_thread_local();
-        if let Some(resume_tip) = cursor
+        let head_id = gix_head_id_or_none(&repo)?;
+        let cache_key = Self::log_head_page_cache_key(head_id, limit, cursor);
+        if let Some(page) = self.cached_log_head_page(&cache_key) {
+            return Ok(page);
+        }
+
+        let page = if let Some(resume_tip) = cursor
             .and_then(|cursor| cursor.resume_from.as_ref())
             .and_then(object_id_from_commit_id)
         {
@@ -500,23 +550,24 @@ impl GixRepo {
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
             let mut page = log_page_from_walk(walk, limit, None)?;
             apply_first_parent_resume_hint(&mut page);
-            return Ok(page);
-        }
-
-        let Some(head_id) = gix_head_id_or_none(&repo)? else {
-            return Ok(empty_log_page());
+            page
+        } else if let Some(head_id) = head_id {
+            let walk = repo
+                .rev_walk([head_id])
+                .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                    CommitTimeOrder::NewestFirst,
+                ))
+                .first_parent_only()
+                .all()
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
+            let mut page = log_page_from_walk(walk, limit, cursor)?;
+            apply_first_parent_resume_hint(&mut page);
+            page
+        } else {
+            empty_log_page()
         };
 
-        let walk = repo
-            .rev_walk([head_id])
-            .sorting(gix::revision::walk::Sorting::ByCommitTime(
-                CommitTimeOrder::NewestFirst,
-            ))
-            .first_parent_only()
-            .all()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-        let mut page = log_page_from_walk(walk, limit, cursor)?;
-        apply_first_parent_resume_hint(&mut page);
+        self.store_log_head_page(cache_key, &page);
         Ok(page)
     }
 
@@ -703,14 +754,17 @@ mod tests {
             commits: vec![
                 Commit {
                     id: CommitId("c1".into()),
-                    parent_ids: vec![CommitId("p0".into())],
+                    parent_ids: CommitParentIds::from_vec(vec![CommitId("p0".into())]),
                     summary: Arc::from("one"),
                     author: Arc::from("you"),
                     time: std::time::SystemTime::UNIX_EPOCH,
                 },
                 Commit {
                     id: CommitId("c2".into()),
-                    parent_ids: vec![CommitId("p1".into()), CommitId("p2".into())],
+                    parent_ids: CommitParentIds::from_vec(vec![
+                        CommitId("p1".into()),
+                        CommitId("p2".into()),
+                    ]),
                     summary: Arc::from("two"),
                     author: Arc::from("you"),
                     time: std::time::SystemTime::UNIX_EPOCH,
@@ -737,7 +791,7 @@ mod tests {
         let mut page = LogPage {
             commits: vec![Commit {
                 id: CommitId("c1".into()),
-                parent_ids: Vec::new(),
+                parent_ids: CommitParentIds::new(),
                 summary: Arc::from("one"),
                 author: Arc::from("you"),
                 time: std::time::SystemTime::UNIX_EPOCH,

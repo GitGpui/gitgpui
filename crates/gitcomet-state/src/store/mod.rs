@@ -19,9 +19,10 @@ mod send_diagnostics;
 use effects::schedule_effect;
 use executor::{TaskExecutor, default_worker_threads};
 use reducer::{
-    fill_select_diff_inline, fill_set_active_repo_inline, fill_stage_path_inline,
-    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce,
-    reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
+    fill_reorder_repo_tabs_inline, fill_select_diff_inline, fill_set_active_repo_inline,
+    fill_stage_path_inline, fill_stage_paths_inline, fill_unstage_path_inline,
+    fill_unstage_paths_inline, reduce, reset_conflict_resolutions_inline,
+    set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
 use send_diagnostics::{SendFailureKind, send_or_log, try_send_state_changed_or_log};
@@ -198,6 +199,38 @@ impl AppStore {
                             let app_state = make_mut_state_with_diagnostics(&mut app_state);
                             let reduce_started = Instant::now();
                             fill_set_active_repo_inline(app_state, repo_id, &mut effects);
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            &thread_state,
+                            &active_repo_id,
+                            &event_tx,
+                            &mut repo_monitors,
+                            &repos,
+                            &thread_msg_tx,
+                            &executor,
+                            &session_persist_executor,
+                            &backend,
+                        );
+                    }
+                    Msg::ReorderRepoTabs {
+                        repo_id,
+                        insert_before,
+                    } => {
+                        let mut effects = reducer::ReorderRepoTabsEffects::new();
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            fill_reorder_repo_tabs_inline(
+                                app_state,
+                                repo_id,
+                                insert_before,
+                                &mut effects,
+                            );
                             reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
                         };
@@ -449,6 +482,18 @@ pub(crate) fn with_set_active_repo_inline_for_bench<T>(
 ) -> T {
     let mut effects = reducer::SetActiveRepoEffects::new();
     fill_set_active_repo_inline(state, repo_id, &mut effects);
+    f(state, &effects)
+}
+
+#[cfg(feature = "benchmarks")]
+pub(crate) fn with_reorder_repo_tabs_inline_for_bench<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    insert_before: Option<RepoId>,
+    f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
+) -> T {
+    let mut effects = reducer::ReorderRepoTabsEffects::new();
+    fill_reorder_repo_tabs_inline(state, repo_id, insert_before, &mut effects);
     f(state, &effects)
 }
 

@@ -13,6 +13,8 @@ mod patch_diff;
 pub(in crate::view) use self::file_diff::bench_build_file_diff_providers;
 pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
 use self::file_diff::{build_file_diff_cache_rebuild, build_inline_text, file_diff_text_signature};
+#[allow(unused_imports)]
+pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
 use self::patch_diff::{
     PATCH_DIFF_PAGE_SIZE, PatchSplitVisibleMeta, build_patch_split_visible_meta_from_src,
@@ -593,6 +595,14 @@ impl MainPaneView {
             || self.worktree_preview_line_count() != Some(line_count)
             || self.worktree_preview_text.len() != source_text.len()
             || self.worktree_preview_text.as_ref() != source_text.as_ref();
+        let search_trigram_index =
+            (source_changed || self.worktree_preview_search_trigram_index.is_none()).then(|| {
+                super::diff_search::build_resolved_output_trigram_index(
+                    source_text.as_ref(),
+                    line_starts.as_ref(),
+                    line_count,
+                )
+            });
         let cache_binding_changed =
             self.worktree_preview_segments_cache_path.as_ref() != Some(&path);
         let same_path_source_refresh = source_changed && !cache_binding_changed;
@@ -601,6 +611,9 @@ impl MainPaneView {
         self.worktree_preview = Loadable::Ready(line_count);
         self.worktree_preview_text = source_text;
         self.worktree_preview_line_starts = line_starts;
+        if let Some(search_trigram_index) = search_trigram_index {
+            self.worktree_preview_search_trigram_index = Some(search_trigram_index);
+        }
         self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
         self.worktree_preview_segments_cache_path = Some(path);
         self.worktree_preview_cache_write_blocked_until_rev = None;
@@ -1301,12 +1314,35 @@ impl MainPaneView {
             Arc::clone(&diff),
             PATCH_DIFF_PAGE_SIZE,
         ));
-        let split_row_provider = Arc::new(PagedPatchSplitRows::new(Arc::clone(&row_provider)));
+        let mut split_row_count = 0usize;
+        let mut pending_split_removes = 0usize;
+        let mut pending_split_adds = 0usize;
         self.diff_row_provider = Some(row_provider);
-        self.diff_split_row_provider = Some(split_row_provider);
 
         self.diff_file_for_src_ix = compute_diff_file_for_src_ix(diff.lines.as_slice());
-        self.diff_line_kind_for_src_ix = diff.lines.iter().map(|line| line.kind).collect();
+        self.diff_line_kind_for_src_ix = diff
+            .lines
+            .iter()
+            .map(|line| {
+                match line.kind {
+                    gitcomet_core::domain::DiffLineKind::Remove => pending_split_removes += 1,
+                    gitcomet_core::domain::DiffLineKind::Add => pending_split_adds += 1,
+                    gitcomet_core::domain::DiffLineKind::Context
+                    | gitcomet_core::domain::DiffLineKind::Header
+                    | gitcomet_core::domain::DiffLineKind::Hunk => {
+                        split_row_count += pending_split_removes.max(pending_split_adds) + 1;
+                        pending_split_removes = 0;
+                        pending_split_adds = 0;
+                    }
+                }
+                line.kind
+            })
+            .collect();
+        split_row_count += pending_split_removes.max(pending_split_adds);
+        self.diff_split_row_provider = Some(Arc::new(PagedPatchSplitRows::new_with_len_hint(
+            Arc::clone(self.diff_row_provider.as_ref().expect("set just above")),
+            split_row_count,
+        )));
         self.diff_hide_unified_header_for_src_ix = diff
             .lines
             .iter()
@@ -1538,6 +1574,7 @@ impl MainPaneView {
         self.diff_visible_is_file_view = is_file_view;
         self.diff_horizontal_min_width = px(0.0);
         self.diff_visible_inline_map = None;
+        self.diff_search_inline_patch_trigram_index = None;
 
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();

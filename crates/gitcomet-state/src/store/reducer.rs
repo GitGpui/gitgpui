@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 pub(crate) use diff_selection::SelectDiffEffects;
-pub(crate) use repo_management::SetActiveRepoEffects;
+pub(crate) use repo_management::{ReorderRepoTabsEffects, SetActiveRepoEffects};
 
 pub(crate) const SINGLE_PATH_ACTION_INLINE_EFFECT_CAPACITY: usize = 1;
 pub(crate) type SinglePathActionEffects =
@@ -284,6 +284,15 @@ pub(crate) fn fill_set_active_repo_inline(
     effects: &mut SetActiveRepoEffects,
 ) {
     repo_management::fill_set_active_repo_inline(state, repo_id, effects)
+}
+
+pub(crate) fn fill_reorder_repo_tabs_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    insert_before: Option<RepoId>,
+    effects: &mut ReorderRepoTabsEffects,
+) {
+    repo_management::fill_reorder_repo_tabs_inline(state, repo_id, insert_before, effects)
 }
 
 pub(crate) fn fill_select_diff_inline(

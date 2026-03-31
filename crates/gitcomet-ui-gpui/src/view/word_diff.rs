@@ -3,7 +3,47 @@ use std::ops::Range;
 const WORD_DIFF_MAX_BYTES_PER_SIDE: usize = 4 * 1024;
 const WORD_DIFF_MAX_TOTAL_BYTES: usize = 8 * 1024;
 
+#[cfg(test)]
 type WordDiffRangePair = (Vec<Range<usize>>, Vec<Range<usize>>);
+pub(crate) type CompactWordDiffRangePair = (WordDiffRanges, WordDiffRanges);
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum WordDiffRanges {
+    #[default]
+    Empty,
+    One(Range<usize>),
+    Many(Box<[Range<usize>]>),
+}
+
+impl WordDiffRanges {
+    fn from_vec(mut ranges: Vec<Range<usize>>) -> Self {
+        match ranges.len() {
+            0 => Self::Empty,
+            1 => Self::One(ranges.pop().expect("single range present")),
+            _ => Self::Many(ranges.into_boxed_slice()),
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[Range<usize>] {
+        match self {
+            Self::Empty => &[],
+            Self::One(range) => std::slice::from_ref(range),
+            Self::Many(ranges) => ranges,
+        }
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<Range<usize>> {
+        match self {
+            Self::Empty => Vec::new(),
+            Self::One(range) => vec![range],
+            Self::Many(ranges) => ranges.into_vec(),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TokenKind {
@@ -79,6 +119,24 @@ fn token_range_eq(
 }
 
 #[inline(always)]
+fn shared_ascii_affix_bounds(old_bytes: &[u8], new_bytes: &[u8]) -> (usize, usize, usize) {
+    let mut prefix = 0usize;
+    let shared_len = old_bytes.len().min(new_bytes.len());
+    while prefix < shared_len && old_bytes[prefix] == new_bytes[prefix] {
+        prefix += 1;
+    }
+
+    let mut old_end = old_bytes.len();
+    let mut new_end = new_bytes.len();
+    while old_end > prefix && new_end > prefix && old_bytes[old_end - 1] == new_bytes[new_end - 1] {
+        old_end -= 1;
+        new_end -= 1;
+    }
+
+    (prefix, old_end, new_end)
+}
+
+#[inline(always)]
 fn retreat_ascii_token_start(bytes: &[u8], mut ix: usize) -> usize {
     while ix > 0 {
         let prev_class = classify_byte(bytes[ix - 1]);
@@ -118,31 +176,43 @@ fn is_single_ascii_token_range(bytes: &[u8], range: Range<usize>) -> bool {
         .all(|&byte| classify_byte(byte) == class)
 }
 
-fn ascii_single_token_diff_fast_ranges(
+fn ascii_word_diff_fast_ranges(
     old: &str,
     new: &str,
-    bufs: &mut WordDiffBufs,
-) -> Option<WordDiffRangePair> {
+    _bufs: &mut WordDiffBufs,
+) -> Option<CompactWordDiffRangePair> {
+    const MIN_LOW_SIMILARITY_LINE_BYTES: usize = 24;
+
     if !old.is_ascii() || !new.is_ascii() || old.is_empty() || new.is_empty() {
         return None;
     }
 
     let old_bytes = old.as_bytes();
     let new_bytes = new.as_bytes();
-    let mut prefix = 0usize;
-    let shared_len = old_bytes.len().min(new_bytes.len());
-    while prefix < shared_len && old_bytes[prefix] == new_bytes[prefix] {
-        prefix += 1;
-    }
+    let (prefix, mut old_end, mut new_end) = shared_ascii_affix_bounds(old_bytes, new_bytes);
     if prefix == old_bytes.len() && prefix == new_bytes.len() {
-        return Some((Vec::new(), Vec::new()));
+        return Some((WordDiffRanges::Empty, WordDiffRanges::Empty));
     }
 
-    let mut old_end = old_bytes.len();
-    let mut new_end = new_bytes.len();
-    while old_end > prefix && new_end > prefix && old_bytes[old_end - 1] == new_bytes[new_end - 1] {
-        old_end -= 1;
-        new_end -= 1;
+    let shared_suffix = old_bytes.len().saturating_sub(old_end);
+    let shared_bytes = prefix.saturating_add(shared_suffix);
+    let min_len = old_bytes.len().min(new_bytes.len());
+    if min_len >= MIN_LOW_SIMILARITY_LINE_BYTES && shared_bytes.saturating_mul(4) < min_len {
+        // Large-file linear fallback can pair unrelated ASCII lines after an
+        // insertion/deletion shift. When the two lines share very little fixed
+        // context, token-level highlighting is mostly noise and burns CPU plus
+        // one tiny range allocation per side.
+        return Some((WordDiffRanges::Empty, WordDiffRanges::Empty));
+    }
+    if min_len >= MIN_LOW_SIMILARITY_LINE_BYTES
+        && shared_suffix <= 1
+        && shared_bytes.saturating_mul(2) <= min_len
+    {
+        // Some fallback-aligned code lines share only a statement prefix and
+        // almost no trailing context. Token-level Myers mostly preserves
+        // punctuation and tiny literals across otherwise unrelated statements,
+        // so skip those medium/large low-overlap pairs before tokenization.
+        return Some((WordDiffRanges::Empty, WordDiffRanges::Empty));
     }
 
     let mut old_start = prefix;
@@ -162,15 +232,17 @@ fn ascii_single_token_diff_fast_ranges(
         return None;
     }
 
-    bufs.old_ranges.clear();
-    if old_start < old_end {
-        bufs.old_ranges.push(old_start..old_end);
-    }
-    bufs.new_ranges.clear();
-    if new_start < new_end {
-        bufs.new_ranges.push(new_start..new_end);
-    }
-    Some((bufs.old_ranges.clone(), bufs.new_ranges.clone()))
+    let old_ranges = if old_start < old_end {
+        WordDiffRanges::One(old_start..old_end)
+    } else {
+        WordDiffRanges::Empty
+    };
+    let new_ranges = if new_start < new_end {
+        WordDiffRanges::One(new_start..new_end)
+    } else {
+        WordDiffRanges::Empty
+    };
+    Some((old_ranges, new_ranges))
 }
 
 fn push_all_non_whitespace_token_ranges(tokens: &[Token], out: &mut Vec<Range<usize>>) {
@@ -261,10 +333,11 @@ fn tokenize_for_word_diff_into(s: &str, max_tokens: usize, out: &mut Vec<Token>)
     }
 }
 
-/// In-place coalescing: sorts `ranges`, deduplicates overlaps, returns a cloned Vec.
-fn coalesce_ranges_in_place(ranges: &mut Vec<Range<usize>>) -> Vec<Range<usize>> {
+/// In-place coalescing: sorts `ranges`, deduplicates overlaps, and keeps the
+/// common 0/1-range cases inline.
+fn coalesce_ranges_in_place(ranges: &mut Vec<Range<usize>>) -> WordDiffRanges {
     if ranges.len() <= 1 {
-        return ranges.clone();
+        return WordDiffRanges::from_vec(ranges.clone());
     }
     ranges.sort_by_key(|r| (r.start, r.end));
     let mut write = 0usize;
@@ -278,24 +351,30 @@ fn coalesce_ranges_in_place(ranges: &mut Vec<Range<usize>>) -> Vec<Range<usize>>
         }
     }
     ranges.truncate(write + 1);
-    ranges.clone()
+    WordDiffRanges::from_vec(ranges.clone())
 }
 
+#[cfg(test)]
 pub(super) fn word_diff_ranges(old: &str, new: &str) -> WordDiffRangePair {
     WORD_DIFF_BUFS.with(|cell| {
         let mut bufs = cell.borrow_mut();
-        word_diff_ranges_with_bufs(old, new, &mut bufs)
+        let (old_ranges, new_ranges) = word_diff_ranges_with_bufs(old, new, &mut bufs);
+        (old_ranges.into_vec(), new_ranges.into_vec())
     })
 }
 
-fn word_diff_ranges_with_bufs(old: &str, new: &str, bufs: &mut WordDiffBufs) -> WordDiffRangePair {
+fn word_diff_ranges_with_bufs(
+    old: &str,
+    new: &str,
+    bufs: &mut WordDiffBufs,
+) -> CompactWordDiffRangePair {
     const MAX_TOKENS: usize = 128;
     /// Maximum Myers edit depth before falling back to affix diff. When the
     /// edit distance exceeds this, the token-level diff is mostly noise rather
     /// than useful word highlighting. Capping at 48 bounds worst-case work per
     /// line pair to O(48 * 257) ≈ 12K operations instead of O(256²) ≈ 65K.
     const MAX_EDIT_DEPTH: usize = 48;
-    if let Some(ranges) = ascii_single_token_diff_fast_ranges(old, new, bufs) {
+    if let Some(ranges) = ascii_word_diff_fast_ranges(old, new, bufs) {
         return ranges;
     }
     tokenize_for_word_diff_into(old, MAX_TOKENS + 1, &mut bufs.old_tokens);
@@ -492,16 +571,25 @@ pub(super) fn capped_word_diff_ranges(
     old: &str,
     new: &str,
 ) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    let (old_ranges, new_ranges) = compact_capped_word_diff_ranges(old, new);
+    (old_ranges.into_vec(), new_ranges.into_vec())
+}
+
+pub(crate) fn compact_capped_word_diff_ranges(old: &str, new: &str) -> CompactWordDiffRangePair {
     if old.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
         || new.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
         || old.len().saturating_add(new.len()) > WORD_DIFF_MAX_TOTAL_BYTES
     {
-        return (Vec::new(), Vec::new());
+        return (WordDiffRanges::Empty, WordDiffRanges::Empty);
     }
-    word_diff_ranges(old, new)
+
+    WORD_DIFF_BUFS.with(|cell| {
+        let mut bufs = cell.borrow_mut();
+        word_diff_ranges_with_bufs(old, new, &mut bufs)
+    })
 }
 
-fn fallback_affix_diff_ranges(old: &str, new: &str) -> WordDiffRangePair {
+fn fallback_affix_diff_ranges(old: &str, new: &str) -> CompactWordDiffRangePair {
     let mut prefix = 0usize;
     for ((old_ix, old_ch), (_new_ix, new_ch)) in old.char_indices().zip(new.char_indices()) {
         if old_ch != new_ch {
@@ -526,20 +614,20 @@ fn fallback_affix_diff_ranges(old: &str, new: &str) -> WordDiffRangePair {
     let new_mid_end = new.len().saturating_sub(suffix).max(new_mid_start);
 
     let old_ranges = if old_mid_end > old_mid_start {
-        vec![Range {
+        WordDiffRanges::One(Range {
             start: old_mid_start,
             end: old_mid_end,
-        }]
+        })
     } else {
-        Vec::new()
+        WordDiffRanges::Empty
     };
     let new_ranges = if new_mid_end > new_mid_start {
-        vec![Range {
+        WordDiffRanges::One(Range {
             start: new_mid_start,
             end: new_mid_end,
-        }]
+        })
     } else {
-        Vec::new()
+        WordDiffRanges::Empty
     };
     (old_ranges, new_ranges)
 }
@@ -670,6 +758,37 @@ mod tests {
 
         assert_eq!(old_ranges, vec![0..old.len()]);
         assert_eq!(new_ranges, vec![0..new.len()]);
+    }
+
+    #[test]
+    fn compact_capped_word_diff_ranges_keeps_single_ascii_token_inline() {
+        let (old, new) = ("value123", "value456");
+        let (old_ranges, new_ranges) = compact_capped_word_diff_ranges(old, new);
+
+        assert!(matches!(old_ranges, WordDiffRanges::One(_)));
+        assert!(matches!(new_ranges, WordDiffRanges::One(_)));
+        assert_eq!(old_ranges.as_slice(), &[0..old.len()]);
+        assert_eq!(new_ranges.as_slice(), &[0..new.len()]);
+    }
+
+    #[test]
+    fn word_diff_ranges_skips_noisy_ascii_pairs_with_tiny_shared_affixes() {
+        let old = "let ctx_0_0 = \"context line 0\";";
+        let new = "match opt_1 { Some(v) => v, None => 0 }";
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+
+        assert!(old_ranges.is_empty());
+        assert!(new_ranges.is_empty());
+    }
+
+    #[test]
+    fn word_diff_ranges_skips_shifted_ascii_statement_pairs_with_short_shared_suffix() {
+        let old = "let shared_1 = compute_local(1);";
+        let new = "let shared_1_tail = 1 + 2;";
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+
+        assert!(old_ranges.is_empty());
+        assert!(new_ranges.is_empty());
     }
 
     #[test]

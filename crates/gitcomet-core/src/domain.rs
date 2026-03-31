@@ -1,8 +1,13 @@
 use memchr::memchr;
+use rustc_hash::FxHasher;
+use smallvec::SmallVec;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
-use std::{hash::Hash, ops::Deref};
+use std::{
+    hash::{Hash, Hasher},
+    ops::Deref,
+};
 
 #[cfg(test)]
 use rustc_hash::FxHashMap as HashMap;
@@ -16,6 +21,8 @@ pub struct RepoSpec {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CommitId(pub Arc<str>);
+
+pub type CommitParentIds = SmallVec<[CommitId; 2]>;
 
 impl AsRef<str> for CommitId {
     fn as_ref(&self) -> &str {
@@ -32,7 +39,7 @@ impl std::fmt::Display for CommitId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Commit {
     pub id: CommitId,
-    pub parent_ids: Vec<CommitId>,
+    pub parent_ids: CommitParentIds,
     pub summary: Arc<str>,
     pub author: Arc<str>,
     pub time: SystemTime,
@@ -262,7 +269,19 @@ impl SharedLineText {
         Arc::from(self.as_ref())
     }
 
-    #[cfg(test)]
+    pub fn slice(&self, range: std::ops::Range<usize>) -> Option<Self> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        let start = (self.start as usize).checked_add(range.start)?;
+        Some(Self {
+            storage: Arc::clone(&self.storage),
+            start: u32::try_from(start).ok()?,
+            len: u32::try_from(range.end.saturating_sub(range.start)).ok()?,
+        })
+    }
+
     pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.storage, &other.storage)
     }
@@ -321,6 +340,36 @@ pub struct FileDiffText {
     pub path: PathBuf,
     pub old: Option<String>,
     pub new: Option<String>,
+    content_signature: u64,
+}
+
+impl FileDiffText {
+    pub fn new(path: PathBuf, old: Option<String>, new: Option<String>) -> Self {
+        let content_signature =
+            Self::content_signature_for_parts(&path, old.as_deref(), new.as_deref());
+        Self {
+            path,
+            old,
+            new,
+            content_signature,
+        }
+    }
+
+    pub fn content_signature(&self) -> u64 {
+        self.content_signature
+    }
+
+    fn content_signature_for_parts(
+        path: &std::path::Path,
+        old: Option<&str>,
+        new: Option<&str>,
+    ) -> u64 {
+        let mut hasher = FxHasher::default();
+        path.hash(&mut hasher);
+        old.hash(&mut hasher);
+        new.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -491,7 +540,7 @@ impl Diff {
         raw.strip_suffix(b"\r").unwrap_or(raw)
     }
 
-    fn from_unified_owned_text(target: DiffTarget, text: String) -> Self {
+    pub fn from_unified_owned(target: DiffTarget, text: String) -> Self {
         let storage = Arc::new(SharedLineTextStorage { text });
         let bytes = storage.text.as_bytes();
         let mut lines = Vec::with_capacity(Self::line_capacity_from_bytes(bytes));
@@ -533,11 +582,11 @@ impl Diff {
     ) -> std::io::Result<Self> {
         let mut text = String::new();
         reader.read_to_string(&mut text)?;
-        Ok(Self::from_unified_owned_text(target, text))
+        Ok(Self::from_unified_owned(target, text))
     }
 
     pub fn from_unified(target: DiffTarget, text: &str) -> Self {
-        Self::from_unified_owned_text(target, text.to_owned())
+        Self::from_unified_owned(target, text.to_owned())
     }
 
     #[cfg(test)]
@@ -778,7 +827,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         let commit = Commit {
             id: CommitId("1".into()),
-            parent_ids: vec![CommitId("0".into())],
+            parent_ids: smallvec::smallvec![CommitId("0".into())],
             summary: "test".into(),
             author: "me".into(),
             time: now,

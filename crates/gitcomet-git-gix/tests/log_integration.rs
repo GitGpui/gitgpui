@@ -5,6 +5,7 @@ use gitcomet_git_gix::GixBackend;
 mod test_git_env;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::OnceLock;
 
@@ -444,6 +445,54 @@ fn log_head_page_exact_limit_has_no_next_cursor() {
     let page = opened.log_head_page(2, None).unwrap();
     assert_eq!(page.commits.len(), 2);
     assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn repeated_log_head_page_reuses_cached_commit_arcs_and_invalidates_on_head_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "A"]);
+
+    std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "B"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let first = opened.log_head_page(2, None).unwrap();
+    let second = opened.log_head_page(2, None).unwrap();
+
+    assert_eq!(first.commits, second.commits);
+    assert!(Arc::ptr_eq(&first.commits[0].id.0, &second.commits[0].id.0));
+    assert!(Arc::ptr_eq(
+        &first.commits[0].summary,
+        &second.commits[0].summary
+    ));
+    assert!(Arc::ptr_eq(
+        &first.commits[0].parent_ids[0].0,
+        &second.commits[0].parent_ids[0].0
+    ));
+
+    std::fs::write(repo.join("a.txt"), "three\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "C"]);
+
+    let refreshed = opened.log_head_page(2, None).unwrap();
+    let summaries: Vec<&str> = refreshed
+        .commits
+        .iter()
+        .map(|commit| &*commit.summary)
+        .collect();
+    assert_eq!(summaries, vec!["C", "B"]);
 }
 
 #[test]

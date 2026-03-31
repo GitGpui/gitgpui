@@ -307,10 +307,12 @@ impl MainPaneView {
 
                     let computed = if matches!(click_kind, DiffClickKind::Line) {
                         let word_color = diff_line_word_color(line.kind, theme);
+                        let content_text = diff_content_text(&line);
 
-                        build_cached_diff_styled_text(
+                        build_cached_diff_styled_text_with_source_identity(
                             theme,
-                            diff_content_text(&line),
+                            content_text,
+                            Some(DiffTextSourceIdentity::from_str(content_text)),
                             word_ranges,
                             "",
                             language,

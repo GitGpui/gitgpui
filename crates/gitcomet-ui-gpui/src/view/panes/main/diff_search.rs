@@ -1,5 +1,9 @@
 use super::*;
+use gitcomet_core::domain::Diff;
 use memchr::memchr2_iter;
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
+use std::borrow::Cow;
 
 #[derive(Clone, Copy)]
 pub(in crate::view) struct AsciiCaseInsensitiveNeedle<'a> {
@@ -23,6 +27,11 @@ impl<'a> AsciiCaseInsensitiveNeedle<'a> {
             last_lower: last.to_ascii_lowercase(),
             last_upper: last.to_ascii_uppercase(),
         })
+    }
+
+    #[inline]
+    pub(in crate::view) fn as_bytes(self) -> &'a [u8] {
+        self.bytes
     }
 
     #[inline]
@@ -66,6 +75,117 @@ pub(in crate::view) enum DiffSearchQueryReuse {
     Refinement,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct DiffSearchVisibleTrigramIndex {
+    postings: FxHashMap<u32, Vec<u32>>,
+}
+
+pub(in crate::view) enum DiffSearchVisibleCandidates<'a> {
+    All,
+    Indexed(&'a [u32]),
+    None,
+}
+
+impl DiffSearchVisibleTrigramIndex {
+    pub(in crate::view) fn insert_text(
+        &mut self,
+        visible_ix: u32,
+        text: &str,
+        trigrams: &mut SmallVec<[u32; 64]>,
+    ) {
+        collect_unique_ascii_folded_byte_trigrams(text.as_bytes(), trigrams);
+        for trigram in trigrams.iter().copied() {
+            self.postings.entry(trigram).or_default().push(visible_ix);
+        }
+    }
+
+    pub(in crate::view) fn finish(mut self) -> Self {
+        for indices in self.postings.values_mut() {
+            indices.shrink_to_fit();
+        }
+        self
+    }
+
+    pub(in crate::view) fn candidates<'a>(
+        &'a self,
+        needle: &[u8],
+    ) -> DiffSearchVisibleCandidates<'a> {
+        if needle.len() < 3 {
+            return DiffSearchVisibleCandidates::All;
+        }
+
+        let mut trigrams = SmallVec::<[u32; 64]>::new();
+        collect_unique_ascii_folded_byte_trigrams(needle, &mut trigrams);
+
+        let mut best: Option<&[u32]> = None;
+        for trigram in trigrams.iter() {
+            let Some(postings) = self.postings.get(trigram).map(Vec::as_slice) else {
+                return DiffSearchVisibleCandidates::None;
+            };
+            if best.is_none_or(|current| postings.len() < current.len()) {
+                best = Some(postings);
+            }
+        }
+
+        match best {
+            Some(postings) => DiffSearchVisibleCandidates::Indexed(postings),
+            None => DiffSearchVisibleCandidates::All,
+        }
+    }
+}
+
+pub(in crate::view) fn build_resolved_output_trigram_index(
+    text: &str,
+    line_starts: &[usize],
+    line_count: usize,
+) -> DiffSearchVisibleTrigramIndex {
+    let mut index = DiffSearchVisibleTrigramIndex::default();
+    let mut trigrams = SmallVec::<[u32; 64]>::new();
+    for line_ix in 0..line_count {
+        index.insert_text(
+            line_ix as u32,
+            rows::resolved_output_line_text(text, line_starts, line_ix),
+            &mut trigrams,
+        );
+    }
+    index.finish()
+}
+
+#[inline]
+fn diff_search_displayed_text_matches_query(
+    query: AsciiCaseInsensitiveNeedle<'_>,
+    text: &str,
+    expanded_tabs: &mut String,
+) -> bool {
+    if !text.contains('\t') {
+        return query.is_match(text);
+    }
+
+    expanded_tabs.clear();
+    for ch in text.chars() {
+        match ch {
+            '\t' => expanded_tabs.push_str("    "),
+            _ => expanded_tabs.push(ch),
+        }
+    }
+    query.is_match(expanded_tabs.as_str())
+}
+
+pub(in crate::view) fn diff_search_split_row_texts_match_query(
+    query: AsciiCaseInsensitiveNeedle<'_>,
+    left: Option<&str>,
+    right: Option<&str>,
+    expanded_tabs: &mut String,
+) -> bool {
+    if let Some(text) = left
+        && diff_search_displayed_text_matches_query(query, text, expanded_tabs)
+    {
+        return true;
+    }
+
+    right.is_some_and(|text| diff_search_displayed_text_matches_query(query, text, expanded_tabs))
+}
+
 #[inline]
 pub(in crate::view) fn diff_search_query_reuse(
     previous_query: &str,
@@ -91,6 +211,144 @@ pub(in crate::view) fn diff_search_query_reuse(
     }
 
     DiffSearchQueryReuse::None
+}
+
+fn collect_unique_ascii_folded_byte_trigrams(bytes: &[u8], trigrams: &mut SmallVec<[u32; 64]>) {
+    trigrams.clear();
+    if bytes.len() < 3 {
+        return;
+    }
+
+    trigrams.extend(bytes.windows(3).map(encode_ascii_folded_byte_trigram));
+    trigrams.sort_unstable();
+    trigrams.dedup();
+}
+
+fn encode_ascii_folded_byte_trigram(window: &[u8]) -> u32 {
+    debug_assert_eq!(window.len(), 3);
+    (u32::from(window[0].to_ascii_lowercase()) << 16)
+        | (u32::from(window[1].to_ascii_lowercase()) << 8)
+        | u32::from(window[2].to_ascii_lowercase())
+}
+
+fn inline_patch_diff_search_text<'a>(
+    diff: &'a Diff,
+    diff_click_kinds: &[DiffClickKind],
+    diff_header_display_cache: &'a HashMap<usize, SharedString>,
+    src_ix: usize,
+) -> Option<Cow<'a, str>> {
+    let line = diff.lines.get(src_ix)?;
+    let click_kind = diff_click_kinds
+        .get(src_ix)
+        .copied()
+        .unwrap_or(DiffClickKind::Line);
+    if matches!(
+        click_kind,
+        DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+    ) && let Some(display) = diff_header_display_cache.get(&src_ix)
+    {
+        return Some(Cow::Borrowed(display.as_ref()));
+    }
+
+    if !line.text.contains('\t') {
+        return Some(Cow::Borrowed(line.text.as_ref()));
+    }
+
+    let mut expanded = String::with_capacity(line.text.len());
+    for ch in line.text.chars() {
+        match ch {
+            '\t' => expanded.push_str("    "),
+            _ => expanded.push(ch),
+        }
+    }
+    Some(Cow::Owned(expanded))
+}
+
+fn inline_patch_diff_src_ix_for_visible_ix(
+    diff_visible_inline_map: Option<&super::diff_cache::PatchInlineVisibleMap>,
+    diff_visible_indices: &[usize],
+    visible_ix: usize,
+) -> Option<usize> {
+    if let Some(map) = diff_visible_inline_map {
+        return map.src_ix_for_visible_ix(visible_ix);
+    }
+    diff_visible_indices.get(visible_ix).copied()
+}
+
+fn inline_patch_diff_visible_ix_matches_query(
+    diff: &Diff,
+    diff_click_kinds: &[DiffClickKind],
+    diff_header_display_cache: &HashMap<usize, SharedString>,
+    diff_visible_inline_map: Option<&super::diff_cache::PatchInlineVisibleMap>,
+    diff_visible_indices: &[usize],
+    query: AsciiCaseInsensitiveNeedle<'_>,
+    visible_ix: usize,
+) -> bool {
+    let Some(src_ix) = inline_patch_diff_src_ix_for_visible_ix(
+        diff_visible_inline_map,
+        diff_visible_indices,
+        visible_ix,
+    ) else {
+        return false;
+    };
+    inline_patch_diff_search_text(diff, diff_click_kinds, diff_header_display_cache, src_ix)
+        .is_some_and(|text| query.is_match(text.as_ref()))
+}
+
+fn resolved_output_line_ix_matches_query(
+    text: &str,
+    line_starts: &[usize],
+    query: AsciiCaseInsensitiveNeedle<'_>,
+    line_ix: usize,
+) -> bool {
+    query.is_match(rows::resolved_output_line_text(text, line_starts, line_ix))
+}
+
+fn retain_refined_visible_matches(
+    matches: &mut Vec<usize>,
+    candidates: DiffSearchVisibleCandidates<'_>,
+    mut visible_ix_matches_query: impl FnMut(usize) -> bool,
+) {
+    match candidates {
+        DiffSearchVisibleCandidates::None => {
+            matches.clear();
+        }
+        DiffSearchVisibleCandidates::All => {
+            matches.retain(|&visible_ix| visible_ix_matches_query(visible_ix));
+        }
+        DiffSearchVisibleCandidates::Indexed(candidate_visible_rows) => {
+            if candidate_visible_rows.len() >= matches.len() {
+                matches.retain(|&visible_ix| visible_ix_matches_query(visible_ix));
+                return;
+            }
+
+            let mut read_ix = 0usize;
+            let mut write_ix = 0usize;
+            let mut candidate_ix = 0usize;
+
+            while read_ix < matches.len() && candidate_ix < candidate_visible_rows.len() {
+                let visible_ix = matches[read_ix];
+                let candidate_visible_ix = candidate_visible_rows[candidate_ix] as usize;
+                if visible_ix < candidate_visible_ix {
+                    read_ix += 1;
+                    continue;
+                }
+                if visible_ix > candidate_visible_ix {
+                    candidate_ix += 1;
+                    continue;
+                }
+
+                if visible_ix_matches_query(visible_ix) {
+                    matches[write_ix] = visible_ix;
+                    write_ix += 1;
+                }
+                read_ix += 1;
+                candidate_ix += 1;
+            }
+
+            matches.truncate(write_ix);
+        }
+    }
 }
 
 impl MainPaneView {
@@ -152,9 +410,26 @@ impl MainPaneView {
             DiffSearchQueryReuse::SameSemantics => {}
             DiffSearchQueryReuse::Refinement if self.diff_search_can_refine_current_matches() => {
                 let mut previous_matches = std::mem::take(&mut self.diff_search_matches);
-                previous_matches.retain(|&visible_ix| {
-                    self.diff_search_visible_row_matches_query(query, visible_ix)
-                });
+                if !(self
+                    .diff_search_try_refine_worktree_preview_matches(query, &mut previous_matches)
+                    || self
+                        .diff_search_try_refine_inline_patch_matches(query, &mut previous_matches))
+                {
+                    if self.is_file_diff_view_active() && self.diff_view == DiffViewMode::Split {
+                        let mut expanded_tabs = String::new();
+                        previous_matches.retain(|&visible_ix| {
+                            self.diff_search_file_diff_split_visible_row_matches_query(
+                                query,
+                                visible_ix,
+                                &mut expanded_tabs,
+                            )
+                        });
+                    } else {
+                        previous_matches.retain(|&visible_ix| {
+                            self.diff_search_visible_row_matches_query(query, visible_ix)
+                        });
+                    }
+                }
                 self.diff_search_matches = previous_matches;
             }
             DiffSearchQueryReuse::None | DiffSearchQueryReuse::Refinement => {
@@ -185,12 +460,42 @@ impl MainPaneView {
             let Some(line_count) = self.worktree_preview_line_count() else {
                 return;
             };
-            for ix in 0..line_count {
-                let Some(line) = self.worktree_preview_line_text(ix) else {
-                    continue;
-                };
-                if query.is_match(line) {
-                    self.diff_search_matches.push(ix);
+            let source_text = self.worktree_preview_text.as_ref();
+            let line_starts = self.worktree_preview_line_starts.as_ref();
+            if let Some(index) = self.worktree_preview_search_trigram_index.as_ref() {
+                match index.candidates(query.as_bytes()) {
+                    DiffSearchVisibleCandidates::None => {}
+                    DiffSearchVisibleCandidates::All => {
+                        for ix in 0..line_count {
+                            if resolved_output_line_ix_matches_query(
+                                source_text,
+                                line_starts,
+                                query,
+                                ix,
+                            ) {
+                                self.diff_search_matches.push(ix);
+                            }
+                        }
+                    }
+                    DiffSearchVisibleCandidates::Indexed(candidate_rows) => {
+                        for &ix in candidate_rows {
+                            let ix = ix as usize;
+                            if resolved_output_line_ix_matches_query(
+                                source_text,
+                                line_starts,
+                                query,
+                                ix,
+                            ) {
+                                self.diff_search_matches.push(ix);
+                            }
+                        }
+                    }
+                }
+            } else {
+                for ix in 0..line_count {
+                    if resolved_output_line_ix_matches_query(source_text, line_starts, query, ix) {
+                        self.diff_search_matches.push(ix);
+                    }
                 }
             }
         } else if let Some((_path, conflict_kind)) = self.active_conflict_target() {
@@ -201,7 +506,28 @@ impl MainPaneView {
                     conflict_resolver_visible_match_indices_with_needle(query, &ctx);
             }
         } else {
+            if self.diff_view == DiffViewMode::Inline
+                && !self.is_file_diff_view_active()
+                && self.diff_search_scan_inline_patch_diff_with_needle(query)
+            {
+                return;
+            }
+
             let total = self.diff_visible_len();
+            if self.diff_view == DiffViewMode::Split && self.is_file_diff_view_active() {
+                let mut expanded_tabs = String::new();
+                for visible_ix in 0..total {
+                    if self.diff_search_file_diff_split_visible_row_matches_query(
+                        query,
+                        visible_ix,
+                        &mut expanded_tabs,
+                    ) {
+                        self.diff_search_matches.push(visible_ix);
+                    }
+                }
+                return;
+            }
+
             for visible_ix in 0..total {
                 match self.diff_view {
                     DiffViewMode::Inline => {
@@ -225,8 +551,187 @@ impl MainPaneView {
         }
     }
 
+    fn diff_search_scan_inline_patch_diff_with_needle(
+        &mut self,
+        query: AsciiCaseInsensitiveNeedle<'_>,
+    ) -> bool {
+        let diff = match self.active_repo().map(|repo| &repo.diff_state.diff) {
+            Some(Loadable::Ready(diff)) => Arc::clone(diff),
+            _ => return false,
+        };
+
+        if self.diff_search_inline_patch_trigram_index.is_none() {
+            let mut index = DiffSearchVisibleTrigramIndex::default();
+            let mut trigrams = SmallVec::<[u32; 64]>::new();
+            if let Some(map) = self.diff_visible_inline_map.as_ref() {
+                map.for_each_visible_src_ix(|visible_ix, src_ix| {
+                    if let Some(text) = inline_patch_diff_search_text(
+                        diff.as_ref(),
+                        &self.diff_click_kinds,
+                        &self.diff_header_display_cache,
+                        src_ix,
+                    ) {
+                        index.insert_text(visible_ix as u32, text.as_ref(), &mut trigrams);
+                    }
+                });
+            } else {
+                for (visible_ix, &src_ix) in self.diff_visible_indices.iter().enumerate() {
+                    if let Some(text) = inline_patch_diff_search_text(
+                        diff.as_ref(),
+                        &self.diff_click_kinds,
+                        &self.diff_header_display_cache,
+                        src_ix,
+                    ) {
+                        index.insert_text(visible_ix as u32, text.as_ref(), &mut trigrams);
+                    }
+                }
+            }
+            self.diff_search_inline_patch_trigram_index = Some(index.finish());
+        }
+
+        let index = self
+            .diff_search_inline_patch_trigram_index
+            .as_ref()
+            .expect("inline patch diff trigram index initialized");
+        let diff_click_kinds = &self.diff_click_kinds;
+        let diff_header_display_cache = &self.diff_header_display_cache;
+        let diff_visible_inline_map = self.diff_visible_inline_map.as_ref();
+        let diff_visible_indices = &self.diff_visible_indices;
+        let matches = &mut self.diff_search_matches;
+
+        match index.candidates(query.bytes) {
+            DiffSearchVisibleCandidates::None => {}
+            DiffSearchVisibleCandidates::All => {
+                let total = diff_visible_inline_map
+                    .map(super::diff_cache::PatchInlineVisibleMap::visible_len)
+                    .unwrap_or(diff_visible_indices.len());
+                for visible_ix in 0..total {
+                    if inline_patch_diff_visible_ix_matches_query(
+                        diff.as_ref(),
+                        diff_click_kinds,
+                        diff_header_display_cache,
+                        diff_visible_inline_map,
+                        diff_visible_indices,
+                        query,
+                        visible_ix,
+                    ) {
+                        matches.push(visible_ix);
+                    }
+                }
+            }
+            DiffSearchVisibleCandidates::Indexed(candidate_visible_rows) => {
+                for &visible_ix in candidate_visible_rows {
+                    let visible_ix = visible_ix as usize;
+                    if inline_patch_diff_visible_ix_matches_query(
+                        diff.as_ref(),
+                        diff_click_kinds,
+                        diff_header_display_cache,
+                        diff_visible_inline_map,
+                        diff_visible_indices,
+                        query,
+                        visible_ix,
+                    ) {
+                        matches.push(visible_ix);
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+    fn diff_search_file_diff_split_visible_row_matches_query(
+        &self,
+        query: AsciiCaseInsensitiveNeedle<'_>,
+        visible_ix: usize,
+        expanded_tabs: &mut String,
+    ) -> bool {
+        if !self.is_file_diff_view_active() || self.diff_view != DiffViewMode::Split {
+            return false;
+        }
+        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+            return false;
+        };
+        let Some(provider) = self.file_diff_row_provider.as_ref() else {
+            return false;
+        };
+        let Some((left, right)) = provider.split_row_texts(mapped_ix) else {
+            return false;
+        };
+        diff_search_split_row_texts_match_query(query, left, right, expanded_tabs)
+    }
+
     fn diff_search_can_refine_current_matches(&self) -> bool {
         self.is_file_preview_active() || self.active_conflict_target().is_none()
+    }
+
+    fn diff_search_try_refine_inline_patch_matches(
+        &self,
+        query: AsciiCaseInsensitiveNeedle<'_>,
+        previous_matches: &mut Vec<usize>,
+    ) -> bool {
+        if self.is_file_preview_active()
+            || self.active_conflict_target().is_some()
+            || self.diff_view != DiffViewMode::Inline
+            || self.is_file_diff_view_active()
+        {
+            return false;
+        }
+
+        let Some(diff) = self.active_repo().map(|repo| &repo.diff_state.diff) else {
+            return false;
+        };
+        let Loadable::Ready(diff) = diff else {
+            return false;
+        };
+        let Some(index) = self.diff_search_inline_patch_trigram_index.as_ref() else {
+            return false;
+        };
+
+        let diff_click_kinds = &self.diff_click_kinds;
+        let diff_header_display_cache = &self.diff_header_display_cache;
+        let diff_visible_inline_map = self.diff_visible_inline_map.as_ref();
+        let diff_visible_indices = &self.diff_visible_indices;
+        retain_refined_visible_matches(
+            previous_matches,
+            index.candidates(query.as_bytes()),
+            |visible_ix| {
+                inline_patch_diff_visible_ix_matches_query(
+                    diff.as_ref(),
+                    diff_click_kinds,
+                    diff_header_display_cache,
+                    diff_visible_inline_map,
+                    diff_visible_indices,
+                    query,
+                    visible_ix,
+                )
+            },
+        );
+        true
+    }
+
+    fn diff_search_try_refine_worktree_preview_matches(
+        &self,
+        query: AsciiCaseInsensitiveNeedle<'_>,
+        previous_matches: &mut Vec<usize>,
+    ) -> bool {
+        if !self.is_file_preview_active() {
+            return false;
+        }
+        let Some(index) = self.worktree_preview_search_trigram_index.as_ref() else {
+            return false;
+        };
+
+        let source_text = self.worktree_preview_text.as_ref();
+        let line_starts = self.worktree_preview_line_starts.as_ref();
+        retain_refined_visible_matches(
+            previous_matches,
+            index.candidates(query.as_bytes()),
+            |line_ix| {
+                resolved_output_line_ix_matches_query(source_text, line_starts, query, line_ix)
+            },
+        );
+        true
     }
 
     fn diff_search_visible_row_matches_query(
@@ -246,6 +751,14 @@ impl MainPaneView {
                     .as_ref(),
             ),
             DiffViewMode::Split => {
+                if self.is_file_diff_view_active() {
+                    let mut expanded_tabs = String::new();
+                    return self.diff_search_file_diff_split_visible_row_matches_query(
+                        query,
+                        visible_ix,
+                        &mut expanded_tabs,
+                    );
+                }
                 let left = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
                 let right = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
                 query.is_match(left.as_ref()) || query.is_match(right.as_ref())
@@ -649,11 +1162,11 @@ fn three_way_visible_item_matches_query(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConflictResolverSearchContext, ConflictResolverSearchTwoWayRows,
-        ConflictResolverSearchVisibleRows, DiffSearchQueryReuse,
+        AsciiCaseInsensitiveNeedle, ConflictResolverSearchContext,
+        ConflictResolverSearchTwoWayRows, ConflictResolverSearchVisibleRows, DiffSearchQueryReuse,
         conflict_resolver_visible_match_indices, contains_ascii_case_insensitive,
-        diff_search_query_reuse, empty_conflict_resolver_search_two_way_rows,
-        three_way_visible_item_matches_query,
+        diff_search_query_reuse, diff_search_split_row_texts_match_query,
+        empty_conflict_resolver_search_two_way_rows, three_way_visible_item_matches_query,
     };
     use crate::view::conflict_resolver;
     use crate::view::conflict_resolver::{
@@ -720,6 +1233,25 @@ mod tests {
             diff_search_query_reuse("render_cache", "cache_render"),
             DiffSearchQueryReuse::None
         );
+    }
+
+    #[test]
+    fn split_row_text_search_matches_rendered_tab_expansion() {
+        let query = AsciiCaseInsensitiveNeedle::new("a    b").expect("query");
+        let mut expanded_tabs = String::new();
+
+        assert!(diff_search_split_row_texts_match_query(
+            query,
+            Some("a\tb"),
+            None,
+            &mut expanded_tabs,
+        ));
+        assert!(diff_search_split_row_texts_match_query(
+            query,
+            None,
+            Some("a\tb"),
+            &mut expanded_tabs,
+        ));
     }
 
     #[test]

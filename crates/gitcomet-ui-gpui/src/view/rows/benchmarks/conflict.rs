@@ -1,7 +1,7 @@
 use super::*;
 use crate::view::conflict_resolver::{
-    self, ConflictBlock, ConflictChoice, ConflictPickSide, ConflictSegment, ThreeWayVisibleItem,
-    TwoWayWordHighlights, WordHighlights,
+    self, ConflictBlock, ConflictChoice, ConflictPickSide, ConflictSegment,
+    ConflictSplitStyledTextCache, ThreeWayVisibleItem, TwoWayWordHighlights, WordHighlights,
 };
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::mergetool_trace::{
@@ -9,6 +9,7 @@ use gitcomet_core::mergetool_trace::{
     MergetoolTraceStage,
 };
 use gitcomet_state::model::ConflictFile;
+use gitcomet_state::msg::RepoPath;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -25,7 +26,6 @@ fn two_way_word_ranges_for_row(
 ) -> (&[Range<usize>], &[Range<usize>]) {
     highlights
         .get(row_ix)
-        .and_then(|entry| entry.as_ref())
         .map(|(old, new)| (old.as_slice(), new.as_slice()))
         .unwrap_or((&[], &[]))
 }
@@ -295,20 +295,12 @@ fn hash_three_way_visible_map_items(items: &[ThreeWayVisibleItem]) -> u64 {
 fn build_three_way_visible_map_legacy(
     total_lines: usize,
     conflict_ranges: &[Range<usize>],
-    segments: &[ConflictSegment],
+    conflict_resolved: &[bool],
     hide_resolved: bool,
 ) -> Vec<ThreeWayVisibleItem> {
     if !hide_resolved {
         return (0..total_lines).map(ThreeWayVisibleItem::Line).collect();
     }
-
-    let resolved_blocks: Vec<bool> = segments
-        .iter()
-        .filter_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b.resolved),
-            _ => None,
-        })
-        .collect();
 
     let mut visible = Vec::with_capacity(total_lines);
     let mut line = 0usize;
@@ -317,7 +309,7 @@ fn build_three_way_visible_map_legacy(
             .iter()
             .enumerate()
             .find(|(_, r)| r.contains(&line))
-            .filter(|(ri, _)| resolved_blocks.get(*ri).copied().unwrap_or(false))
+            .filter(|(ri, _)| conflict_resolved.get(*ri).copied().unwrap_or(false))
         {
             visible.push(ThreeWayVisibleItem::CollapsedBlock(range_ix));
             line = range.end;
@@ -332,6 +324,7 @@ fn build_three_way_visible_map_legacy(
 pub struct ConflictThreeWayVisibleMapBuildFixture {
     total_lines: usize,
     conflict_ranges: Vec<Range<usize>>,
+    conflict_resolved: Vec<bool>,
     segments: Vec<ConflictSegment>,
     conflict_count: usize,
 }
@@ -354,11 +347,13 @@ impl ConflictThreeWayVisibleMapBuildFixture {
             theirs_lines.len(),
         );
         let [_base_ranges, ours_ranges, _theirs_ranges] = conflict_maps.conflict_ranges;
+        let conflict_resolved = conflict_maps.conflict_resolved;
         let conflict_count = ours_ranges.len();
 
         Self {
             total_lines,
             conflict_ranges: ours_ranges,
+            conflict_resolved,
             segments,
             conflict_count,
         }
@@ -379,7 +374,7 @@ impl ConflictThreeWayVisibleMapBuildFixture {
         let visible_map = build_three_way_visible_map_legacy(
             self.total_lines,
             &self.conflict_ranges,
-            &self.segments,
+            &self.conflict_resolved,
             true,
         );
         std::hint::black_box(visible_map.as_slice());
@@ -409,7 +404,7 @@ impl ConflictThreeWayVisibleMapBuildFixture {
         build_three_way_visible_map_legacy(
             self.total_lines,
             &self.conflict_ranges,
-            &self.segments,
+            &self.conflict_resolved,
             true,
         )
     }
@@ -417,13 +412,11 @@ impl ConflictThreeWayVisibleMapBuildFixture {
 
 pub struct ConflictTwoWaySplitScrollFixture {
     diff_rows: Vec<gitcomet_core::file_diff::FileDiffRow>,
-    diff_word_highlights_split: TwoWayWordHighlights,
+    stable_cache: ConflictSplitStyledTextCache,
     diff_row_conflict_map: Vec<Option<usize>>,
     visible_row_indices: Vec<usize>,
     conflict_count: usize,
-    language: Option<super::diff_text::DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
-    theme: AppTheme,
 }
 
 struct BlockLocalTwoWayBenchmarkRows {
@@ -452,6 +445,54 @@ fn build_block_local_two_way_benchmark_rows(
     }
 }
 
+fn prewarm_two_way_split_stable_cache(
+    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
+    diff_word_highlights_split: &TwoWayWordHighlights,
+    theme: AppTheme,
+    language: Option<super::diff_text::DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+) -> ConflictSplitStyledTextCache {
+    let mut stable_cache = ConflictSplitStyledTextCache::with_row_capacity(diff_rows.len());
+
+    for (row_ix, row) in diff_rows.iter().enumerate() {
+        let (old_word_ranges, new_word_ranges) =
+            two_way_word_ranges_for_row(diff_word_highlights_split, row_ix);
+
+        for (side, text, word_ranges) in [
+            (ConflictPickSide::Ours, row.old.as_ref(), old_word_ranges),
+            (ConflictPickSide::Theirs, row.new.as_ref(), new_word_ranges),
+        ] {
+            let Some(text) = text else {
+                continue;
+            };
+            if text.is_empty() || (word_ranges.is_empty() && language.is_none()) {
+                continue;
+            }
+
+            let key = (row_ix, side);
+            if stable_cache.get(&key).is_none() {
+                stable_cache.insert(
+                    key,
+                    super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                        theme,
+                        text.as_ref(),
+                        Some(super::diff_text::DiffTextSourceIdentity::from_str(
+                            text.as_ref(),
+                        )),
+                        word_ranges,
+                        "",
+                        language,
+                        syntax_mode,
+                        None,
+                    ),
+                );
+            }
+        }
+    }
+
+    stable_cache
+}
+
 impl ConflictTwoWaySplitScrollFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
         let theme = AppTheme::gitcomet_dark();
@@ -463,16 +504,23 @@ impl ConflictTwoWaySplitScrollFixture {
             diff_row_conflict_map,
             visible_row_indices,
         } = build_block_local_two_way_benchmark_rows(&segments);
+        let language = diff_syntax_language_for_path("src/conflict.rs");
+        let syntax_mode = DiffSyntaxMode::Auto;
+        let stable_cache = prewarm_two_way_split_stable_cache(
+            &diff_rows,
+            &diff_word_highlights_split,
+            theme,
+            language,
+            syntax_mode,
+        );
 
         Self {
             diff_rows,
-            diff_word_highlights_split,
+            stable_cache,
             diff_row_conflict_map,
             visible_row_indices,
             conflict_count,
-            language: diff_syntax_language_for_path("src/conflict.rs"),
-            syntax_mode: DiffSyntaxMode::Auto,
-            theme,
+            syntax_mode,
         }
     }
 
@@ -494,35 +542,26 @@ impl ConflictTwoWaySplitScrollFixture {
             let Some(row) = self.diff_rows.get(row_ix) else {
                 continue;
             };
-            let (old_word_ranges, new_word_ranges) =
-                two_way_word_ranges_for_row(&self.diff_word_highlights_split, row_ix);
-
-            if let Some(old_text) = row.old.as_deref() {
-                let styled = super::diff_text::build_cached_diff_styled_text(
-                    self.theme,
-                    old_text,
-                    old_word_ranges,
-                    "",
-                    self.language,
-                    self.syntax_mode,
-                    None,
-                );
-                styled.text_hash.hash(&mut h);
-                styled.highlights_hash.hash(&mut h);
+            if row.old.is_some() {
+                if let Some(styled) = self
+                    .stable_cache
+                    .get(&(row_ix, ConflictPickSide::Ours))
+                    .cloned()
+                {
+                    styled.text_hash.hash(&mut h);
+                    styled.highlights_hash.hash(&mut h);
+                }
             }
 
-            if let Some(new_text) = row.new.as_deref() {
-                let styled = super::diff_text::build_cached_diff_styled_text(
-                    self.theme,
-                    new_text,
-                    new_word_ranges,
-                    "",
-                    self.language,
-                    self.syntax_mode,
-                    None,
-                );
-                styled.text_hash.hash(&mut h);
-                styled.highlights_hash.hash(&mut h);
+            if row.new.is_some() {
+                if let Some(styled) = self
+                    .stable_cache
+                    .get(&(row_ix, ConflictPickSide::Theirs))
+                    .cloned()
+                {
+                    styled.text_hash.hash(&mut h);
+                    styled.highlights_hash.hash(&mut h);
+                }
             }
         }
         h.finish()
@@ -630,8 +669,12 @@ impl ConflictTwoWayDiffBuildFixture {
 }
 
 pub struct ConflictLoadDuplicationFixture {
-    path: std::path::PathBuf,
+    path: RepoPath,
     session: ConflictSession,
+    base_stage: (Option<Arc<[u8]>>, Option<Arc<str>>),
+    ours_stage: (Option<Arc<[u8]>>, Option<Arc<str>>),
+    theirs_stage: (Option<Arc<[u8]>>, Option<Arc<str>>),
+    current_stage: (Option<Arc<[u8]>>, Option<Arc<str>>),
     current_text: Arc<str>,
     current_bytes: Arc<[u8]>,
     line_count: usize,
@@ -640,19 +683,23 @@ pub struct ConflictLoadDuplicationFixture {
 
 impl ConflictLoadDuplicationFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
-        let path = std::path::PathBuf::from("fixtures/large_conflict.html");
+        let path = RepoPath::from(std::path::PathBuf::from("fixtures/large_conflict.html"));
         let (base_text, ours_text, theirs_text, current_text) =
             build_synthetic_html_conflict_texts(lines, conflict_blocks);
         let current_text: Arc<str> = current_text.into();
         let current_bytes = Arc::<[u8]>::from(current_text.as_bytes());
         let session = ConflictSession::from_merged_shared_text(
-            path.clone(),
+            path.to_path_buf(),
             gitcomet_core::domain::FileConflictKind::BothModified,
             ConflictPayload::Text(base_text.into()),
             ConflictPayload::Text(ours_text.into()),
             ConflictPayload::Text(theirs_text.into()),
             Arc::clone(&current_text),
         );
+        let base_stage = stage_loaded_stage_parts_from_payload(&session.base);
+        let ours_stage = stage_loaded_stage_parts_from_payload(&session.ours);
+        let theirs_stage = stage_loaded_stage_parts_from_payload(&session.theirs);
+        let current_stage = (Some(Arc::clone(&current_bytes)), None);
         let conflict_count = session.regions.len();
         let line_count = session
             .ours
@@ -663,6 +710,10 @@ impl ConflictLoadDuplicationFixture {
         Self {
             path,
             session,
+            base_stage,
+            ours_stage,
+            theirs_stage,
+            current_stage,
             current_text,
             current_bytes,
             line_count,
@@ -718,64 +769,34 @@ impl ConflictLoadDuplicationFixture {
     }
 
     pub(super) fn build_shared_conflict_file(&self) -> ConflictFile {
-        let (base_bytes, base) = shared_conflict_file_side_from_payload(&self.session.base);
-        let (ours_bytes, ours) = shared_conflict_file_side_from_payload(&self.session.ours);
-        let (theirs_bytes, theirs) = shared_conflict_file_side_from_payload(&self.session.theirs);
-
-        ConflictFile {
-            path: self.path.clone(),
-            base_bytes,
-            ours_bytes,
-            theirs_bytes,
-            current_bytes: None,
-            base,
-            ours,
-            theirs,
-            current: Some(self.current_text.clone()),
-        }
+        ConflictFile::from_shared_conflict_session(self.path.clone(), &self.session)
     }
 
     pub(super) fn build_duplicated_conflict_file(&self) -> ConflictFile {
-        let (base_bytes, base) = duplicated_conflict_file_side_from_payload(&self.session.base);
-        let (ours_bytes, ours) = duplicated_conflict_file_side_from_payload(&self.session.ours);
-        let (theirs_bytes, theirs) =
-            duplicated_conflict_file_side_from_payload(&self.session.theirs);
-
-        ConflictFile {
-            path: self.path.clone(),
-            base_bytes,
-            ours_bytes,
-            theirs_bytes,
-            current_bytes: Some(Arc::<[u8]>::from(self.current_bytes.as_ref())),
-            base,
-            ours,
-            theirs,
-            current: Some(Arc::<str>::from(self.current_text.as_ref())),
-        }
+        ConflictFile::from_loaded_stage_parts(
+            self.path.clone(),
+            clone_stage_parts(&self.base_stage),
+            clone_stage_parts(&self.ours_stage),
+            clone_stage_parts(&self.theirs_stage),
+            clone_stage_parts(&self.current_stage),
+        )
     }
 }
 
-fn shared_conflict_file_side_from_payload(
+fn stage_loaded_stage_parts_from_payload(
     payload: &ConflictPayload,
 ) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
     match payload {
-        ConflictPayload::Text(text) => (None, Some(text.clone())),
+        ConflictPayload::Text(text) => (None, Some(Arc::<str>::from(text.as_ref()))),
         ConflictPayload::Binary(bytes) => (Some(bytes.clone()), None),
         ConflictPayload::Absent => (None, None),
     }
 }
 
-fn duplicated_conflict_file_side_from_payload(
-    payload: &ConflictPayload,
+fn clone_stage_parts(
+    parts: &(Option<Arc<[u8]>>, Option<Arc<str>>),
 ) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
-    match payload {
-        ConflictPayload::Text(text) => (
-            Some(Arc::<[u8]>::from(text.as_bytes())),
-            Some(Arc::<str>::from(text.as_ref())),
-        ),
-        ConflictPayload::Binary(bytes) => (Some(Arc::<[u8]>::from(bytes.as_ref())), None),
-        ConflictPayload::Absent => (None, None),
-    }
+    (parts.0.clone(), parts.1.clone())
 }
 
 fn hash_conflict_file_load(
@@ -866,8 +887,8 @@ fn hash_two_way_word_highlights(highlights: &conflict_resolver::TwoWayWordHighli
     for highlight in highlights.iter().step_by(step).take(128) {
         match highlight {
             Some((old_ranges, new_ranges)) => {
-                hash_ranges(old_ranges, &mut h);
-                hash_ranges(new_ranges, &mut h);
+                hash_ranges(old_ranges.as_slice(), &mut h);
+                hash_ranges(new_ranges.as_slice(), &mut h);
             }
             None => 0usize.hash(&mut h),
         }
@@ -890,6 +911,12 @@ fn conflict_block_count_for_segments(segments: &[ConflictSegment]) -> usize {
         .count()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictSearchQueryStyledSource {
+    StableCache,
+    QueryCache,
+}
+
 pub struct ConflictSearchQueryUpdateFixture {
     diff_rows: Vec<gitcomet_core::file_diff::FileDiffRow>,
     diff_word_highlights_split: conflict_resolver::TwoWayWordHighlights,
@@ -898,8 +925,8 @@ pub struct ConflictSearchQueryUpdateFixture {
     language: Option<super::diff_text::DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
     theme: AppTheme,
-    stable_cache: HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
-    query_cache: HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+    stable_cache: ConflictSplitStyledTextCache,
+    query_cache: ConflictSplitStyledTextCache,
     query_cache_query: SharedString,
 }
 
@@ -914,6 +941,7 @@ impl ConflictSearchQueryUpdateFixture {
             diff_row_conflict_map: _,
             visible_row_indices,
         } = build_block_local_two_way_benchmark_rows(&segments);
+        let row_count = diff_rows.len();
 
         let mut fixture = Self {
             diff_rows,
@@ -923,8 +951,8 @@ impl ConflictSearchQueryUpdateFixture {
             language: diff_syntax_language_for_path("src/conflict.rs"),
             syntax_mode: DiffSyntaxMode::Auto,
             theme,
-            stable_cache: HashMap::default(),
-            query_cache: HashMap::default(),
+            stable_cache: ConflictSplitStyledTextCache::with_row_capacity(row_count),
+            query_cache: ConflictSplitStyledTextCache::with_row_capacity(row_count),
             query_cache_query: SharedString::default(),
         };
         fixture.prewarm_stable_cache();
@@ -945,7 +973,7 @@ impl ConflictSearchQueryUpdateFixture {
                 &mut self.query_cache,
                 row_ix,
                 ConflictPickSide::Ours,
-                row.old.as_deref(),
+                row.old.as_ref(),
                 old_word_ranges,
                 "",
                 self.language,
@@ -957,7 +985,7 @@ impl ConflictSearchQueryUpdateFixture {
                 &mut self.query_cache,
                 row_ix,
                 ConflictPickSide::Theirs,
-                row.new.as_deref(),
+                row.new.as_ref(),
                 new_word_ranges,
                 "",
                 self.language,
@@ -978,20 +1006,22 @@ impl ConflictSearchQueryUpdateFixture {
     #[allow(clippy::too_many_arguments)]
     fn split_row_styled(
         theme: AppTheme,
-        stable_cache: &mut HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
-        query_cache: &mut HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        stable_cache: &mut ConflictSplitStyledTextCache,
+        query_cache: &mut ConflictSplitStyledTextCache,
         row_ix: usize,
         side: ConflictPickSide,
-        text: Option<&str>,
+        text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
         word_ranges: &[Range<usize>],
         query: &str,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
-    ) -> Option<CachedDiffStyledText> {
+    ) -> Option<ConflictSearchQueryStyledSource> {
         let text = text?;
         if text.is_empty() {
             return None;
         }
+        let source_identity = Some(super::diff_text::DiffTextSourceIdentity::from_str(text));
+        let text = text.as_ref();
 
         let query = query.trim();
         let query_active = !query.is_empty();
@@ -999,42 +1029,48 @@ impl ConflictSearchQueryUpdateFixture {
         let key = (row_ix, side);
 
         if base_has_style {
-            stable_cache.entry(key).or_insert_with(|| {
-                super::diff_text::build_cached_diff_styled_text(
-                    theme,
-                    text,
-                    word_ranges,
-                    "",
-                    syntax_lang,
-                    syntax_mode,
-                    None,
-                )
-            });
+            if stable_cache.get(&key).is_none() {
+                stable_cache.insert(
+                    key,
+                    super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                        theme,
+                        text,
+                        source_identity,
+                        word_ranges,
+                        "",
+                        syntax_lang,
+                        syntax_mode,
+                        None,
+                    ),
+                );
+            }
         }
 
         if query_active {
-            query_cache.entry(key).or_insert_with(|| {
-                if let Some(base) = stable_cache.get(&key) {
+            if query_cache.get(&key).is_none() {
+                let styled = if let Some(base) = stable_cache.get(&key) {
                     super::diff_text::build_cached_diff_query_overlay_styled_text(
                         theme, base, query,
                     )
                 } else {
-                    super::diff_text::build_cached_diff_styled_text(
+                    super::diff_text::build_cached_diff_styled_text_with_source_identity(
                         theme,
                         text,
+                        source_identity,
                         word_ranges,
                         query,
                         syntax_lang,
                         syntax_mode,
                         None,
                     )
-                }
-            });
-            return query_cache.get(&key).cloned();
+                };
+                query_cache.insert(key, styled);
+            }
+            return Some(ConflictSearchQueryStyledSource::QueryCache);
         }
 
         if base_has_style {
-            stable_cache.get(&key).cloned()
+            Some(ConflictSearchQueryStyledSource::StableCache)
         } else {
             None
         }
@@ -1065,13 +1101,20 @@ impl ConflictSearchQueryUpdateFixture {
                 &mut self.query_cache,
                 row_ix,
                 ConflictPickSide::Ours,
-                row.old.as_deref(),
+                row.old.as_ref(),
                 old_word_ranges,
                 query,
                 self.language,
                 self.syntax_mode,
             );
-            if let Some(styled) = old {
+            if let Some(styled) = old.and_then(|source| match source {
+                ConflictSearchQueryStyledSource::StableCache => {
+                    self.stable_cache.get(&(row_ix, ConflictPickSide::Ours))
+                }
+                ConflictSearchQueryStyledSource::QueryCache => {
+                    self.query_cache.get(&(row_ix, ConflictPickSide::Ours))
+                }
+            }) {
                 styled.text_hash.hash(&mut h);
                 styled.highlights_hash.hash(&mut h);
             }
@@ -1082,13 +1125,20 @@ impl ConflictSearchQueryUpdateFixture {
                 &mut self.query_cache,
                 row_ix,
                 ConflictPickSide::Theirs,
-                row.new.as_deref(),
+                row.new.as_ref(),
                 new_word_ranges,
                 query,
                 self.language,
                 self.syntax_mode,
             );
-            if let Some(styled) = new {
+            if let Some(styled) = new.and_then(|source| match source {
+                ConflictSearchQueryStyledSource::StableCache => {
+                    self.stable_cache.get(&(row_ix, ConflictPickSide::Theirs))
+                }
+                ConflictSearchQueryStyledSource::QueryCache => {
+                    self.query_cache.get(&(row_ix, ConflictPickSide::Theirs))
+                }
+            }) {
                 styled.text_hash.hash(&mut h);
                 styled.highlights_hash.hash(&mut h);
             }
@@ -1211,8 +1261,7 @@ struct ResolvedOutputGutterMarker {
 }
 
 pub struct ConflictResolvedOutputGutterScrollFixture {
-    line_sources: Vec<conflict_resolver::ResolvedLineSource>,
-    markers: Vec<Option<ResolvedOutputGutterMarker>>,
+    gutter_rows: Box<[conflict_resolver::ResolvedOutputGutterRow]>,
     active_conflict: usize,
     conflict_count: usize,
 }
@@ -1248,45 +1297,55 @@ impl ConflictResolvedOutputGutterScrollFixture {
             .collect::<Vec<_>>();
         let markers =
             build_synthetic_resolved_output_markers(&segments, &block_ranges, output_lines.len());
+        let gutter_rows = line_sources
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(line_ix, source)| {
+                let marker = markers.get(line_ix).copied().flatten();
+                conflict_resolver::ResolvedOutputGutterRow::new(
+                    source,
+                    marker.map(|entry| entry.conflict_ix),
+                    marker.is_some_and(|entry| entry.is_start),
+                    marker.is_some_and(|entry| entry.is_end),
+                    marker.is_some_and(|entry| entry.unresolved),
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
 
         Self {
-            line_sources,
-            markers,
+            gutter_rows,
             active_conflict: conflict_count / 2,
             conflict_count,
         }
     }
 
     pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
-        if self.line_sources.is_empty() || window == 0 {
+        if self.gutter_rows.is_empty() || window == 0 {
             return 0;
         }
-        let start = start % self.line_sources.len();
-        let end = (start + window).min(self.line_sources.len());
+        let start = start % self.gutter_rows.len();
+        let end = (start + window).min(self.gutter_rows.len());
 
         let mut h = FxHasher::default();
-        for line_ix in start..end {
-            let source = self
-                .line_sources
-                .get(line_ix)
-                .copied()
-                .unwrap_or(conflict_resolver::ResolvedLineSource::Manual);
+        for (offset, gutter_row) in self.gutter_rows[start..end].iter().copied().enumerate() {
+            let line_ix = start + offset;
+            let source = gutter_row.source();
             source.hash(&mut h);
-            source.badge_char().hash(&mut h);
+            gutter_row.badge_char().hash(&mut h);
             (line_ix + 1).hash(&mut h);
 
-            let marker = self.markers.get(line_ix).copied().flatten();
-            (source == conflict_resolver::ResolvedLineSource::Manual && marker.is_none())
-                .hash(&mut h);
+            gutter_row.manual_without_marker().hash(&mut h);
 
-            if let Some(marker) = marker {
-                marker.conflict_ix.hash(&mut h);
-                marker.is_start.hash(&mut h);
-                marker.is_end.hash(&mut h);
-                marker.unresolved.hash(&mut h);
-                let lane_state = if marker.unresolved {
+            if let Some(conflict_ix) = gutter_row.marker_conflict_ix() {
+                conflict_ix.hash(&mut h);
+                gutter_row.is_start().hash(&mut h);
+                gutter_row.is_end().hash(&mut h);
+                gutter_row.unresolved().hash(&mut h);
+                let lane_state = if gutter_row.unresolved() {
                     0u8
-                } else if marker.conflict_ix == self.active_conflict {
+                } else if conflict_ix == self.active_conflict {
                     1u8
                 } else {
                     2u8
@@ -1301,7 +1360,7 @@ impl ConflictResolvedOutputGutterScrollFixture {
     }
 
     pub fn visible_rows(&self) -> usize {
-        self.line_sources.len()
+        self.gutter_rows.len()
     }
 
     pub fn conflict_count(&self) -> usize {
@@ -1353,7 +1412,7 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         let ours_line_starts = line_starts_for_text(&ours_text);
         let theirs_line_starts = line_starts_for_text(&theirs_text);
         let output_line_starts = line_starts_for_text(&output_text);
-        let line_count = conflict_resolver::split_output_lines_for_outline(&output_text).len();
+        let line_count = conflict_resolver::resolved_output_outline_line_count(&output_text);
         let block_unresolved = marker_segments
             .iter()
             .filter_map(|segment| match segment {
@@ -1557,7 +1616,7 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         start..end
     }
 
-    fn next_single_line_edit(&mut self) -> (String, Range<usize>, Range<usize>) {
+    fn next_single_line_edit(&mut self) -> (String, Range<usize>, Range<usize>, usize, isize) {
         self.edit_nonce = self.edit_nonce.wrapping_add(1);
         let line_ix = self
             .edit_line_ix
@@ -1596,7 +1655,29 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         next.push_str(self.output_text.get(end..).unwrap_or_default());
         let old_range = start..end;
         let new_range = start..start.saturating_add(replacement.len());
-        (next, old_range, new_range)
+        let byte_delta = replacement.len() as isize - end.saturating_sub(start) as isize;
+        (next, old_range, new_range, line_ix, byte_delta)
+    }
+
+    fn shift_line_starts_after_same_line_edit(
+        mut line_starts: Vec<usize>,
+        edited_line_ix: usize,
+        byte_delta: isize,
+    ) -> Vec<usize> {
+        if byte_delta == 0 {
+            return line_starts;
+        }
+        for start in line_starts
+            .iter_mut()
+            .skip(edited_line_ix.saturating_add(1))
+        {
+            *start = if byte_delta >= 0 {
+                start.saturating_add(byte_delta as usize)
+            } else {
+                start.saturating_sub((-byte_delta) as usize)
+            };
+        }
+        line_starts
     }
 
     fn hash_outline_state(&self) -> u64 {
@@ -1650,9 +1731,10 @@ impl ResolvedOutputRecomputeIncrementalFixture {
     }
 
     pub fn run_full_recompute_with_metrics(&mut self) -> (u64, ResolvedOutputRecomputeMetrics) {
-        let (next_output, _old_range, _new_range) = self.next_single_line_edit();
+        let (next_output, _old_range, _new_range, _line_ix, _byte_delta) =
+            self.next_single_line_edit();
         let next_line_starts = line_starts_for_text(&next_output);
-        let line_count = conflict_resolver::split_output_lines_for_outline(&next_output).len();
+        let line_count = conflict_resolver::resolved_output_outline_line_count(&next_output);
         let next_meta = self.recompute_meta_full(next_output.as_str());
         let next_markers = self.rebuild_markers(line_count);
 
@@ -1673,16 +1755,20 @@ impl ResolvedOutputRecomputeIncrementalFixture {
     pub fn run_incremental_recompute_with_metrics(
         &mut self,
     ) -> (u64, ResolvedOutputRecomputeMetrics) {
-        let old_text = self.output_text.clone();
-        let old_line_starts = self.output_line_starts.clone();
+        let (next_output, old_byte_range, new_byte_range, edited_line_ix, byte_delta) =
+            self.next_single_line_edit();
 
-        let (next_output, old_byte_range, new_byte_range) = self.next_single_line_edit();
-        let next_line_starts = line_starts_for_text(&next_output);
-        let next_line_count = conflict_resolver::split_output_lines_for_outline(&next_output).len();
-        let source_lookup = self.build_source_lookup();
-
-        let mut old_dirty =
-            Self::dirty_line_range(old_line_starts.as_slice(), old_text.len(), old_byte_range);
+        let mut old_dirty = Self::dirty_line_range(
+            self.output_line_starts.as_slice(),
+            self.output_text.len(),
+            old_byte_range,
+        );
+        let next_line_count = self.output_line_starts.len().max(1);
+        let next_line_starts = Self::shift_line_starts_after_same_line_edit(
+            std::mem::take(&mut self.output_line_starts),
+            edited_line_ix,
+            byte_delta,
+        );
         let mut new_dirty = Self::dirty_line_range(
             next_line_starts.as_slice(),
             next_output.len(),
@@ -1710,26 +1796,34 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         }
 
         let line_delta = new_dirty.len() as isize - old_dirty.len() as isize;
+        let middle_meta = {
+            let source_lookup = self.build_source_lookup();
+            let mut middle_meta = Vec::with_capacity(new_dirty.len());
+            for line_ix in new_dirty.clone() {
+                let line =
+                    self.line_text(next_output.as_str(), next_line_starts.as_slice(), line_ix);
+                let (source, input_line) = source_lookup
+                    .get(line)
+                    .copied()
+                    .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
+                middle_meta.push(conflict_resolver::ResolvedLineMeta {
+                    output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
+                    source,
+                    input_line,
+                });
+            }
+            middle_meta
+        };
+        let old_meta = std::mem::take(&mut self.meta);
         let mut next_meta = Vec::with_capacity(next_line_count);
         next_meta.extend(
-            self.meta
+            old_meta
                 .iter()
-                .take(old_dirty.start.min(self.meta.len()))
+                .take(old_dirty.start.min(old_meta.len()))
                 .cloned(),
         );
-        for line_ix in new_dirty.clone() {
-            let line = self.line_text(next_output.as_str(), next_line_starts.as_slice(), line_ix);
-            let (source, input_line) = source_lookup
-                .get(line)
-                .copied()
-                .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
-            next_meta.push(conflict_resolver::ResolvedLineMeta {
-                output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
-                source,
-                input_line,
-            });
-        }
-        for meta in self.meta.iter().skip(old_dirty.end.min(self.meta.len())) {
+        next_meta.extend(middle_meta);
+        for meta in old_meta.iter().skip(old_dirty.end.min(old_meta.len())) {
             let mut shifted = meta.clone();
             let shifted_ix = if line_delta >= 0 {
                 (meta.output_line as usize).saturating_add(line_delta as usize)
@@ -1752,8 +1846,9 @@ impl ResolvedOutputRecomputeIncrementalFixture {
             return (hash, metrics);
         }
 
-        let mut next_markers = if self.markers.len() == next_line_count {
-            self.markers.clone()
+        let old_markers = std::mem::take(&mut self.markers);
+        let mut next_markers = if old_markers.len() == next_line_count {
+            old_markers
         } else {
             self.rebuild_markers(next_line_count)
         };
@@ -1857,15 +1952,17 @@ impl ConflictStreamedProviderFixture {
 
     fn hash_visible_window(&self, start: usize, end: usize) -> u64 {
         let mut h = FxHasher::default();
-        for vi in start..end {
-            if let Some((source_ix, _conflict_ix)) = self.two_way_projection.get(vi)
-                && let Some(row) = self.split_row_index.row_at(&self.segments, source_ix)
-            {
-                std::mem::discriminant(&row.kind).hash(&mut h);
-                row.old.as_deref().map(|s| s.len()).hash(&mut h);
-                row.new.as_deref().map(|s| s.len()).hash(&mut h);
-            }
-        }
+        self.two_way_projection.for_each_chunk_in_visible_range(
+            start..end,
+            |_, source_range, _conflict_ix| {
+                self.split_row_index
+                    .for_each_row_range(&self.segments, source_range, |_, row| {
+                        std::mem::discriminant(&row.kind).hash(&mut h);
+                        row.old.as_deref().map(|s| s.len()).hash(&mut h);
+                        row.new.as_deref().map(|s| s.len()).hash(&mut h);
+                    });
+            },
+        );
         h.finish()
     }
 
@@ -1985,13 +2082,12 @@ impl ConflictStreamedResolvedOutputFixture {
 
     fn hash_visible_window(&self, start: usize, end: usize) -> u64 {
         let mut h = FxHasher::default();
-        for line_ix in start..end {
-            if let Some(line) = self.projection.line_text(&self.segments, line_ix) {
+        self.projection
+            .for_each_line_text_in_range(&self.segments, start..end, |_, line| {
                 line.len().hash(&mut h);
                 line.as_bytes().first().copied().hash(&mut h);
                 line.as_bytes().last().copied().hash(&mut h);
-            }
-        }
+            });
         h.finish()
     }
 

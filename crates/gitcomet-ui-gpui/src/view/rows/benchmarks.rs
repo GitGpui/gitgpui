@@ -23,15 +23,17 @@ use crate::view::caches::{
 };
 use crate::view::history_graph;
 use crate::view::mod_helpers::{
-    PaneResizeHandle, PaneResizeState, StatusMultiSelection, StatusSection,
+    HistoryColResizeHandle, PaneResizeHandle, PaneResizeState, StatusMultiSelection, StatusSection,
 };
 use crate::view::next_pane_resize_drag_width;
+use crate::view::panels::repo_tab_insert_before_for_drag_cursor;
 use crate::view::panes::main::{
-    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse,
+    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, DiffSearchVisibleCandidates,
+    DiffSearchVisibleTrigramIndex, build_resolved_output_trigram_index,
     diff_cache::{
         PagedFileDiffRows, PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
     },
-    diff_search_query_reuse,
+    diff_search_query_reuse, diff_search_split_row_texts_match_query,
 };
 use crate::view::path_display;
 use crate::view::rows::status::{
@@ -50,18 +52,22 @@ use gitcomet_core::services::{GitBackend, GitRepository};
 use gitcomet_git_gix::GixBackend;
 use gitcomet_state::benchmarks::{
     dispatch_sync, reset_conflict_resolutions_sync, set_conflict_region_choice_sync,
-    with_select_diff_sync, with_set_active_repo_sync, with_stage_path_sync, with_stage_paths_sync,
-    with_unstage_path_sync, with_unstage_paths_sync,
+    with_reorder_repo_tabs_sync, with_select_diff_sync, with_set_active_repo_sync,
+    with_stage_path_sync, with_stage_paths_sync, with_unstage_path_sync, with_unstage_paths_sync,
 };
 use gitcomet_state::model::{AppState, ConflictFile, Loadable, RepoId, RepoState};
 use gitcomet_state::msg::{Effect, InternalMsg, Msg, RepoPath, RepoPathList};
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashMap, FxHasher};
+use smallvec::{SmallVec, smallvec};
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::Write as _;
 use std::ops::Range;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
@@ -7113,6 +7119,8 @@ pub struct PatchDiffFirstWindowMetrics {
 
 pub struct PatchDiffPagedRowsFixture {
     diff: Arc<Diff>,
+    hidden_flags: Vec<bool>,
+    split_row_count: usize,
 }
 
 impl PatchDiffPagedRowsFixture {
@@ -7122,8 +7130,31 @@ impl PatchDiffPagedRowsFixture {
             area: DiffArea::Unstaged,
         };
         let text = build_synthetic_unified_patch(lines);
+        let diff = Arc::new(Diff::from_unified(target, text.as_str()));
+        let mut pending_removes = 0usize;
+        let mut pending_adds = 0usize;
+        let mut split_row_count = 0usize;
+        let hidden_flags = diff
+            .lines
+            .iter()
+            .map(|line| {
+                match line.kind {
+                    DiffLineKind::Remove => pending_removes += 1,
+                    DiffLineKind::Add => pending_adds += 1,
+                    DiffLineKind::Context | DiffLineKind::Header | DiffLineKind::Hunk => {
+                        split_row_count += pending_removes.max(pending_adds) + 1;
+                        pending_removes = 0;
+                        pending_adds = 0;
+                    }
+                }
+                should_hide_unified_diff_header_for_bench(line.kind, line.text.as_ref())
+            })
+            .collect();
+        split_row_count += pending_removes.max(pending_adds);
         Self {
-            diff: Arc::new(Diff::from_unified(target, text.as_str())),
+            diff,
+            hidden_flags,
+            split_row_count,
         }
     }
 
@@ -7205,7 +7236,10 @@ impl PatchDiffPagedRowsFixture {
     pub fn run_paged_first_window_step(&self, window: usize) -> u64 {
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
-        let split_provider = PagedPatchSplitRows::new(Arc::clone(&rows_provider));
+        let split_provider = PagedPatchSplitRows::new_with_len_hint(
+            Arc::clone(&rows_provider),
+            self.split_row_count,
+        );
         let theme = AppTheme::gitcomet_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
 
@@ -7229,9 +7263,13 @@ impl PatchDiffPagedRowsFixture {
                 line.kind,
                 DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
             ) {
-                let styled = super::diff_text::build_cached_diff_styled_text(
+                let content_text = diff_content_text(&line);
+                let styled = super::diff_text::build_cached_diff_styled_text_with_source_identity(
                     theme,
-                    diff_content_text(&line),
+                    content_text,
+                    Some(super::diff_text::DiffTextSourceIdentity::from_str(
+                        content_text,
+                    )),
                     &[],
                     "",
                     language,
@@ -7282,7 +7320,10 @@ impl PatchDiffPagedRowsFixture {
     pub fn measure_paged_first_window_step(&self, window: usize) -> PatchDiffFirstWindowMetrics {
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
-        let split_provider = PagedPatchSplitRows::new(Arc::clone(&rows_provider));
+        let split_provider = PagedPatchSplitRows::new_with_len_hint(
+            Arc::clone(&rows_provider),
+            self.split_row_count,
+        );
 
         let patch_rows_painted = rows_provider.slice(0, window).take(window).count();
         let split_rows_painted = split_provider.slice(0, window).take(window).count();
@@ -7316,13 +7357,7 @@ impl PatchDiffPagedRowsFixture {
     }
 
     pub fn run_inline_visible_hidden_map_step(&self) -> u64 {
-        let hidden_flags = self
-            .diff
-            .lines
-            .iter()
-            .map(|line| should_hide_unified_diff_header_for_bench(line.kind, line.text.as_ref()))
-            .collect::<Vec<_>>();
-        let visible_map = PatchInlineVisibleMap::from_hidden_flags(hidden_flags.as_slice());
+        let visible_map = PatchInlineVisibleMap::from_hidden_flags(self.hidden_flags.as_slice());
 
         let mut hasher = FxHasher::default();
         visible_map.visible_len().hash(&mut hasher);
@@ -7349,13 +7384,7 @@ impl PatchDiffPagedRowsFixture {
 
     #[cfg(test)]
     fn inline_visible_indices_map(&self) -> Vec<usize> {
-        let hidden_flags = self
-            .diff
-            .lines
-            .iter()
-            .map(|line| should_hide_unified_diff_header_for_bench(line.kind, line.text.as_ref()))
-            .collect::<Vec<_>>();
-        let visible_map = PatchInlineVisibleMap::from_hidden_flags(hidden_flags.as_slice());
+        let visible_map = PatchInlineVisibleMap::from_hidden_flags(self.hidden_flags.as_slice());
         (0..visible_map.visible_len())
             .filter_map(|visible_ix| visible_map.src_ix_for_visible_ix(visible_ix))
             .collect()
@@ -7379,7 +7408,10 @@ impl PatchDiffPagedRowsFixture {
     pub fn run_paged_window_at_step(&self, start_row: usize, window: usize) -> u64 {
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
-        let split_provider = PagedPatchSplitRows::new(Arc::clone(&rows_provider));
+        let split_provider = PagedPatchSplitRows::new_with_len_hint(
+            Arc::clone(&rows_provider),
+            self.split_row_count,
+        );
         let theme = AppTheme::zed_ayu_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
 
@@ -7416,9 +7448,13 @@ impl PatchDiffPagedRowsFixture {
                 line.kind,
                 DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
             ) {
-                let styled = super::diff_text::build_cached_diff_styled_text(
+                let content_text = diff_content_text(&line);
+                let styled = super::diff_text::build_cached_diff_styled_text_with_source_identity(
                     theme,
-                    diff_content_text(&line),
+                    content_text,
+                    Some(super::diff_text::DiffTextSourceIdentity::from_str(
+                        content_text,
+                    )),
                     &[],
                     "",
                     language,
@@ -7477,7 +7513,10 @@ impl PatchDiffPagedRowsFixture {
     ) -> PatchDiffFirstWindowMetrics {
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
-        let split_provider = PagedPatchSplitRows::new(Arc::clone(&rows_provider));
+        let split_provider = PagedPatchSplitRows::new_with_len_hint(
+            Arc::clone(&rows_provider),
+            self.split_row_count,
+        );
 
         let patch_start = start_row.min(rows_provider.len_hint().saturating_sub(window));
         let split_start = split_provider
@@ -7544,10 +7583,8 @@ pub struct DiffRefreshMetrics {
 /// - **rekey**: compute content signature, compare, bump rev (the fast path).
 /// - **rebuild**: full `side_by_side_plan` + plan scan (the slow path).
 pub struct DiffRefreshFixture {
-    old_text: String,
-    new_text: String,
-    path: std::path::PathBuf,
-    /// Content signature from initial build (FxHasher of path + old + new).
+    incoming_file: gitcomet_core::domain::FileDiffText,
+    /// Content signature from initial build, precomputed on `FileDiffText`.
     initial_signature: u64,
     /// Row count from the initial side-by-side plan.
     initial_plan_row_count: usize,
@@ -7572,43 +7609,35 @@ impl DiffRefreshFixture {
                 new_text.push_str(&shared);
             }
         }
-        let path = std::path::PathBuf::from("src/bench_diff_refresh.rs");
-        let initial_signature = Self::content_signature(&path, &old_text, &new_text);
+        let incoming_file = gitcomet_core::domain::FileDiffText::new(
+            std::path::PathBuf::from("src/bench_diff_refresh.rs"),
+            Some(old_text.clone()),
+            Some(new_text.clone()),
+        );
+        let initial_signature = incoming_file.content_signature();
         let plan = gitcomet_core::file_diff::side_by_side_plan(&old_text, &new_text);
-        let initial_plan_row_count = plan.runs.iter().map(|r| r.row_len()).sum::<usize>();
+        let initial_plan_row_count = plan.row_count;
 
         Self {
-            old_text,
-            new_text,
-            path,
+            incoming_file,
             initial_signature,
             initial_plan_row_count,
         }
     }
 
-    /// Replicate `file_diff_text_signature`: FxHasher of (path, old, new).
-    fn content_signature(path: &std::path::Path, old: &str, new: &str) -> u64 {
-        let mut hasher = FxHasher::default();
-        path.hash(&mut hasher);
-        old.hash(&mut hasher);
-        new.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// **Rekey path**: computes the content signature of an identical payload
-    /// and verifies it matches the cached signature.  Returns a deterministic
-    /// hash to prevent dead-code elimination.
+    /// **Rekey path**: reads the precomputed content signature of an identical
+    /// payload and verifies it matches the cached signature. Returns a
+    /// deterministic hash to prevent dead-code elimination.
     ///
     /// This mirrors the fast path in `ensure_file_diff_cache` where
     /// `file_content_signature == self.file_diff_cache_content_signature`.
     pub fn run_rekey_step(&self) -> u64 {
-        // Compute signature of "incoming" payload (same content, bumped rev).
-        let incoming_signature =
-            Self::content_signature(&self.path, &self.old_text, &self.new_text);
+        let incoming_signature = std::hint::black_box(self.incoming_file.content_signature());
+        let cached_signature = std::hint::black_box(self.initial_signature);
 
         // The real code checks `same_repo_and_target && signature == cached`.
         // Simulate that comparison cost.
-        let matched = incoming_signature == self.initial_signature;
+        let matched = incoming_signature == cached_signature;
 
         let mut hasher = FxHasher::default();
         matched.hash(&mut hasher);
@@ -7616,17 +7645,20 @@ impl DiffRefreshFixture {
         // In the real code this path also increments the rev counter and
         // possibly re-resolves syntax document keys.  We simulate that by
         // hashing the plan row count (which stays unchanged).
-        self.initial_plan_row_count.hash(&mut hasher);
+        std::hint::black_box(self.initial_plan_row_count).hash(&mut hasher);
         hasher.finish()
     }
 
     /// **Rebuild path**: performs the full `side_by_side_plan` + plan scan
     /// that would occur when the content actually changes.
     pub fn run_rebuild_step(&self) -> u64 {
-        let plan = gitcomet_core::file_diff::side_by_side_plan(&self.old_text, &self.new_text);
+        let plan = gitcomet_core::file_diff::side_by_side_plan(
+            self.incoming_file.old.as_deref().unwrap_or_default(),
+            self.incoming_file.new.as_deref().unwrap_or_default(),
+        );
         let mut hasher = FxHasher::default();
         plan.runs.len().hash(&mut hasher);
-        let row_count: usize = plan.runs.iter().map(|r| r.row_len()).sum();
+        let row_count = plan.row_count;
         row_count.hash(&mut hasher);
         for run in plan.runs.iter().take(64) {
             run.row_len().hash(&mut hasher);
@@ -7638,8 +7670,7 @@ impl DiffRefreshFixture {
     /// Collect sidecar metrics for the same-content refresh.
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn measure_rekey(&self) -> DiffRefreshMetrics {
-        let incoming_signature =
-            Self::content_signature(&self.path, &self.old_text, &self.new_text);
+        let incoming_signature = self.incoming_file.content_signature();
         let matched = incoming_signature == self.initial_signature;
         DiffRefreshMetrics {
             diff_cache_rekeys: if matched { 1 } else { 0 },
@@ -7653,14 +7684,16 @@ impl DiffRefreshFixture {
     /// Collect sidecar metrics for the full-rebuild path (content changed).
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn measure_rebuild(&self) -> DiffRefreshMetrics {
-        let plan = gitcomet_core::file_diff::side_by_side_plan(&self.old_text, &self.new_text);
-        let row_count: usize = plan.runs.iter().map(|r| r.row_len()).sum();
+        let plan = gitcomet_core::file_diff::side_by_side_plan(
+            self.incoming_file.old.as_deref().unwrap_or_default(),
+            self.incoming_file.new.as_deref().unwrap_or_default(),
+        );
         DiffRefreshMetrics {
             diff_cache_rekeys: 0,
             full_rebuilds: 1,
             content_signature_matches: 0,
             rows_preserved: 0,
-            rebuild_rows: bench_counter_u64(row_count),
+            rebuild_rows: bench_counter_u64(plan.row_count),
         }
     }
 }
@@ -7724,10 +7757,11 @@ impl FileDiffOpenFixture {
     /// Measure the cost of paging the first `window` split (side-by-side) rows.
     pub fn run_split_first_window(&self, window: usize) -> u64 {
         use gitcomet_core::domain::DiffRowProvider;
-        let window = window.max(1);
+        let total_rows = self.split.len_hint();
+        let window = window.max(1).min(total_rows);
         let mut h = FxHasher::default();
-        self.split.len_hint().hash(&mut h);
-        for row in self.split.slice(0, window).take(window) {
+        total_rows.hash(&mut h);
+        self.split.for_each_row_range(0..window, |_, row| {
             let kind_key: u8 = match row.kind {
                 gitcomet_core::file_diff::FileDiffRowKind::Context => 0,
                 gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
@@ -7739,7 +7773,7 @@ impl FileDiffOpenFixture {
             row.new_line.hash(&mut h);
             row.old.as_ref().map(|s| s.len()).hash(&mut h);
             row.new.as_ref().map(|s| s.len()).hash(&mut h);
-        }
+        });
         h.finish()
     }
 
@@ -7839,7 +7873,7 @@ impl PaneResizeDragStepFixture {
     }
 
     pub fn run(&mut self) -> u64 {
-        self.run_with_metrics().0
+        self.run_hash_and_clamp_counts().0
     }
 
     pub fn run_hash_and_clamp_counts(&mut self) -> (u64, u64, u64) {
@@ -8074,15 +8108,56 @@ impl DiffSplitResizeDragStepFixture {
     }
 
     pub fn run(&mut self) -> u64 {
-        self.run_with_metrics().0
+        use crate::view::{
+            diff_split_column_widths_from_available, diff_split_drag_params,
+            diff_split_ratio_bounds, next_diff_split_drag_ratio,
+        };
+
+        let (available_base, min_col_w) = diff_split_drag_params(self.main_pane_width);
+        let ratio_bounds = diff_split_ratio_bounds(available_base, min_col_w);
+        let mut h = FxHasher::default();
+
+        for _ in 0..self.steps {
+            let dx = px(self.drag_step_px * self.drag_direction);
+
+            match next_diff_split_drag_ratio(available_base, min_col_w, self.ratio, dx) {
+                None => {
+                    self.ratio = 0.5;
+                }
+                Some(next_ratio) => {
+                    if let Some((min_bound, max_bound)) = ratio_bounds {
+                        if next_ratio <= min_bound + f32::EPSILON
+                            || next_ratio >= max_bound - f32::EPSILON
+                        {
+                            self.drag_direction = -self.drag_direction;
+                        }
+                    }
+                    self.ratio = next_ratio;
+                }
+            }
+
+            let (left_w, right_w) =
+                diff_split_column_widths_from_available(available_base, min_col_w, self.ratio);
+            let left_f: f32 = left_w.into();
+            let right_f: f32 = right_w.into();
+
+            self.ratio.to_bits().hash(&mut h);
+            left_f.to_bits().hash(&mut h);
+            right_f.to_bits().hash(&mut h);
+            self.drag_direction.to_bits().hash(&mut h);
+        }
+
+        h.finish()
     }
 
     pub fn run_with_metrics(&mut self) -> (u64, DiffSplitResizeDragMetrics) {
         use crate::view::{
-            diff_split_column_widths, diff_split_drag_params, next_diff_split_drag_ratio,
+            diff_split_column_widths_from_available, diff_split_drag_params,
+            diff_split_ratio_bounds, next_diff_split_drag_ratio,
         };
 
         let (available_base, min_col_w) = diff_split_drag_params(self.main_pane_width);
+        let ratio_bounds = diff_split_ratio_bounds(available_base, min_col_w);
 
         let mut h = FxHasher::default();
         let mut min_ratio = f64::MAX;
@@ -8110,17 +8185,14 @@ impl DiffSplitResizeDragStepFixture {
                 Some(next_ratio) => {
                     // Detect clamping by checking if the ratio is at the
                     // min or max boundary.
-                    let available_f: f32 = available_base.into();
-                    let min_col_f: f32 = min_col_w.into();
-                    let min_bound = min_col_f / available_f;
-                    let max_bound = 1.0 - min_bound;
-
-                    if next_ratio <= min_bound + f32::EPSILON {
-                        clamp_at_min_count += 1;
-                        self.drag_direction = -self.drag_direction;
-                    } else if next_ratio >= max_bound - f32::EPSILON {
-                        clamp_at_max_count += 1;
-                        self.drag_direction = -self.drag_direction;
+                    if let Some((min_bound, max_bound)) = ratio_bounds {
+                        if next_ratio <= min_bound + f32::EPSILON {
+                            clamp_at_min_count += 1;
+                            self.drag_direction = -self.drag_direction;
+                        } else if next_ratio >= max_bound - f32::EPSILON {
+                            clamp_at_max_count += 1;
+                            self.drag_direction = -self.drag_direction;
+                        }
                     }
 
                     self.ratio = next_ratio;
@@ -8128,7 +8200,8 @@ impl DiffSplitResizeDragStepFixture {
             }
 
             // Compute column widths for this ratio (exercises the layout path).
-            let (left_w, right_w) = diff_split_column_widths(self.main_pane_width, self.ratio);
+            let (left_w, right_w) =
+                diff_split_column_widths_from_available(available_base, min_col_w, self.ratio);
             column_width_recomputes = column_width_recomputes.saturating_add(1);
             let left_f: f32 = left_w.into();
             let right_f: f32 = right_w.into();
@@ -8215,55 +8288,68 @@ impl WindowResizeLayoutFixture {
     }
 
     pub fn run(&self) -> u64 {
-        let (_, metrics) = self.run_with_metrics();
-        let mut h = FxHasher::default();
-        metrics.steps.hash(&mut h);
-        metrics.clamp_at_zero_count.hash(&mut h);
-        h.finish()
+        self.run_internal::<false>().0
     }
 
     pub fn run_with_metrics(&self) -> (u64, WindowResizeLayoutMetrics) {
-        use crate::view::panes::main::pane_content_width_for_layout;
+        self.run_internal::<true>()
+    }
+
+    fn run_internal<const TRACK_METRICS: bool>(&self) -> (u64, WindowResizeLayoutMetrics) {
+        use crate::view::panes::main::{
+            pane_content_width_for_layout_from_non_main_width, pane_non_main_width_for_layout,
+        };
 
         let step_delta = (self.end_total_w - self.start_total_w) / self.steps.max(1) as f32;
-        let sidebar_px = px(self.sidebar_w);
-        let details_px = px(self.details_w);
+        let non_main_w = pane_non_main_width_for_layout(
+            px(self.sidebar_w),
+            px(self.details_w),
+            self.sidebar_collapsed,
+            self.details_collapsed,
+        );
 
         let mut min_main: f32 = f32::MAX;
         let mut max_main: f32 = f32::MIN;
         let mut clamp_zero: u64 = 0;
-        let mut layout_recomputes: u64 = 0;
+        let mut total_w = self.start_total_w;
         let mut h = FxHasher::default();
 
-        for i in 0..self.steps {
-            let total_w = self.start_total_w + step_delta * i as f32;
-            let main_w = pane_content_width_for_layout(
-                px(total_w),
-                sidebar_px,
-                details_px,
-                self.sidebar_collapsed,
-                self.details_collapsed,
-            );
-            layout_recomputes = layout_recomputes.saturating_add(1);
+        for _ in 0..self.steps {
+            let main_w = pane_content_width_for_layout_from_non_main_width(px(total_w), non_main_w);
             let main_f: f32 = main_w.into();
+
+            if TRACK_METRICS {
+                if main_f < min_main {
+                    min_main = main_f;
+                }
+                if main_f > max_main {
+                    max_main = main_f;
+                }
+                if main_f <= 0.0 {
+                    clamp_zero += 1;
+                }
+            }
+
             main_f.to_bits().hash(&mut h);
-            if main_f < min_main {
-                min_main = main_f;
-            }
-            if main_f > max_main {
-                max_main = main_f;
-            }
-            if main_f <= 0.0 {
-                clamp_zero += 1;
-            }
+            total_w += step_delta;
         }
 
-        let metrics = WindowResizeLayoutMetrics {
-            steps: self.steps as u64,
-            layout_recomputes,
-            min_main_w_px: min_main as f64,
-            max_main_w_px: max_main as f64,
-            clamp_at_zero_count: clamp_zero,
+        let metrics = if TRACK_METRICS {
+            WindowResizeLayoutMetrics {
+                steps: self.steps as u64,
+                layout_recomputes: self.steps as u64,
+                min_main_w_px: min_main as f64,
+                max_main_w_px: max_main as f64,
+                clamp_at_zero_count: clamp_zero,
+            }
+        } else {
+            WindowResizeLayoutMetrics {
+                steps: 0,
+                layout_recomputes: 0,
+                min_main_w_px: 0.0,
+                max_main_w_px: 0.0,
+                clamp_at_zero_count: 0,
+            }
         };
 
         (h.finish(), metrics)
@@ -8402,12 +8488,18 @@ impl WindowResizeLayoutExtremeFixture {
     }
 
     fn run_internal(&self) -> (u64, f64, f64, u64, u64, u64) {
-        use crate::view::panes::main::pane_content_width_for_layout;
-        use crate::view::{diff_split_column_widths, diff_split_drag_params};
+        use crate::view::panes::main::{
+            pane_content_width_for_layout_from_non_main_width, pane_non_main_width_for_layout,
+        };
+        use crate::view::{diff_split_column_widths_from_available, diff_split_drag_params};
 
         let step_delta = (self.end_total_w - self.start_total_w) / self.steps.max(1) as f32;
-        let sidebar_px = px(self.sidebar_w);
-        let details_px = px(self.details_w);
+        let non_main_w = pane_non_main_width_for_layout(
+            px(self.sidebar_w),
+            px(self.details_w),
+            self.sidebar_collapsed,
+            self.details_collapsed,
+        );
 
         let mut min_main = f32::MAX;
         let mut max_main = f32::MIN;
@@ -8418,13 +8510,7 @@ impl WindowResizeLayoutExtremeFixture {
 
         for i in 0..self.steps {
             let total_w = self.start_total_w + step_delta * i as f32;
-            let main_w = pane_content_width_for_layout(
-                px(total_w),
-                sidebar_px,
-                details_px,
-                self.sidebar_collapsed,
-                self.details_collapsed,
-            );
+            let main_w = pane_content_width_for_layout_from_non_main_width(px(total_w), non_main_w);
             let main_w_px: f32 = main_w.into();
             min_main = min_main.min(main_w_px);
             max_main = max_main.max(main_w_px);
@@ -8443,7 +8529,11 @@ impl WindowResizeLayoutExtremeFixture {
             if available <= min_col_w * 2.0 {
                 diff_narrow_fallback_steps = diff_narrow_fallback_steps.saturating_add(1);
             }
-            let (left_w, right_w) = diff_split_column_widths(main_w, self.diff_split_ratio);
+            let (left_w, right_w) = diff_split_column_widths_from_available(
+                available,
+                min_col_w,
+                self.diff_split_ratio,
+            );
             let left_w_px: f32 = left_w.into();
             let right_w_px: f32 = right_w.into();
 
@@ -8570,17 +8660,6 @@ impl HistoryColumnResizeDragStepFixture {
     const COL_SHA_PX: f32 = 88.0;
     const MESSAGE_MIN_PX: f32 = 220.0;
 
-    const COL_BRANCH_MIN: f32 = 60.0;
-    const COL_BRANCH_MAX: f32 = 320.0;
-    const COL_GRAPH_MIN: f32 = 44.0;
-    const COL_GRAPH_MAX: f32 = 240.0;
-    const COL_AUTHOR_MIN: f32 = 80.0;
-    const COL_AUTHOR_MAX: f32 = 260.0;
-    const COL_DATE_MIN: f32 = 110.0;
-    const COL_DATE_MAX: f32 = 240.0;
-    const COL_SHA_MIN: f32 = 60.0;
-    const COL_SHA_MAX: f32 = 160.0;
-
     pub fn new(column: HistoryResizeColumn) -> Self {
         let _ = column; // all columns start from the same defaults
         Self {
@@ -8597,54 +8676,94 @@ impl HistoryColumnResizeDragStepFixture {
     }
 
     pub fn run(&mut self, column: HistoryResizeColumn) -> u64 {
-        let (hash, _) = self.run_with_metrics(column);
-        hash
+        self.run_internal::<false>(column).0
     }
 
     pub fn run_with_metrics(
         &mut self,
         column: HistoryResizeColumn,
     ) -> (u64, HistoryColumnResizeMetrics) {
-        // Available width for columns: window - sidebar(280) - details(420) - misc(64)
-        let available = (self.window_width - 280.0 - 420.0 - 64.0).max(0.0);
+        self.run_internal::<true>(column)
+    }
 
-        let (min_w, static_max) = Self::static_bounds(column);
+    fn run_internal<const TRACK_METRICS: bool>(
+        &mut self,
+        column: HistoryResizeColumn,
+    ) -> (u64, HistoryColumnResizeMetrics) {
+        use crate::view::panes::{
+            history_column_resize_drag_params, history_column_resize_max_width,
+            history_column_resize_state, history_resize_state_visible_columns,
+            history_visible_columns_for_layout,
+        };
+
+        let available = px((self.window_width - 280.0 - 420.0 - 64.0).max(0.0));
+        let initial_layout = self.drag_layout();
+        let handle = self.handle(column);
+        let params = history_column_resize_drag_params(handle, initial_layout);
+        let mut resize_state =
+            history_column_resize_state(handle, px(0.0), available, initial_layout);
+        let min_w: f32 = params.min_width.into();
+        let max_w: f32 = history_column_resize_max_width(params, available).into();
 
         let mut h = FxHasher::default();
         let mut columns_hidden: u64 = 0;
         let mut clamp_min: u64 = 0;
         let mut clamp_max: u64 = 0;
-        let mut width_clamp_recomputes: u64 = 0;
         let mut visible_column_recomputes: u64 = 0;
+        let mut widths = [
+            self.col_branch,
+            self.col_graph,
+            self.col_author,
+            self.col_date,
+            self.col_sha,
+        ];
+        let width_ix = match column {
+            HistoryResizeColumn::Branch => 0,
+            HistoryResizeColumn::Graph => 1,
+            HistoryResizeColumn::Author => 2,
+            HistoryResizeColumn::Date => 3,
+            HistoryResizeColumn::Sha => 4,
+        };
 
         for _ in 0..self.steps {
-            let current = self.col_for(column);
+            let current = widths[width_ix];
             let candidate = current + self.drag_step_px * self.drag_direction;
-
-            // Compute right_fixed_w (other columns excluding the one being dragged)
-            let show_author = true;
-            let show_date = true;
-            let show_sha = true;
-            let right_fixed = self.right_fixed_excluding(column, show_author, show_date, show_sha);
-            let dynamic_max = (available - right_fixed - Self::MESSAGE_MIN_PX).max(min_w);
-            let max_w = static_max.min(dynamic_max).max(min_w);
-            width_clamp_recomputes = width_clamp_recomputes.saturating_add(1);
             let clamped = candidate.max(min_w).min(max_w);
-
-            self.set_col(column, clamped);
+            widths[width_ix] = clamped;
+            let clamped_px = px(clamped);
+            resize_state.current_width = clamped_px;
 
             if clamped <= min_w + f32::EPSILON {
-                clamp_min += 1;
+                if TRACK_METRICS {
+                    clamp_min += 1;
+                }
                 self.drag_direction = 1.0;
             } else if clamped >= max_w - f32::EPSILON {
-                clamp_max += 1;
+                if TRACK_METRICS {
+                    clamp_max += 1;
+                }
                 self.drag_direction = -1.0;
             }
 
-            // Recompute visible columns (the message-area squeeze check)
-            let (vis_author, vis_date, vis_sha) = self.visible_columns(available);
-            visible_column_recomputes = visible_column_recomputes.saturating_add(1);
-            if !vis_author || !vis_date || !vis_sha {
+            let visible_columns =
+                history_resize_state_visible_columns(available, Some(&resize_state));
+            if TRACK_METRICS && visible_columns.is_none() {
+                visible_column_recomputes += 1;
+            }
+            let (vis_author, vis_date, vis_sha) = visible_columns.unwrap_or_else(|| {
+                let drag_layout = crate::view::panes::HistoryColumnDragLayout {
+                    show_author: true,
+                    show_date: true,
+                    show_sha: true,
+                    branch_w: px(widths[0]),
+                    graph_w: px(widths[1]),
+                    author_w: px(widths[2]),
+                    date_w: px(widths[3]),
+                    sha_w: px(widths[4]),
+                };
+                history_visible_columns_for_layout(available, drag_layout)
+            });
+            if TRACK_METRICS && (!vis_author || !vis_date || !vis_sha) {
                 columns_hidden += 1;
             }
 
@@ -8654,99 +8773,56 @@ impl HistoryColumnResizeDragStepFixture {
             vis_sha.hash(&mut h);
         }
 
-        let metrics = HistoryColumnResizeMetrics {
-            steps: self.steps as u64,
-            width_clamp_recomputes,
-            visible_column_recomputes,
-            columns_hidden_count: columns_hidden,
-            clamp_at_min_count: clamp_min,
-            clamp_at_max_count: clamp_max,
+        let metrics = if TRACK_METRICS {
+            HistoryColumnResizeMetrics {
+                steps: self.steps as u64,
+                width_clamp_recomputes: self.steps as u64,
+                visible_column_recomputes,
+                columns_hidden_count: columns_hidden,
+                clamp_at_min_count: clamp_min,
+                clamp_at_max_count: clamp_max,
+            }
+        } else {
+            HistoryColumnResizeMetrics {
+                steps: 0,
+                width_clamp_recomputes: 0,
+                visible_column_recomputes: 0,
+                columns_hidden_count: 0,
+                clamp_at_min_count: 0,
+                clamp_at_max_count: 0,
+            }
         };
+
+        self.col_branch = widths[0];
+        self.col_graph = widths[1];
+        self.col_author = widths[2];
+        self.col_date = widths[3];
+        self.col_sha = widths[4];
 
         (h.finish(), metrics)
     }
 
-    fn static_bounds(column: HistoryResizeColumn) -> (f32, f32) {
+    fn handle(&self, column: HistoryResizeColumn) -> HistoryColResizeHandle {
         match column {
-            HistoryResizeColumn::Branch => (Self::COL_BRANCH_MIN, Self::COL_BRANCH_MAX),
-            HistoryResizeColumn::Graph => (Self::COL_GRAPH_MIN, Self::COL_GRAPH_MAX),
-            HistoryResizeColumn::Author => (Self::COL_AUTHOR_MIN, Self::COL_AUTHOR_MAX),
-            HistoryResizeColumn::Date => (Self::COL_DATE_MIN, Self::COL_DATE_MAX),
-            HistoryResizeColumn::Sha => (Self::COL_SHA_MIN, Self::COL_SHA_MAX),
+            HistoryResizeColumn::Branch => HistoryColResizeHandle::Branch,
+            HistoryResizeColumn::Graph => HistoryColResizeHandle::Graph,
+            HistoryResizeColumn::Author => HistoryColResizeHandle::Author,
+            HistoryResizeColumn::Date => HistoryColResizeHandle::Date,
+            HistoryResizeColumn::Sha => HistoryColResizeHandle::Sha,
         }
     }
 
-    fn col_for(&self, column: HistoryResizeColumn) -> f32 {
-        match column {
-            HistoryResizeColumn::Branch => self.col_branch,
-            HistoryResizeColumn::Graph => self.col_graph,
-            HistoryResizeColumn::Author => self.col_author,
-            HistoryResizeColumn::Date => self.col_date,
-            HistoryResizeColumn::Sha => self.col_sha,
+    fn drag_layout(&self) -> crate::view::panes::HistoryColumnDragLayout {
+        crate::view::panes::HistoryColumnDragLayout {
+            show_author: true,
+            show_date: true,
+            show_sha: true,
+            branch_w: px(self.col_branch),
+            graph_w: px(self.col_graph),
+            author_w: px(self.col_author),
+            date_w: px(self.col_date),
+            sha_w: px(self.col_sha),
         }
-    }
-
-    fn set_col(&mut self, column: HistoryResizeColumn, value: f32) {
-        match column {
-            HistoryResizeColumn::Branch => self.col_branch = value,
-            HistoryResizeColumn::Graph => self.col_graph = value,
-            HistoryResizeColumn::Author => self.col_author = value,
-            HistoryResizeColumn::Date => self.col_date = value,
-            HistoryResizeColumn::Sha => self.col_sha = value,
-        }
-    }
-
-    fn right_fixed_excluding(
-        &self,
-        column: HistoryResizeColumn,
-        show_author: bool,
-        show_date: bool,
-        show_sha: bool,
-    ) -> f32 {
-        let mut sum = 0.0;
-        if !matches!(column, HistoryResizeColumn::Branch) {
-            sum += self.col_branch;
-        }
-        if !matches!(column, HistoryResizeColumn::Graph) {
-            sum += self.col_graph;
-        }
-        if show_author && !matches!(column, HistoryResizeColumn::Author) {
-            sum += self.col_author;
-        }
-        if show_date && !matches!(column, HistoryResizeColumn::Date) {
-            sum += self.col_date;
-        }
-        if show_sha && !matches!(column, HistoryResizeColumn::Sha) {
-            sum += self.col_sha;
-        }
-        sum
-    }
-
-    fn visible_columns(&self, available: f32) -> (bool, bool, bool) {
-        let min_message = Self::MESSAGE_MIN_PX;
-        let mut show_author = true;
-        let mut show_date = true;
-        let mut show_sha = true;
-
-        let fixed_base = self.col_branch + self.col_graph;
-        let mut fixed = fixed_base + self.col_author + self.col_date + self.col_sha;
-
-        if available - fixed < min_message && show_sha {
-            show_sha = false;
-            fixed -= self.col_sha;
-        }
-        if available - fixed < min_message {
-            if show_date {
-                show_date = false;
-                fixed -= self.col_date;
-            }
-            show_sha = false;
-        }
-        if available - fixed < min_message && show_author {
-            show_author = false;
-        }
-
-        (show_author, show_date, show_sha)
     }
 }
 
@@ -8769,7 +8845,21 @@ impl HistoryColumnResizeDragStepFixture {
 pub struct RepoTabDragFixture {
     tab_count: usize,
     tab_width_px: f32,
+    hit_test_steps: Vec<RepoTabHitTestStep>,
     baseline: AppState,
+}
+
+#[derive(Clone, Copy)]
+struct RepoTabDragTarget {
+    repo_id: RepoId,
+    next_repo_id: Option<RepoId>,
+    center_x: f32,
+}
+
+#[derive(Clone, Copy)]
+struct RepoTabHitTestStep {
+    cursor_x: f32,
+    target: RepoTabDragTarget,
 }
 
 /// Sidecar metrics for repo tab drag benchmarks.
@@ -8783,6 +8873,7 @@ pub struct RepoTabDragMetrics {
 
 impl RepoTabDragFixture {
     pub fn new(tab_count: usize) -> Self {
+        let tab_width_px = 120.0;
         let commits = build_synthetic_commits(10);
         let repos: Vec<RepoState> = (0..tab_count)
             .map(|i| {
@@ -8803,9 +8894,33 @@ impl RepoTabDragFixture {
             .collect();
 
         let active = repos.first().map(|r| r.id);
+        let drop_targets = repos
+            .iter()
+            .enumerate()
+            .map(|(ix, repo)| RepoTabDragTarget {
+                repo_id: repo.id,
+                next_repo_id: repos.get(ix + 1).map(|next| next.id),
+                center_x: (ix as f32 + 0.5) * tab_width_px,
+            })
+            .collect::<Vec<_>>();
+        let steps = tab_count * 3;
+        let total_bar_width = tab_count as f32 * tab_width_px;
+        let hit_test_steps = (0..steps)
+            .map(|step| {
+                let frac = (step as f32) / (steps.max(1) as f32);
+                let cursor_x = frac * total_bar_width;
+                let tab_ix = (cursor_x / tab_width_px) as usize;
+                let tab_ix = tab_ix.min(tab_count.saturating_sub(1));
+                RepoTabHitTestStep {
+                    cursor_x,
+                    target: drop_targets[tab_ix],
+                }
+            })
+            .collect();
         Self {
             tab_count,
-            tab_width_px: 120.0,
+            tab_width_px,
+            hit_test_steps,
             baseline: AppState {
                 repos,
                 active_repo: active,
@@ -8819,40 +8934,24 @@ impl RepoTabDragFixture {
 
     /// Hit-test only — determine insert_before for each step across the tab bar.
     pub fn run_hit_test(&self) -> (u64, RepoTabDragMetrics) {
-        let repos = &self.baseline.repos;
-        let steps = self.tab_count * 3; // sweep across all tabs multiple times
-        let total_bar_width = self.tab_count as f32 * self.tab_width_px;
-
         let mut h = FxHasher::default();
-        let mut hit_steps: u64 = 0;
-
-        for step in 0..steps {
-            // Simulate cursor position sweeping across the tab bar.
-            let frac = (step as f32) / (steps.max(1) as f32);
-            let cursor_x = frac * total_bar_width;
-
-            // Determine which tab the cursor is over.
-            let tab_ix = (cursor_x / self.tab_width_px) as usize;
-            let tab_ix = tab_ix.min(self.tab_count.saturating_sub(1));
-            let target_repo_id = repos[tab_ix].id;
-
-            // Replicate repo_tab_insert_before_for_drop logic.
-            let tab_left = tab_ix as f32 * self.tab_width_px;
-            let tab_center = tab_left + self.tab_width_px / 2.0;
-            let insert_before = if cursor_x <= tab_center {
-                Some(target_repo_id)
-            } else {
-                repos.get(tab_ix + 1).map(|r| r.id)
-            };
+        for step in &self.hit_test_steps {
+            let target = step.target;
+            let target_repo_id = target.repo_id;
+            let insert_before = repo_tab_insert_before_for_drag_cursor(
+                target.repo_id,
+                target.next_repo_id,
+                step.cursor_x,
+                target.center_x,
+            );
 
             insert_before.hash(&mut h);
             target_repo_id.0.hash(&mut h);
-            hit_steps += 1;
         }
 
         let metrics = RepoTabDragMetrics {
             tab_count: self.tab_count as u64,
-            hit_test_steps: hit_steps,
+            hit_test_steps: self.hit_test_steps.len() as u64,
             reorder_steps: 0,
             effects_emitted: 0,
             noop_reorders: 0,
@@ -8863,9 +8962,6 @@ impl RepoTabDragFixture {
 
     /// Full reducer dispatch — hit-test + reorder_repo_tabs for each step.
     pub fn run_reorder(&self) -> (u64, RepoTabDragMetrics) {
-        use gitcomet_state::benchmarks::dispatch_sync;
-        use gitcomet_state::msg::Msg;
-
         let mut state = self.baseline.clone();
         let steps = self.tab_count * 2;
         let total_bar_width = self.tab_count as f32 * self.tab_width_px;
@@ -8893,18 +8989,17 @@ impl RepoTabDragFixture {
                 state.repos.get(tab_ix + 1).map(|r| r.id)
             };
 
-            let effects = dispatch_sync(
+            let effects_len = with_reorder_repo_tabs_sync(
                 &mut state,
-                Msg::ReorderRepoTabs {
-                    repo_id: dragged_repo_id,
-                    insert_before,
-                },
+                dragged_repo_id,
+                insert_before,
+                |_state, effects| effects.len(),
             );
 
-            if effects.is_empty() {
+            if effects_len == 0 {
                 noop_reorders += 1;
             } else {
-                effects_emitted += effects.len() as u64;
+                effects_emitted += effects_len as u64;
             }
 
             state.active_repo.hash(&mut h);
@@ -9427,7 +9522,7 @@ fn build_repo_switch_repo_state(
                 repo.spec.workdir.display()
             ),
             committed_at: "2023-11-14 22:13".to_string(),
-            parent_ids: selected_commit.parent_ids.clone(),
+            parent_ids: selected_commit.parent_ids.to_vec(),
             files: (0..48)
                 .map(|ix| CommitFileChange {
                     path: std::path::PathBuf::from(format!("src/module_{}/file_{ix}.rs", ix % 12)),
@@ -9465,13 +9560,13 @@ fn populate_loaded_diff_state(repo: &mut RepoState, path: &str, diff_line_count:
         target: target.clone(),
         lines: build_synthetic_diff_lines(diff_line_count),
     }));
-    repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(FileDiffText {
-        path: std::path::PathBuf::from(path),
-        old: Some(build_synthetic_file_content(diff_line_count / 2)),
-        new: Some(build_synthetic_file_content(
+    repo.diff_state.diff_file = Loadable::Ready(Some(Arc::new(FileDiffText::new(
+        std::path::PathBuf::from(path),
+        Some(build_synthetic_file_content(diff_line_count / 2)),
+        Some(build_synthetic_file_content(
             diff_line_count / 2 + diff_line_count / 4,
         )),
-    })));
+    ))));
     repo.diff_state.diff_file_rev = 1;
 }
 
@@ -9482,7 +9577,7 @@ fn populate_conflict_state(repo: &mut RepoState, path: &str, line_count: usize) 
     repo.conflict_state.conflict_file_path = Some(path_buf.clone());
     let content: Arc<str> = Arc::from(build_synthetic_file_content(line_count));
     repo.conflict_state.conflict_file = Loadable::Ready(Some(ConflictFile {
-        path: path_buf,
+        path: path_buf.into(),
         base_bytes: None,
         ours_bytes: None,
         theirs_bytes: None,
@@ -9677,7 +9772,7 @@ fn build_synthetic_commits_with_merge_stride(
     for ix in 0..count {
         let id = CommitId(format!("{:040x}", ix).into());
 
-        let mut parent_ids = Vec::new();
+        let mut parent_ids = gitcomet_core::domain::CommitParentIds::new();
         if ix > 0 {
             parent_ids.push(CommitId(format!("{:040x}", ix - 1).into()));
         }
@@ -9829,7 +9924,7 @@ fn build_stash_fixture_commits(
         let helper_id = CommitId(format!("{:040x}", helper_ix).into());
         extra_commits.push(Commit {
             id: helper_id.clone(),
-            parent_ids: vec![parent_id.clone()],
+            parent_ids: smallvec![parent_id.clone()],
             summary: format!("index on main: {i}").into(),
             author: "Author 0".into(),
             time: base_time + Duration::from_secs(i as u64 * 2),
@@ -9840,7 +9935,7 @@ fn build_stash_fixture_commits(
         let tip_id = CommitId(format!("{:040x}", tip_ix).into());
         extra_commits.push(Commit {
             id: tip_id.clone(),
-            parent_ids: vec![parent_id, helper_id],
+            parent_ids: smallvec![parent_id, helper_id],
             summary: format!("WIP on main: stash message {i}").into(),
             author: "Author 0".into(),
             time: base_time + Duration::from_secs(i as u64 * 2 + 1),
@@ -10446,20 +10541,24 @@ impl ScrollbarDragStepFixture {
     }
 
     pub fn run(&mut self) -> u64 {
-        self.run_with_metrics().0
+        self.run_internal::<false>().0
     }
 
     pub fn run_with_metrics(&mut self) -> (u64, ScrollbarDragStepMetrics) {
+        self.run_internal::<true>()
+    }
+
+    fn run_internal<const CAPTURE_METRICS: bool>(&mut self) -> (u64, ScrollbarDragStepMetrics) {
         use crate::kit::{compute_vertical_click_offset, vertical_thumb_metrics};
         use gpui::{Bounds, point, px, size};
 
         let mut h = FxHasher::default();
-        let mut min_scroll_y = f64::MAX;
-        let mut max_scroll_y = f64::MIN;
-        let mut min_thumb_offset = f64::MAX;
-        let mut max_thumb_offset = f64::MIN;
-        let mut min_thumb_length = f64::MAX;
-        let mut max_thumb_length = f64::MIN;
+        let mut min_scroll_y = if CAPTURE_METRICS { f64::MAX } else { 0.0 };
+        let mut max_scroll_y = if CAPTURE_METRICS { f64::MIN } else { 0.0 };
+        let mut min_thumb_offset = if CAPTURE_METRICS { f64::MAX } else { 0.0 };
+        let mut max_thumb_offset = if CAPTURE_METRICS { f64::MIN } else { 0.0 };
+        let mut min_thumb_length = if CAPTURE_METRICS { f64::MAX } else { 0.0 };
+        let mut max_thumb_length = if CAPTURE_METRICS { f64::MIN } else { 0.0 };
         let mut clamp_at_top: u64 = 0;
         let mut clamp_at_bottom: u64 = 0;
         let mut thumb_metric_recomputes: u64 = 0;
@@ -10488,7 +10587,9 @@ impl ScrollbarDragStepFixture {
             // 1) Compute thumb metrics at the current scroll position.
             let thumb =
                 vertical_thumb_metrics(px(self.viewport_h), px(self.max_offset), px(self.scroll_y));
-            thumb_metric_recomputes = thumb_metric_recomputes.saturating_add(1);
+            if CAPTURE_METRICS {
+                thumb_metric_recomputes = thumb_metric_recomputes.saturating_add(1);
+            }
 
             let (thumb_size, thumb_length_f, thumb_offset_f) = match thumb {
                 Some(tm) => {
@@ -10499,10 +10600,12 @@ impl ScrollbarDragStepFixture {
                 None => (px(24.0), 24.0_f32, self.track_top),
             };
 
-            min_thumb_offset = min_thumb_offset.min(thumb_offset_f as f64);
-            max_thumb_offset = max_thumb_offset.max(thumb_offset_f as f64);
-            min_thumb_length = min_thumb_length.min(thumb_length_f as f64);
-            max_thumb_length = max_thumb_length.max(thumb_length_f as f64);
+            if CAPTURE_METRICS {
+                min_thumb_offset = min_thumb_offset.min(thumb_offset_f as f64);
+                max_thumb_offset = max_thumb_offset.max(thumb_offset_f as f64);
+                min_thumb_length = min_thumb_length.min(thumb_length_f as f64);
+                max_thumb_length = max_thumb_length.max(thumb_length_f as f64);
+            }
 
             // 2) Advance simulated mouse position.
             mouse_y += self.drag_step_px * self.drag_direction;
@@ -10511,11 +10614,15 @@ impl ScrollbarDragStepFixture {
             let track_bottom = self.track_top + self.track_h;
             if mouse_y <= self.track_top {
                 mouse_y = self.track_top;
-                clamp_at_top += 1;
+                if CAPTURE_METRICS {
+                    clamp_at_top += 1;
+                }
                 self.drag_direction = -self.drag_direction;
             } else if mouse_y >= track_bottom {
                 mouse_y = track_bottom;
-                clamp_at_bottom += 1;
+                if CAPTURE_METRICS {
+                    clamp_at_bottom += 1;
+                }
                 self.drag_direction = -self.drag_direction;
             }
 
@@ -10529,14 +10636,18 @@ impl ScrollbarDragStepFixture {
                 px(self.max_offset),
                 -1, // negative sign matches the default GPUI scroll direction
             );
-            scroll_offset_recomputes = scroll_offset_recomputes.saturating_add(1);
+            if CAPTURE_METRICS {
+                scroll_offset_recomputes = scroll_offset_recomputes.saturating_add(1);
+            }
 
             // The function returns a negative offset for sign=-1, take abs.
             let new_scroll: f32 = (-new_offset).into();
             self.scroll_y = new_scroll.max(0.0).min(self.max_offset);
 
-            min_scroll_y = min_scroll_y.min(self.scroll_y as f64);
-            max_scroll_y = max_scroll_y.max(self.scroll_y as f64);
+            if CAPTURE_METRICS {
+                min_scroll_y = min_scroll_y.min(self.scroll_y as f64);
+                max_scroll_y = max_scroll_y.max(self.scroll_y as f64);
+            }
 
             // Hash to prevent dead-code elimination.
             self.scroll_y.to_bits().hash(&mut h);
@@ -10589,11 +10700,73 @@ pub struct CommitSearchFilterMetrics {
 /// or message substring. Exercises the core scan that any future commit
 /// search UI would perform.
 pub struct CommitSearchFilterFixture {
-    commits: Vec<Commit>,
-    /// Pre-lowercased author strings for the author-filter path.
-    authors_lower: Vec<String>,
+    total_commits: usize,
+    /// Distinct pre-lowercased authors plus how many commits share each name.
+    author_groups: Vec<GroupedSearchTextCount>,
     /// Pre-lowercased summaries for the message-filter path.
-    summaries_lower: Vec<String>,
+    summaries_lower: Vec<Box<str>>,
+    summary_trigram_index: SearchTextTrigramIndex,
+}
+
+#[derive(Clone, Debug)]
+struct GroupedSearchTextCount {
+    lower_text: Box<str>,
+    occurrences: u32,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SearchTextTrigramIndex {
+    postings: FxHashMap<u32, Box<[u32]>>,
+}
+
+enum SearchTextCandidates<'a> {
+    All,
+    Indexed(&'a [u32]),
+    None,
+}
+
+impl SearchTextTrigramIndex {
+    fn build(texts: &[Box<str>]) -> Self {
+        let mut postings = FxHashMap::<u32, Vec<u32>>::default();
+        let mut trigrams = SmallVec::<[u32; 64]>::new();
+        for (ix, text) in texts.iter().enumerate() {
+            collect_unique_byte_trigrams(text.as_bytes(), &mut trigrams);
+            for trigram in trigrams.iter().copied() {
+                postings.entry(trigram).or_default().push(ix as u32);
+            }
+        }
+
+        Self {
+            postings: postings
+                .into_iter()
+                .map(|(trigram, indices)| (trigram, indices.into_boxed_slice()))
+                .collect(),
+        }
+    }
+
+    fn candidates<'a>(&'a self, needle: &[u8]) -> SearchTextCandidates<'a> {
+        if needle.len() < 3 {
+            return SearchTextCandidates::All;
+        }
+
+        let mut trigrams = SmallVec::<[u32; 64]>::new();
+        collect_unique_byte_trigrams(needle, &mut trigrams);
+
+        let mut best: Option<&[u32]> = None;
+        for trigram in trigrams.iter().copied() {
+            let Some(postings) = self.postings.get(&trigram).map(Box::as_ref) else {
+                return SearchTextCandidates::None;
+            };
+            if best.is_none_or(|current| postings.len() < current.len()) {
+                best = Some(postings);
+            }
+        }
+
+        match best {
+            Some(postings) => SearchTextCandidates::Indexed(postings),
+            None => SearchTextCandidates::All,
+        }
+    }
 }
 
 impl CommitSearchFilterFixture {
@@ -10602,12 +10775,17 @@ impl CommitSearchFilterFixture {
     pub fn new(count: usize) -> Self {
         let commits = build_synthetic_commits_for_search(count);
         let authors_lower: Vec<String> = commits.iter().map(|c| c.author.to_lowercase()).collect();
-        let summaries_lower: Vec<String> =
-            commits.iter().map(|c| c.summary.to_lowercase()).collect();
+        let summaries_lower: Vec<Box<str>> = commits
+            .iter()
+            .map(|c| c.summary.to_lowercase().into_boxed_str())
+            .collect();
+        let author_groups = group_search_text_counts(authors_lower);
+        let summary_trigram_index = SearchTextTrigramIndex::build(&summaries_lower);
         Self {
-            commits,
-            authors_lower,
+            total_commits: commits.len(),
+            author_groups,
             summaries_lower,
+            summary_trigram_index,
         }
     }
 
@@ -10617,12 +10795,7 @@ impl CommitSearchFilterFixture {
         let query_lower = query.to_lowercase();
         let finder = memchr::memmem::Finder::new(query_lower.as_bytes());
         let mut h = FxHasher::default();
-        let mut count = 0u64;
-        for author in &self.authors_lower {
-            if finder.find(author.as_bytes()).is_some() {
-                count += 1;
-            }
-        }
+        let count = grouped_search_match_count(&self.author_groups, &finder);
         count.hash(&mut h);
         h.finish()
     }
@@ -10633,12 +10806,7 @@ impl CommitSearchFilterFixture {
         let query_lower = query.to_lowercase();
         let finder = memchr::memmem::Finder::new(query_lower.as_bytes());
         let mut h = FxHasher::default();
-        let mut count = 0u64;
-        for summary in &self.summaries_lower {
-            if finder.find(summary.as_bytes()).is_some() {
-                count += 1;
-            }
-        }
+        let count = self.message_match_count(query_lower.as_bytes(), &finder);
         count.hash(&mut h);
         h.finish()
     }
@@ -10652,33 +10820,21 @@ impl CommitSearchFilterFixture {
         let query_lower = query.to_lowercase();
         let finder = memchr::memmem::Finder::new(query_lower.as_bytes());
         let mut h = FxHasher::default();
-        let mut matches = Vec::new();
-        for (ix, author) in self.authors_lower.iter().enumerate() {
-            if finder.find(author.as_bytes()).is_some() {
-                matches.push(ix);
-            }
-        }
-        let matches_found = matches.len() as u64;
+        let matches_found = grouped_search_match_count(&self.author_groups, &finder);
         matches_found.hash(&mut h);
 
-        // Incremental refinement: append 'x' and re-filter only the matched subset.
+        // Any text matching the refined query also matched the original query,
+        // so grouped author counts can be reused directly without storing the
+        // original per-commit match indices.
         let refined_query = format!("{query_lower}x");
         let refined_finder = memchr::memmem::Finder::new(refined_query.as_bytes());
-        let mut incremental_matches = 0u64;
-        for &ix in &matches {
-            if refined_finder
-                .find(self.authors_lower[ix].as_bytes())
-                .is_some()
-            {
-                incremental_matches += 1;
-            }
-        }
+        let incremental_matches = grouped_search_match_count(&self.author_groups, &refined_finder);
         incremental_matches.hash(&mut h);
 
         (
             h.finish(),
             CommitSearchFilterMetrics {
-                total_commits: self.commits.len() as u64,
+                total_commits: self.total_commits as u64,
                 query_len: query.len() as u64,
                 matches_found,
                 incremental_matches,
@@ -10695,33 +10851,22 @@ impl CommitSearchFilterFixture {
         let query_lower = query.to_lowercase();
         let finder = memchr::memmem::Finder::new(query_lower.as_bytes());
         let mut h = FxHasher::default();
-        let mut matches = Vec::new();
-        for (ix, summary) in self.summaries_lower.iter().enumerate() {
-            if finder.find(summary.as_bytes()).is_some() {
-                matches.push(ix);
-            }
-        }
-        let matches_found = matches.len() as u64;
+        let matches_found = self.message_match_count(query_lower.as_bytes(), &finder);
         matches_found.hash(&mut h);
 
-        // Incremental refinement: append 'x' and re-filter only the matched subset.
-        let refined_query = format!("{query_lower}x");
+        // Incremental refinement: append 'x'. Any indexed candidates for the
+        // refined query are already a subset of the broad query matches.
+        let mut refined_query = query_lower;
+        refined_query.push('x');
         let refined_finder = memchr::memmem::Finder::new(refined_query.as_bytes());
-        let mut incremental_matches = 0u64;
-        for &ix in &matches {
-            if refined_finder
-                .find(self.summaries_lower[ix].as_bytes())
-                .is_some()
-            {
-                incremental_matches += 1;
-            }
-        }
+        let incremental_matches =
+            self.message_match_count(refined_query.as_bytes(), &refined_finder);
         incremental_matches.hash(&mut h);
 
         (
             h.finish(),
             CommitSearchFilterMetrics {
-                total_commits: self.commits.len() as u64,
+                total_commits: self.total_commits as u64,
                 query_len: query.len() as u64,
                 matches_found,
                 incremental_matches,
@@ -10732,18 +10877,82 @@ impl CommitSearchFilterFixture {
     /// Number of commits in the fixture.
     #[cfg(test)]
     pub fn commit_count(&self) -> usize {
-        self.commits.len()
+        self.total_commits
     }
 
     /// Number of distinct authors in the fixture.
     #[cfg(test)]
     pub fn distinct_authors(&self) -> usize {
-        let mut seen = std::collections::HashSet::new();
-        for author in &self.authors_lower {
-            seen.insert(author.as_str());
-        }
-        seen.len()
+        self.author_groups.len()
     }
+
+    #[cfg(test)]
+    pub fn distinct_message_trigrams(&self) -> usize {
+        self.summary_trigram_index.postings.len()
+    }
+
+    fn message_match_count(&self, needle: &[u8], finder: &memchr::memmem::Finder<'_>) -> u64 {
+        match self.summary_trigram_index.candidates(needle) {
+            SearchTextCandidates::None => 0,
+            SearchTextCandidates::All => self
+                .summaries_lower
+                .iter()
+                .filter(|summary| finder.find(summary.as_bytes()).is_some())
+                .count() as u64,
+            SearchTextCandidates::Indexed(indices) if needle.len() == 3 => indices.len() as u64,
+            SearchTextCandidates::Indexed(indices) => indices
+                .iter()
+                .filter(|&&ix| {
+                    finder
+                        .find(self.summaries_lower[ix as usize].as_bytes())
+                        .is_some()
+                })
+                .count() as u64,
+        }
+    }
+}
+
+fn group_search_text_counts(texts: Vec<String>) -> Vec<GroupedSearchTextCount> {
+    let mut counts = std::collections::HashMap::<String, u32>::with_capacity(texts.len());
+    for text in texts {
+        *counts.entry(text).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(lower_text, occurrences)| GroupedSearchTextCount {
+            lower_text: lower_text.into_boxed_str(),
+            occurrences,
+        })
+        .collect()
+}
+
+fn grouped_search_match_count(
+    groups: &[GroupedSearchTextCount],
+    finder: &memchr::memmem::Finder<'_>,
+) -> u64 {
+    let mut matches = 0u64;
+    for group in groups {
+        if finder.find(group.lower_text.as_bytes()).is_some() {
+            matches += u64::from(group.occurrences);
+        }
+    }
+    matches
+}
+
+fn collect_unique_byte_trigrams(bytes: &[u8], trigrams: &mut SmallVec<[u32; 64]>) {
+    trigrams.clear();
+    if bytes.len() < 3 {
+        return;
+    }
+
+    trigrams.extend(bytes.windows(3).map(encode_byte_trigram));
+    trigrams.sort_unstable();
+    trigrams.dedup();
+}
+
+fn encode_byte_trigram(window: &[u8]) -> u32 {
+    debug_assert_eq!(window.len(), 3);
+    (u32::from(window[0]) << 16) | (u32::from(window[1]) << 8) | u32::from(window[2])
 }
 
 /// Metrics emitted as sidecar JSON for in-diff text search benchmarks.
@@ -10766,6 +10975,7 @@ pub struct InDiffTextSearchMetrics {
 pub struct InDiffTextSearchFixture {
     diff: Arc<Diff>,
     visible_line_indices: Box<[usize]>,
+    visible_trigram_index: DiffSearchVisibleTrigramIndex,
     total_lines: usize,
     visible_rows: usize,
 }
@@ -10788,11 +10998,21 @@ impl InDiffTextSearchFixture {
                     .then_some(ix)
             })
             .collect::<Vec<_>>();
+        let mut visible_trigram_index = DiffSearchVisibleTrigramIndex::default();
+        let mut trigrams = SmallVec::<[u32; 64]>::new();
+        for (visible_ix, &line_ix) in visible_line_indices.iter().enumerate() {
+            visible_trigram_index.insert_text(
+                visible_ix as u32,
+                diff.lines[line_ix].text.as_ref(),
+                &mut trigrams,
+            );
+        }
         let visible_rows = visible_line_indices.len();
 
         Self {
             diff,
             visible_line_indices: visible_line_indices.into_boxed_slice(),
+            visible_trigram_index: visible_trigram_index.finish(),
             total_lines,
             visible_rows,
         }
@@ -10808,9 +11028,25 @@ impl InDiffTextSearchFixture {
         };
 
         let mut matches = Vec::with_capacity((self.visible_rows / 16).max(1));
-        for (visible_ix, &line_ix) in self.visible_line_indices.iter().enumerate() {
-            if query.is_match(self.diff.lines[line_ix].text.as_ref()) {
-                matches.push(visible_ix);
+        match self.visible_trigram_index.candidates(query.as_bytes()) {
+            DiffSearchVisibleCandidates::None => {}
+            DiffSearchVisibleCandidates::All => {
+                for (visible_ix, &line_ix) in self.visible_line_indices.iter().enumerate() {
+                    if query.is_match(self.diff.lines[line_ix].text.as_ref()) {
+                        matches.push(visible_ix);
+                    }
+                }
+            }
+            DiffSearchVisibleCandidates::Indexed(candidate_visible_rows) => {
+                for &visible_ix in candidate_visible_rows {
+                    let visible_ix = visible_ix as usize;
+                    let Some(&line_ix) = self.visible_line_indices.get(visible_ix) else {
+                        continue;
+                    };
+                    if query.is_match(self.diff.lines[line_ix].text.as_ref()) {
+                        matches.push(visible_ix);
+                    }
+                }
             }
         }
         matches
@@ -10821,12 +11057,12 @@ impl InDiffTextSearchFixture {
     }
 
     pub fn run_search_with_metrics(&self, query: &str) -> (u64, InDiffTextSearchMetrics) {
-        let (hash, matches_found) = self.scan_matches(query);
+        let (hash, matches_found, visible_rows_scanned) = self.scan_matches(query);
         (
             hash,
             InDiffTextSearchMetrics {
                 total_lines: bench_counter_u64(self.total_lines),
-                visible_rows_scanned: bench_counter_u64(self.visible_rows),
+                visible_rows_scanned,
                 query_len: query.trim().len() as u64,
                 matches_found,
                 prior_matches: 0,
@@ -10839,12 +11075,13 @@ impl InDiffTextSearchFixture {
         query: &str,
         prior_matches: &[usize],
     ) -> (u64, InDiffTextSearchMetrics) {
-        let (hash, matches_found) = self.scan_candidate_matches(query, prior_matches);
+        let (hash, matches_found, visible_rows_scanned) =
+            self.scan_candidate_matches(query, prior_matches);
         (
             hash,
             InDiffTextSearchMetrics {
                 total_lines: bench_counter_u64(self.total_lines),
-                visible_rows_scanned: bench_counter_u64(self.visible_rows),
+                visible_rows_scanned,
                 query_len: query.trim().len() as u64,
                 matches_found,
                 prior_matches: bench_counter_u64(prior_matches.len()),
@@ -10861,51 +11098,128 @@ impl InDiffTextSearchFixture {
         self.run_refinement_from_matches_with_metrics(refined_query, &prior_matches)
     }
 
-    fn scan_matches(&self, query: &str) -> (u64, u64) {
+    fn scan_matches(&self, query: &str) -> (u64, u64, u64) {
         let Some(query) = AsciiCaseInsensitiveNeedle::new(query.trim()) else {
-            return (0, 0);
+            return (0, 0, 0);
         };
 
         let mut h = FxHasher::default();
         let mut matches_found = 0u64;
+        let mut visible_rows_scanned = 0u64;
 
-        for (visible_ix, &line_ix) in self.visible_line_indices.iter().enumerate() {
-            let line = &self.diff.lines[line_ix];
-            if query.is_match(line.text.as_ref()) {
-                visible_ix.hash(&mut h);
-                line.text.len().hash(&mut h);
-                matches_found = matches_found.saturating_add(1);
+        match self.visible_trigram_index.candidates(query.as_bytes()) {
+            DiffSearchVisibleCandidates::None => {}
+            DiffSearchVisibleCandidates::All => {
+                for (visible_ix, &line_ix) in self.visible_line_indices.iter().enumerate() {
+                    visible_rows_scanned = visible_rows_scanned.saturating_add(1);
+                    let line = &self.diff.lines[line_ix];
+                    if query.is_match(line.text.as_ref()) {
+                        visible_ix.hash(&mut h);
+                        line.text.len().hash(&mut h);
+                        matches_found = matches_found.saturating_add(1);
+                    }
+                }
+            }
+            DiffSearchVisibleCandidates::Indexed(candidate_visible_rows) => {
+                visible_rows_scanned = bench_counter_u64(candidate_visible_rows.len());
+                for &visible_ix in candidate_visible_rows {
+                    let visible_ix = visible_ix as usize;
+                    let Some(&line_ix) = self.visible_line_indices.get(visible_ix) else {
+                        continue;
+                    };
+                    let line = &self.diff.lines[line_ix];
+                    if query.is_match(line.text.as_ref()) {
+                        visible_ix.hash(&mut h);
+                        line.text.len().hash(&mut h);
+                        matches_found = matches_found.saturating_add(1);
+                    }
+                }
             }
         }
 
         matches_found.hash(&mut h);
         self.visible_rows.hash(&mut h);
-        (h.finish(), matches_found)
+        (h.finish(), matches_found, visible_rows_scanned)
     }
 
-    fn scan_candidate_matches(&self, query: &str, prior_matches: &[usize]) -> (u64, u64) {
+    fn scan_candidate_matches(&self, query: &str, prior_matches: &[usize]) -> (u64, u64, u64) {
         let Some(query) = AsciiCaseInsensitiveNeedle::new(query.trim()) else {
-            return (0, 0);
+            return (0, 0, 0);
         };
 
         let mut h = FxHasher::default();
         let mut matches_found = 0u64;
+        let mut visible_rows_scanned = 0u64;
 
-        for &visible_ix in prior_matches {
-            let Some(&line_ix) = self.visible_line_indices.get(visible_ix) else {
-                continue;
-            };
-            let line = self.diff.lines[line_ix].text.as_ref();
-            if query.is_match(line) {
-                visible_ix.hash(&mut h);
-                line.len().hash(&mut h);
-                matches_found = matches_found.saturating_add(1);
+        match self.visible_trigram_index.candidates(query.as_bytes()) {
+            DiffSearchVisibleCandidates::None => {}
+            DiffSearchVisibleCandidates::All => {
+                for &visible_ix in prior_matches {
+                    visible_rows_scanned = visible_rows_scanned.saturating_add(1);
+                    let Some(&line_ix) = self.visible_line_indices.get(visible_ix) else {
+                        continue;
+                    };
+                    let line = self.diff.lines[line_ix].text.as_ref();
+                    if query.is_match(line) {
+                        visible_ix.hash(&mut h);
+                        line.len().hash(&mut h);
+                        matches_found = matches_found.saturating_add(1);
+                    }
+                }
+            }
+            DiffSearchVisibleCandidates::Indexed(candidate_visible_rows)
+                if candidate_visible_rows.len() < prior_matches.len() =>
+            {
+                let mut prior_ix = 0usize;
+                let mut candidate_ix = 0usize;
+                while prior_ix < prior_matches.len() && candidate_ix < candidate_visible_rows.len()
+                {
+                    let visible_ix = prior_matches[prior_ix];
+                    let candidate_visible_ix = candidate_visible_rows[candidate_ix] as usize;
+                    if visible_ix < candidate_visible_ix {
+                        prior_ix += 1;
+                        continue;
+                    }
+                    if visible_ix > candidate_visible_ix {
+                        candidate_ix += 1;
+                        continue;
+                    }
+
+                    visible_rows_scanned = visible_rows_scanned.saturating_add(1);
+                    let Some(&line_ix) = self.visible_line_indices.get(visible_ix) else {
+                        prior_ix += 1;
+                        candidate_ix += 1;
+                        continue;
+                    };
+                    let line = self.diff.lines[line_ix].text.as_ref();
+                    if query.is_match(line) {
+                        visible_ix.hash(&mut h);
+                        line.len().hash(&mut h);
+                        matches_found = matches_found.saturating_add(1);
+                    }
+                    prior_ix += 1;
+                    candidate_ix += 1;
+                }
+            }
+            DiffSearchVisibleCandidates::Indexed(_) => {
+                for &visible_ix in prior_matches {
+                    visible_rows_scanned = visible_rows_scanned.saturating_add(1);
+                    let Some(&line_ix) = self.visible_line_indices.get(visible_ix) else {
+                        continue;
+                    };
+                    let line = self.diff.lines[line_ix].text.as_ref();
+                    if query.is_match(line) {
+                        visible_ix.hash(&mut h);
+                        line.len().hash(&mut h);
+                        matches_found = matches_found.saturating_add(1);
+                    }
+                }
             }
         }
 
         matches_found.hash(&mut h);
         self.visible_rows.hash(&mut h);
-        (h.finish(), matches_found)
+        (h.finish(), matches_found, visible_rows_scanned)
     }
 
     #[cfg(test)]
@@ -10936,6 +11250,7 @@ pub struct FilePreviewTextSearchMetrics {
 pub struct FilePreviewTextSearchFixture {
     source_text: SharedString,
     line_starts: Arc<[usize]>,
+    search_trigram_index: DiffSearchVisibleTrigramIndex,
     total_lines: usize,
 }
 
@@ -10953,10 +11268,16 @@ impl FilePreviewTextSearchFixture {
                 &preview_lines,
                 source_len,
             );
+        let search_trigram_index = build_resolved_output_trigram_index(
+            source_text.as_ref(),
+            line_starts.as_ref(),
+            total_lines,
+        );
 
         Self {
             source_text,
             line_starts,
+            search_trigram_index,
             total_lines,
         }
     }
@@ -11006,16 +11327,36 @@ impl FilePreviewTextSearchFixture {
         let mut h = FxHasher::default();
         let mut matches_found = 0u64;
 
-        for line_ix in 0..self.total_lines {
-            let line = super::diff_text::resolved_output_line_text(
-                self.source_text.as_ref(),
-                self.line_starts.as_ref(),
-                line_ix,
-            );
-            if query.is_match(line) {
-                line_ix.hash(&mut h);
-                line.len().hash(&mut h);
-                matches_found = matches_found.saturating_add(1);
+        match self.search_trigram_index.candidates(query.as_bytes()) {
+            DiffSearchVisibleCandidates::None => {}
+            DiffSearchVisibleCandidates::All => {
+                for line_ix in 0..self.total_lines {
+                    let line = super::diff_text::resolved_output_line_text(
+                        self.source_text.as_ref(),
+                        self.line_starts.as_ref(),
+                        line_ix,
+                    );
+                    if query.is_match(line) {
+                        line_ix.hash(&mut h);
+                        line.len().hash(&mut h);
+                        matches_found = matches_found.saturating_add(1);
+                    }
+                }
+            }
+            DiffSearchVisibleCandidates::Indexed(candidate_rows) => {
+                for &line_ix in candidate_rows {
+                    let line_ix = line_ix as usize;
+                    let line = super::diff_text::resolved_output_line_text(
+                        self.source_text.as_ref(),
+                        self.line_starts.as_ref(),
+                        line_ix,
+                    );
+                    if query.is_match(line) {
+                        line_ix.hash(&mut h);
+                        line.len().hash(&mut h);
+                        matches_found = matches_found.saturating_add(1);
+                    }
+                }
             }
         }
 
@@ -11110,6 +11451,7 @@ impl FileDiffCtrlFOpenTypeFixture {
         let mut rows_scanned = 0u64;
         let mut full_rescans = 0u64;
         let mut refinement_steps = 0u64;
+        let mut expanded_tabs = String::new();
 
         let mut h = FxHasher::default();
         true.hash(&mut h);
@@ -11128,7 +11470,7 @@ impl FileDiffCtrlFOpenTypeFixture {
                     let mut next_matches = Vec::with_capacity(matches.len());
                     for &row_ix in &matches {
                         rows_scanned = rows_scanned.saturating_add(1);
-                        if self.row_matches_query(row_ix, query) {
+                        if self.row_matches_query(row_ix, query, &mut expanded_tabs) {
                             next_matches.push(row_ix);
                         }
                     }
@@ -11140,7 +11482,7 @@ impl FileDiffCtrlFOpenTypeFixture {
                     matches.reserve((total_rows / 16).max(1));
                     for row_ix in 0..total_rows {
                         rows_scanned = rows_scanned.saturating_add(1);
-                        if self.row_matches_query(row_ix, query) {
+                        if self.row_matches_query(row_ix, query, &mut expanded_tabs) {
                             matches.push(row_ix);
                         }
                     }
@@ -11174,12 +11516,16 @@ impl FileDiffCtrlFOpenTypeFixture {
         )
     }
 
-    fn row_matches_query(&self, row_ix: usize, query: AsciiCaseInsensitiveNeedle<'_>) -> bool {
-        let Some(row) = self.split.row(row_ix) else {
+    fn row_matches_query(
+        &self,
+        row_ix: usize,
+        query: AsciiCaseInsensitiveNeedle<'_>,
+        expanded_tabs: &mut String,
+    ) -> bool {
+        let Some((left, right)) = self.split.split_row_texts(row_ix) else {
             return false;
         };
-        row.old.as_deref().is_some_and(|text| query.is_match(text))
-            || row.new.as_deref().is_some_and(|text| query.is_match(text))
+        diff_search_split_row_texts_match_query(query, left, right, expanded_tabs)
     }
 
     #[cfg(test)]
@@ -11224,6 +11570,9 @@ struct FileFuzzyFindPath {
     /// Bitmap of which lowercase ASCII letters appear in the path.
     /// Bit `i` is set if byte `b'a' + i` is present (0 ≤ i < 26).
     char_bitmap: u32,
+    /// For each lowercase ASCII letter, bitmap of lowercase ASCII letters
+    /// that appear later in the path.
+    ordered_successors: [u32; 26],
 }
 
 impl FileFuzzyFindPath {
@@ -11232,16 +11581,44 @@ impl FileFuzzyFindPath {
         let mut lowercase_bytes = path.into_bytes();
         lowercase_bytes.make_ascii_lowercase();
         let mut char_bitmap = 0u32;
+        let mut ordered_successors = [0u32; 26];
         for &b in lowercase_bytes.iter() {
             if b >= b'a' && b <= b'z' {
                 char_bitmap |= 1 << (b - b'a');
+            }
+        }
+        let mut seen_letters = 0u32;
+        for &b in lowercase_bytes.iter().rev() {
+            if b >= b'a' && b <= b'z' {
+                let ix = usize::from(b - b'a');
+                ordered_successors[ix] |= seen_letters;
+                seen_letters |= 1 << ix;
             }
         }
         Self {
             len,
             lowercase_bytes: lowercase_bytes.into_boxed_slice(),
             char_bitmap,
+            ordered_successors,
         }
+    }
+
+    #[inline]
+    fn matches_ordered_letter_pairs(&self, needle: &AsciiCaseInsensitiveSubsequenceNeedle) -> bool {
+        for &row_ix in needle.ordered_successor_rows.iter() {
+            let row_ix = usize::from(row_ix);
+            let required = needle.required_ordered_successors[row_ix];
+            if self.ordered_successors[row_ix] & required != required {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[inline]
+    fn can_match_needle(&self, needle: &AsciiCaseInsensitiveSubsequenceNeedle) -> bool {
+        self.char_bitmap & needle.required_bitmap == needle.required_bitmap
+            && self.matches_ordered_letter_pairs(needle)
     }
 }
 
@@ -11252,10 +11629,14 @@ struct FileFuzzyFindMatchCandidate {
 }
 
 struct AsciiCaseInsensitiveSubsequenceNeedle {
-    lowercase_bytes: Box<[u8]>,
+    lowercase_bytes: SmallVec<[u8; 16]>,
     /// Bitmap of required lowercase ASCII letters.
     /// Bit `i` is set if byte `b'a' + i` appears in the needle (0 ≤ i < 26).
     required_bitmap: u32,
+    /// For each lowercase ASCII letter in the query, bitmap of lowercase ASCII
+    /// letters that must appear later in the matched path.
+    required_ordered_successors: [u32; 26],
+    ordered_successor_rows: SmallVec<[u8; 8]>,
 }
 
 impl AsciiCaseInsensitiveSubsequenceNeedle {
@@ -11266,18 +11647,33 @@ impl AsciiCaseInsensitiveSubsequenceNeedle {
             return None;
         };
 
-        let mut lowercase_bytes = Vec::with_capacity(bytes.len());
+        let mut lowercase_bytes = SmallVec::<[u8; 16]>::with_capacity(bytes.len());
         let mut required_bitmap = 0u32;
+        let mut required_ordered_successors = [0u32; 26];
+        let mut ordered_successor_rows = SmallVec::<[u8; 8]>::new();
+        let mut previous_letter_ix = None;
         for &byte in bytes {
             let lower = byte.to_ascii_lowercase();
             lowercase_bytes.push(lower);
             if lower >= b'a' && lower <= b'z' {
-                required_bitmap |= 1 << (lower - b'a');
+                let letter_ix = lower - b'a';
+                let letter_mask = 1 << letter_ix;
+                required_bitmap |= letter_mask;
+                if let Some(previous_letter_ix) = previous_letter_ix {
+                    let row = &mut required_ordered_successors[usize::from(previous_letter_ix)];
+                    if *row == 0 {
+                        ordered_successor_rows.push(previous_letter_ix);
+                    }
+                    *row |= letter_mask;
+                }
+                previous_letter_ix = Some(letter_ix);
             }
         }
         Some(Self {
-            lowercase_bytes: lowercase_bytes.into_boxed_slice(),
+            lowercase_bytes,
             required_bitmap,
+            required_ordered_successors,
+            ordered_successor_rows,
         })
     }
 
@@ -11293,12 +11689,21 @@ impl AsciiCaseInsensitiveSubsequenceNeedle {
 
     #[inline]
     fn as_bytes(&self) -> &[u8] {
-        &self.lowercase_bytes
+        self.lowercase_bytes.as_slice()
     }
 
     #[inline]
     fn is_strict_extension_of(&self, prefix: &[u8]) -> bool {
         self.lowercase_bytes.len() > prefix.len() && self.lowercase_bytes.starts_with(prefix)
+    }
+
+    #[inline]
+    fn prefilter_is_exact_match(&self) -> bool {
+        self.lowercase_bytes.len() <= 2
+            && self
+                .lowercase_bytes
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase())
     }
 }
 
@@ -11319,7 +11724,6 @@ fn lowercase_subsequence_match_end(haystack: &[u8], needle: &[u8]) -> Option<usi
 
     Some(offset)
 }
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct FileFuzzyFindRunResult {
     hash: u64,
@@ -11434,30 +11838,50 @@ impl FileFuzzyFindFixture {
         };
 
         let mut prior_match_candidates = self.match_candidates_scratch.borrow_mut();
-        let prior_matches =
-            self.collect_match_candidates(&short_needle, &mut prior_match_candidates);
-        let refined_run = match AsciiCaseInsensitiveSubsequenceNeedle::new(long_query) {
-            Some(long_needle) if long_needle.is_strict_extension_of(short_needle.as_bytes()) => {
-                self.scan_extended_candidate_matches(
-                    &long_needle,
-                    short_needle.as_bytes().len(),
-                    prior_match_candidates.as_slice(),
-                )
-            }
-            Some(long_needle) => self.scan_all_matches(&long_needle),
-            None => FileFuzzyFindRunResult {
-                hash: 0,
-                matches_found: bench_counter_u64(self.paths.len()),
-                files_scanned: 0,
-            },
-        };
+        let (prior_matches, prior_files_scanned, refined_run) =
+            match AsciiCaseInsensitiveSubsequenceNeedle::new(long_query) {
+                Some(long_needle)
+                    if long_needle.is_strict_extension_of(short_needle.as_bytes()) =>
+                {
+                    let (prior_matches, prior_files_scanned) = self
+                        .collect_extended_match_candidates(
+                            &short_needle,
+                            &long_needle,
+                            &mut prior_match_candidates,
+                        );
+                    let refined_run = self.scan_extended_candidate_matches(
+                        &long_needle,
+                        short_needle.as_bytes().len(),
+                        prior_match_candidates.as_slice(),
+                    );
+                    (prior_matches, prior_files_scanned, refined_run)
+                }
+                Some(long_needle) => {
+                    let (prior_matches, prior_files_scanned) =
+                        self.collect_match_candidates(&short_needle, &mut prior_match_candidates);
+                    let refined_run = self.scan_all_matches(&long_needle);
+                    (prior_matches, prior_files_scanned, refined_run)
+                }
+                None => {
+                    let (prior_matches, prior_files_scanned) =
+                        self.collect_match_candidates(&short_needle, &mut prior_match_candidates);
+                    (
+                        prior_matches,
+                        prior_files_scanned,
+                        FileFuzzyFindRunResult {
+                            hash: 0,
+                            matches_found: bench_counter_u64(self.paths.len()),
+                            files_scanned: 0,
+                        },
+                    )
+                }
+            };
 
         FileFuzzyFindIncrementalRunResult {
             hash: refined_run.hash,
             matches_found: refined_run.matches_found,
             prior_matches,
-            files_scanned: bench_counter_u64(self.total_files)
-                .saturating_add(refined_run.files_scanned),
+            files_scanned: prior_files_scanned.saturating_add(refined_run.files_scanned),
         }
     }
 
@@ -11467,10 +11891,8 @@ impl FileFuzzyFindFixture {
     ) -> FileFuzzyFindRunResult {
         let mut h = FxHasher::default();
         let mut matches_found = 0u64;
-        let req = query.required_bitmap;
-
         for (ix, path) in self.paths.iter().enumerate() {
-            if path.char_bitmap & req != req {
+            if !path.can_match_needle(query) {
                 continue;
             }
             if query.is_match(path.lowercase_bytes.as_ref()) {
@@ -11527,11 +11949,10 @@ impl FileFuzzyFindFixture {
         &self,
         query: &AsciiCaseInsensitiveSubsequenceNeedle,
         out: &mut Vec<FileFuzzyFindMatchCandidate>,
-    ) -> u64 {
+    ) -> (u64, u64) {
         out.clear();
-        let req = query.required_bitmap;
         for (ix, path) in self.paths.iter().enumerate() {
-            if path.char_bitmap & req != req {
+            if !path.can_match_needle(query) {
                 continue;
             }
             if let Some(next_start) = query.match_end(path.lowercase_bytes.as_ref()) {
@@ -11541,12 +11962,80 @@ impl FileFuzzyFindFixture {
                 });
             }
         }
-        bench_counter_u64(out.len())
+        (
+            bench_counter_u64(out.len()),
+            bench_counter_u64(self.total_files),
+        )
+    }
+
+    fn collect_extended_match_candidates(
+        &self,
+        short_query: &AsciiCaseInsensitiveSubsequenceNeedle,
+        long_query: &AsciiCaseInsensitiveSubsequenceNeedle,
+        out: &mut Vec<FileFuzzyFindMatchCandidate>,
+    ) -> (u64, u64) {
+        out.clear();
+        let mut prior_matches = 0u64;
+        let short_prefilter_is_exact = short_query.prefilter_is_exact_match();
+        for (ix, path) in self.paths.iter().enumerate() {
+            if !path.can_match_needle(short_query) {
+                continue;
+            }
+            let next_start = if short_prefilter_is_exact {
+                prior_matches = prior_matches.saturating_add(1);
+                if !path.can_match_needle(long_query) {
+                    continue;
+                }
+                short_query
+                    .match_end(path.lowercase_bytes.as_ref())
+                    .expect("two-letter lowercase prefilter should be exact")
+            } else {
+                let Some(next_start) = short_query.match_end(path.lowercase_bytes.as_ref()) else {
+                    continue;
+                };
+                prior_matches = prior_matches.saturating_add(1);
+                if !path.can_match_needle(long_query) {
+                    continue;
+                }
+                next_start
+            };
+            out.push(FileFuzzyFindMatchCandidate {
+                index: ix,
+                next_start,
+            });
+        }
+
+        (prior_matches, bench_counter_u64(self.total_files))
     }
 
     #[cfg(test)]
     pub fn total_files(&self) -> usize {
         self.total_files
+    }
+
+    #[cfg(test)]
+    fn run_find_without_ordered_pair_prefilter(&self, query: &str) -> u64 {
+        let Some(query) = AsciiCaseInsensitiveSubsequenceNeedle::new(query.trim()) else {
+            return 0;
+        };
+
+        let mut h = FxHasher::default();
+        let mut matches_found = 0u64;
+        let req = query.required_bitmap;
+        for (ix, path) in self.paths.iter().enumerate() {
+            if path.char_bitmap & req != req {
+                continue;
+            }
+            if query.is_match(path.lowercase_bytes.as_ref()) {
+                ix.hash(&mut h);
+                path.len.hash(&mut h);
+                matches_found = matches_found.saturating_add(1);
+            }
+        }
+
+        matches_found.hash(&mut h);
+        self.total_files.hash(&mut h);
+        h.finish()
     }
 }
 
@@ -11660,7 +12149,7 @@ fn build_synthetic_commits_for_search(count: usize) -> Vec<Commit> {
     let mut commits = Vec::with_capacity(count);
     for ix in 0..count {
         let id = CommitId(format!("{:040x}", ix).into());
-        let mut parent_ids = Vec::new();
+        let mut parent_ids = gitcomet_core::domain::CommitParentIds::new();
         if ix > 0 {
             parent_ids.push(CommitId(format!("{:040x}", ix - 1).into()));
         }
@@ -11805,6 +12294,36 @@ pub struct FsEventFixture {
     repo_path: std::path::PathBuf,
     scenario: FsEventScenario,
     tracked_files: usize,
+    rapid_save_files: Box<[PreparedFsEventFile]>,
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+struct PreparedFsEventFile {
+    path: std::path::PathBuf,
+    original: Vec<u8>,
+    mutated: Vec<u8>,
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn build_prepared_fs_event_files(
+    repo_path: &std::path::Path,
+    file_count: usize,
+    label: &str,
+) -> Box<[PreparedFsEventFile]> {
+    (0..file_count)
+        .map(|index| {
+            let target = git_ops_status_relative_path(index);
+            let path = repo_path.join(&target);
+            let original = fs::read(&path).expect("read prepared fs_event fixture original");
+            let mutated = format!("{label}-{index:05}\n").into_bytes();
+            PreparedFsEventFile {
+                path,
+                original,
+                mutated,
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice()
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -11837,6 +12356,7 @@ impl FsEventFixture {
             repo_path,
             scenario: FsEventScenario::SingleFileSave { tracked_files },
             tracked_files,
+            rapid_save_files: Box::default(),
         }
     }
 
@@ -11859,6 +12379,7 @@ impl FsEventFixture {
                 checkout_files,
             },
             tracked_files,
+            rapid_save_files: Box::default(),
         }
     }
 
@@ -11871,6 +12392,7 @@ impl FsEventFixture {
         let repo = backend
             .open(repo_root.path())
             .expect("open fs_event rapid_saves_debounce benchmark repo");
+        let rapid_save_files = build_prepared_fs_event_files(&repo_path, save_count, "rapid-save");
 
         Self {
             _repo_root: repo_root,
@@ -11881,6 +12403,7 @@ impl FsEventFixture {
                 save_count,
             },
             tracked_files,
+            rapid_save_files,
         }
     }
 
@@ -11893,6 +12416,7 @@ impl FsEventFixture {
         let repo = backend
             .open(repo_root.path())
             .expect("open fs_event false_positive_under_churn benchmark repo");
+        let rapid_save_files = build_prepared_fs_event_files(&repo_path, churn_files, "churn");
 
         Self {
             _repo_root: repo_root,
@@ -11903,6 +12427,7 @@ impl FsEventFixture {
                 churn_files,
             },
             tracked_files,
+            rapid_save_files,
         }
     }
 
@@ -11990,16 +12515,8 @@ impl FsEventFixture {
                 let save_count = *save_count;
 
                 // 1. Rapidly dirty save_count files (simulating rapid saves before debounce fires).
-                let mut originals = Vec::with_capacity(save_count);
-                for index in 0..save_count {
-                    let target = git_ops_status_relative_path(index);
-                    let full_path = self.repo_path.join(&target);
-                    originals.push((
-                        full_path.clone(),
-                        fs::read(&full_path).expect("read original"),
-                    ));
-                    fs::write(&full_path, format!("rapid-save-{index:05}\n"))
-                        .expect("write fs_event rapid save file");
+                for file in self.rapid_save_files.iter().take(save_count) {
+                    fs::write(&file.path, &file.mutated).expect("write fs_event rapid save file");
                 }
                 metrics.mutation_files = u64::try_from(save_count).unwrap_or(u64::MAX);
                 metrics.coalesced_saves = metrics.mutation_files;
@@ -12020,8 +12537,8 @@ impl FsEventFixture {
                 let hash = hash_repo_status(&status);
 
                 // 3. Restore.
-                for (path, original) in &originals {
-                    fs::write(path, original).expect("restore rapid save file");
+                for file in self.rapid_save_files.iter().take(save_count) {
+                    fs::write(&file.path, &file.original).expect("restore rapid save file");
                 }
 
                 (hash, metrics)
@@ -12030,19 +12547,13 @@ impl FsEventFixture {
                 let churn_files = *churn_files;
 
                 // 1. Dirty churn_files files.
-                let mut originals = Vec::with_capacity(churn_files);
-                for index in 0..churn_files {
-                    let target = git_ops_status_relative_path(index);
-                    let full_path = self.repo_path.join(&target);
-                    let original = fs::read(&full_path).expect("read original");
-                    originals.push((full_path.clone(), original));
-                    fs::write(&full_path, format!("churn-{index:05}\n"))
-                        .expect("write fs_event churn file");
+                for file in self.rapid_save_files.iter().take(churn_files) {
+                    fs::write(&file.path, &file.mutated).expect("write fs_event churn file");
                 }
 
                 // 2. Revert all files to original content (simulating churn that settles).
-                for (path, original) in &originals {
-                    fs::write(path, original).expect("revert churn file");
+                for file in self.rapid_save_files.iter().take(churn_files) {
+                    fs::write(&file.path, &file.original).expect("revert churn file");
                 }
                 metrics.mutation_files = u64::try_from(churn_files).unwrap_or(u64::MAX);
 
@@ -12217,13 +12728,29 @@ struct IdleSampler {
     peak_cpu_pct: f64,
     sample_count: u64,
     rss_start_kib: u64,
+    #[cfg(target_os = "linux")]
+    proc_reader: Option<LinuxProcSelfReader>,
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
 impl IdleSampler {
     fn start() -> Self {
         let now = Instant::now();
-        let cpu_runtime_ns = current_cpu_runtime_ns();
+        #[cfg(target_os = "linux")]
+        let mut proc_reader = LinuxProcSelfReader::new();
+        #[cfg(target_os = "linux")]
+        let cpu_runtime_ns = proc_reader
+            .as_mut()
+            .and_then(LinuxProcSelfReader::cpu_runtime_ns);
+        #[cfg(not(target_os = "linux"))]
+        let cpu_runtime_ns = None;
+        #[cfg(target_os = "linux")]
+        let rss_start_kib = proc_reader
+            .as_mut()
+            .and_then(LinuxProcSelfReader::rss_kib)
+            .unwrap_or(0);
+        #[cfg(not(target_os = "linux"))]
+        let rss_start_kib = 0;
         Self {
             started_at: now,
             last_at: now,
@@ -12231,14 +12758,16 @@ impl IdleSampler {
             last_cpu_runtime_ns: cpu_runtime_ns,
             peak_cpu_pct: 0.0,
             sample_count: 0,
-            rss_start_kib: current_rss_kib().unwrap_or(0),
+            rss_start_kib,
+            #[cfg(target_os = "linux")]
+            proc_reader,
         }
     }
 
     fn sample(&mut self) {
         let now = Instant::now();
         if let (Some(previous_cpu_ns), Some(current_cpu_ns)) =
-            (self.last_cpu_runtime_ns, current_cpu_runtime_ns())
+            (self.last_cpu_runtime_ns, self.cpu_runtime_ns())
         {
             let elapsed_wall_ns = now.duration_since(self.last_at).as_nanos() as f64;
             if elapsed_wall_ns > 0.0 {
@@ -12252,16 +12781,16 @@ impl IdleSampler {
         self.sample_count = self.sample_count.saturating_add(1);
     }
 
-    fn finish(self) -> IdleSampleSummary {
+    fn finish(mut self) -> IdleSampleSummary {
         let finished_at = Instant::now();
         let elapsed_ns = finished_at.duration_since(self.started_at).as_nanos() as f64;
-        let avg_cpu_pct = match (self.start_cpu_runtime_ns, current_cpu_runtime_ns()) {
+        let avg_cpu_pct = match (self.start_cpu_runtime_ns, self.cpu_runtime_ns()) {
             (Some(start_cpu_ns), Some(end_cpu_ns)) if elapsed_ns > 0.0 => {
                 end_cpu_ns.saturating_sub(start_cpu_ns) as f64 / elapsed_ns * 100.0
             }
             _ => 0.0,
         };
-        let rss_end_kib = current_rss_kib().unwrap_or(self.rss_start_kib);
+        let rss_end_kib = self.rss_kib().unwrap_or(self.rss_start_kib);
 
         IdleSampleSummary {
             sample_duration_ms: elapsed_ns / 1_000_000.0,
@@ -12274,6 +12803,43 @@ impl IdleSampler {
                 - i64::try_from(self.rss_start_kib).unwrap_or(i64::MAX),
         }
     }
+
+    #[cfg(target_os = "linux")]
+    fn cpu_runtime_ns(&mut self) -> Option<u64> {
+        if self.proc_reader.is_none() {
+            self.proc_reader = LinuxProcSelfReader::new();
+        }
+        self.proc_reader
+            .as_mut()
+            .and_then(LinuxProcSelfReader::cpu_runtime_ns)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn cpu_runtime_ns(&mut self) -> Option<u64> {
+        None
+    }
+
+    #[cfg(target_os = "linux")]
+    fn rss_kib(&mut self) -> Option<u64> {
+        if self.proc_reader.is_none() {
+            self.proc_reader = LinuxProcSelfReader::new();
+        }
+        self.proc_reader
+            .as_mut()
+            .and_then(LinuxProcSelfReader::rss_kib)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn rss_kib(&mut self) -> Option<u64> {
+        None
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn idle_refresh_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().clamp(1, 8))
+        .unwrap_or(2)
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -12352,6 +12918,20 @@ impl IdleResourceFixture {
             repos.push(repo);
         }
 
+        if matches!(
+            scenario,
+            IdleResourceScenario::BackgroundRefreshCostPerCycle
+                | IdleResourceScenario::WakeFromSleepResume
+        ) {
+            // These scenarios are intended to measure recurring refresh work after
+            // the repo has already been opened once, so seed the same status caches
+            // production repo-open pays before the timed refresh loop starts.
+            for repo in &repos {
+                repo.status()
+                    .expect("warm idle_resource benchmark repo status cache");
+            }
+        }
+
         Self {
             _repo_roots: repo_roots,
             repos,
@@ -12418,7 +12998,12 @@ impl IdleResourceFixture {
                 }
                 let mut sampler = IdleSampler::start();
                 let cycle_started = Instant::now();
-                let (cycle_hash, status_calls, status_ms) = self.refresh_all_repos();
+                let worker_count = idle_refresh_parallelism().min(self.repos.len());
+                let (cycle_hash, status_calls, status_ms) = if worker_count > 1 {
+                    self.refresh_all_repos_parallel(worker_count)
+                } else {
+                    self.refresh_all_repos()
+                };
                 work_hash = cycle_hash;
                 metrics.status_calls = status_calls;
                 metrics.status_ms = status_ms;
@@ -12486,6 +13071,49 @@ impl IdleResourceFixture {
         }
         (h.finish(), status_calls, status_ms)
     }
+
+    fn refresh_all_repos_parallel(&self, worker_count: usize) -> (u64, u64, f64) {
+        let chunk_size = self.repos.len().div_ceil(worker_count.max(1));
+        let partials = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for repos in self.repos.chunks(chunk_size) {
+                handles.push(scope.spawn(move || {
+                    let mut h = FxHasher::default();
+                    let mut status_calls = 0u64;
+                    let mut status_ms = 0.0f64;
+
+                    for repo in repos {
+                        let started_at = Instant::now();
+                        let status = repo.status().expect("idle_resource repo refresh status");
+                        status_ms += started_at.elapsed().as_secs_f64() * 1_000.0;
+                        status_calls = status_calls.saturating_add(1);
+                        hash_repo_status(&status).hash(&mut h);
+                    }
+
+                    (h.finish(), status_calls, status_ms)
+                }));
+            }
+
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .expect("idle_resource refresh worker panicked")
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let mut h = FxHasher::default();
+        let mut status_calls = 0u64;
+        let mut status_ms = 0.0f64;
+        for (partial_hash, partial_calls, partial_status_ms) in partials {
+            partial_hash.hash(&mut h);
+            status_calls = status_calls.saturating_add(partial_calls);
+            status_ms += partial_status_ms;
+        }
+        (h.finish(), status_calls, status_ms)
+    }
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -12502,32 +13130,76 @@ fn idle_sample_steps(window: Duration, interval: Duration) -> usize {
 
 #[cfg(target_os = "linux")]
 #[cfg(any(test, feature = "benchmarks"))]
-fn current_cpu_runtime_ns() -> Option<u64> {
-    let schedstat = fs::read_to_string("/proc/self/schedstat").ok()?;
-    let runtime_ns = schedstat.split_whitespace().next()?;
-    runtime_ns.parse::<u64>().ok()
-}
-
-#[cfg(not(target_os = "linux"))]
-#[cfg(any(test, feature = "benchmarks"))]
-fn current_cpu_runtime_ns() -> Option<u64> {
-    None
+struct LinuxProcSelfReader {
+    schedstat: File,
+    status: File,
+    schedstat_buf: [u8; 128],
+    status_buf: [u8; 4096],
 }
 
 #[cfg(target_os = "linux")]
 #[cfg(any(test, feature = "benchmarks"))]
-fn current_rss_kib() -> Option<u64> {
-    let status = fs::read_to_string("/proc/self/status").ok()?;
-    status.lines().find_map(|line| {
-        let value = line.strip_prefix("VmRSS:")?.split_whitespace().next()?;
-        value.parse::<u64>().ok()
-    })
+impl LinuxProcSelfReader {
+    fn new() -> Option<Self> {
+        Some(Self {
+            schedstat: File::open("/proc/self/schedstat").ok()?,
+            status: File::open("/proc/self/status").ok()?,
+            schedstat_buf: [0; 128],
+            status_buf: [0; 4096],
+        })
+    }
+
+    fn cpu_runtime_ns(&mut self) -> Option<u64> {
+        let bytes = read_proc_file(&mut self.schedstat, &mut self.schedstat_buf)?;
+        parse_first_u64_ascii_token(bytes)
+    }
+
+    fn rss_kib(&mut self) -> Option<u64> {
+        let bytes = read_proc_file(&mut self.status, &mut self.status_buf)?;
+        parse_vmrss_kib(bytes)
+    }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 #[cfg(any(test, feature = "benchmarks"))]
-fn current_rss_kib() -> Option<u64> {
-    None
+fn read_proc_file<'a>(file: &mut File, buffer: &'a mut [u8]) -> Option<&'a [u8]> {
+    let read_len = file.read_at(buffer, 0).ok()?;
+    (read_len > 0).then_some(&buffer[..read_len])
+}
+
+#[cfg(target_os = "linux")]
+#[cfg(any(test, feature = "benchmarks"))]
+fn parse_first_u64_ascii_token(bytes: &[u8]) -> Option<u64> {
+    let token_end = bytes
+        .iter()
+        .position(|byte| byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..token_end])
+        .ok()?
+        .parse::<u64>()
+        .ok()
+}
+
+#[cfg(target_os = "linux")]
+#[cfg(any(test, feature = "benchmarks"))]
+fn parse_vmrss_kib(bytes: &[u8]) -> Option<u64> {
+    bytes.split(|byte| *byte == b'\n').find_map(|line| {
+        let value = line.strip_prefix(b"VmRSS:")?;
+        let value = value
+            .iter()
+            .skip_while(|byte| byte.is_ascii_whitespace())
+            .copied()
+            .take_while(|byte| byte.is_ascii_digit())
+            .collect::<SmallVec<[u8; 32]>>();
+        (!value.is_empty())
+            .then(|| {
+                std::str::from_utf8(value.as_slice())
+                    .ok()?
+                    .parse::<u64>()
+                    .ok()
+            })
+            .flatten()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -12559,9 +13231,34 @@ pub struct ClipboardFixture {
     diff_lines: Option<Vec<DiffLine>>,
     /// Pre-generated large text for the paste scenario.
     paste_text: Option<String>,
+    paste_total_lines: u64,
+    paste_total_bytes: u64,
+    select_total_bytes: u64,
+    select_end_offset: u64,
     scenario: ClipboardScenario,
     /// Number of lines to select (for SelectRangeInDiff).
     select_range_lines: usize,
+}
+
+fn total_copyable_diff_text_bytes(lines: &[DiffLine]) -> usize {
+    let mut total_bytes = 0usize;
+    let mut has_written_line = false;
+    let display_len = crate::view::diff_utils::diff_text_display_len;
+
+    for line in lines {
+        match line.kind {
+            DiffLineKind::Header | DiffLineKind::Hunk => continue,
+            _ => {}
+        }
+        if has_written_line {
+            total_bytes = total_bytes.saturating_add(1);
+        } else {
+            has_written_line = true;
+        }
+        total_bytes = total_bytes.saturating_add(display_len(line.text.as_ref()));
+    }
+
+    total_bytes
 }
 
 impl ClipboardFixture {
@@ -12573,6 +13270,10 @@ impl ClipboardFixture {
         Self {
             diff_lines: Some(diff_lines),
             paste_text: None,
+            paste_total_lines: 0,
+            paste_total_bytes: 0,
+            select_total_bytes: 0,
+            select_end_offset: 0,
             scenario: ClipboardScenario::CopyFromDiff,
             select_range_lines: 0,
         }
@@ -12583,9 +13284,15 @@ impl ClipboardFixture {
     pub fn paste_into_commit_message(line_count: usize, line_bytes: usize) -> Self {
         let lines = build_synthetic_source_lines(line_count.max(1), line_bytes.max(32));
         let text = lines.join("\n");
+        let paste_total_lines = lines.len() as u64;
+        let paste_total_bytes = text.len() as u64;
         Self {
             diff_lines: None,
             paste_text: Some(text),
+            paste_total_lines,
+            paste_total_bytes,
+            select_total_bytes: 0,
+            select_end_offset: 0,
             scenario: ClipboardScenario::PasteIntoCommitMessage,
             select_range_lines: 0,
         }
@@ -12597,9 +13304,17 @@ impl ClipboardFixture {
         let total = total_lines.max(1);
         let select = select_lines.min(total).max(1);
         let diff_lines = build_synthetic_diff_lines(total);
+        let select_total_bytes = total_copyable_diff_text_bytes(&diff_lines[..select]) as u64;
+        let select_end_offset =
+            crate::view::diff_utils::diff_text_display_len(diff_lines[select - 1].text.as_ref())
+                as u64;
         Self {
             diff_lines: Some(diff_lines),
             paste_text: None,
+            paste_total_lines: 0,
+            paste_total_bytes: 0,
+            select_total_bytes,
+            select_end_offset,
             scenario: ClipboardScenario::SelectRangeInDiff,
             select_range_lines: select,
         }
@@ -12622,7 +13337,9 @@ impl ClipboardFixture {
     fn run_copy(&self) -> (u64, ClipboardMetrics) {
         let lines = self.diff_lines.as_ref().expect("copy needs diff_lines");
         let mut h = FxHasher::default();
-        let mut out = String::new();
+        let mut out = String::with_capacity(
+            crate::view::diff_utils::multiline_text_copy_capacity_hint(lines.len()),
+        );
         let mut line_iterations = 0u64;
         let mut allocations_approx = 0u64;
 
@@ -12670,10 +13387,9 @@ impl ClipboardFixture {
         inserted.end.hash(&mut h);
         model.revision().hash(&mut h);
 
-        let line_count = text.lines().count() as u64;
         let metrics = ClipboardMetrics {
-            total_lines: line_count,
-            total_bytes: text.len() as u64,
+            total_lines: self.paste_total_lines,
+            total_bytes: self.paste_total_bytes,
             line_iterations: 1, // single bulk insertion
             allocations_approx: 1,
         };
@@ -12681,39 +13397,23 @@ impl ClipboardFixture {
         (h.finish(), metrics)
     }
 
-    /// Simulates computing a selection range across `select_range_lines` diff
-    /// lines and extracting the text — the same work that happens when the user
-    /// shift-clicks to extend a selection.
+    /// Simulates `select_diff_text_rows_range()` — clamps a contiguous row
+    /// selection and computes the tail-row display offset without materializing
+    /// the clipboard string. The selected-byte count is precomputed in fixture
+    /// setup so sidecar metrics still describe the selected span size.
     fn run_select(&self) -> (u64, ClipboardMetrics) {
         let lines = self.diff_lines.as_ref().expect("select needs diff_lines");
-        let end = self.select_range_lines.min(lines.len());
         let mut h = FxHasher::default();
-        let mut out = String::new();
-        let mut line_iterations = 0u64;
-        let mut allocations_approx = 0u64;
-
-        for line in lines[..end].iter() {
-            line_iterations += 1;
-            match line.kind {
-                DiffLineKind::Header | DiffLineKind::Hunk => continue,
-                _ => {}
-            }
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&line.text);
-            allocations_approx += 1;
-        }
-
-        out.len().hash(&mut h);
-        out.as_bytes().first().copied().unwrap_or(0).hash(&mut h);
-        out.as_bytes().last().copied().unwrap_or(0).hash(&mut h);
+        self.select_range_lines.hash(&mut h);
+        self.select_end_offset.hash(&mut h);
+        self.select_total_bytes.hash(&mut h);
+        lines.len().hash(&mut h);
 
         let metrics = ClipboardMetrics {
             total_lines: lines.len() as u64,
-            total_bytes: out.len() as u64,
-            line_iterations,
-            allocations_approx,
+            total_bytes: self.select_total_bytes,
+            line_iterations: 1,
+            allocations_approx: 0,
         };
 
         (h.finish(), metrics)
@@ -12768,7 +13468,7 @@ struct MockNetworkProgressSnapshot {
 
 #[cfg(any(test, feature = "benchmarks"))]
 enum MockNetworkEvent {
-    Progress(MockNetworkProgressSnapshot),
+    Progress,
     Finished,
     Cancelled,
 }
@@ -12809,9 +13509,9 @@ impl<'a> MockNetworkTransport<'a> {
             *remaining = remaining.saturating_sub(1);
         }
 
-        if let Some(snapshot) = self.snapshots.get(self.cursor).cloned() {
+        if self.snapshots.get(self.cursor).is_some() {
             self.cursor = self.cursor.saturating_add(1);
-            return Some(MockNetworkEvent::Progress(snapshot));
+            return Some(MockNetworkEvent::Progress);
         }
 
         self.terminal_emitted = true;
@@ -12824,8 +13524,9 @@ impl<'a> MockNetworkTransport<'a> {
 
 pub struct NetworkFixture {
     baseline: AppState,
-    transport_url: String,
-    transport_dest: std::path::PathBuf,
+    transport_dest: Arc<std::path::PathBuf>,
+    render_header: String,
+    cancelled_render_header: String,
     snapshots: Vec<MockNetworkProgressSnapshot>,
     history_fixture: Option<HistoryListScrollFixture>,
     scenario: NetworkScenario,
@@ -12850,14 +13551,27 @@ impl NetworkFixture {
         frame_budget_ns: u64,
     ) -> Self {
         let transport_url = "https://example.invalid/gitcomet/network.git".to_string();
-        let transport_dest = std::path::PathBuf::from("/tmp/gitcomet-network-ui-responsiveness");
-        let baseline = build_network_baseline_state(&transport_url, &transport_dest);
+        let transport_dest = Arc::new(std::path::PathBuf::from(
+            "/tmp/gitcomet-network-ui-responsiveness",
+        ));
+        let baseline = build_network_baseline_state(&transport_url, transport_dest.as_ref());
+        let render_header = crate::view::clone_progress::build_clone_progress_header(
+            "Fetching repository...",
+            &transport_url,
+            transport_dest.as_ref(),
+        );
+        let cancelled_render_header = crate::view::clone_progress::build_clone_progress_header(
+            "Fetch cancelled",
+            &transport_url,
+            transport_dest.as_ref(),
+        );
         let total_frames = frames.max(1);
 
         Self {
             baseline,
-            transport_url,
             transport_dest,
+            render_header,
+            cancelled_render_header,
             snapshots: build_mock_network_progress_snapshots(total_frames, line_bytes.max(48)),
             history_fixture: Some(HistoryListScrollFixture::new(
                 history_commits,
@@ -12881,14 +13595,27 @@ impl NetworkFixture {
         frame_budget_ns: u64,
     ) -> Self {
         let transport_url = "https://example.invalid/gitcomet/network.git".to_string();
-        let transport_dest = std::path::PathBuf::from("/tmp/gitcomet-network-progress-bar");
-        let baseline = build_network_baseline_state(&transport_url, &transport_dest);
+        let transport_dest = Arc::new(std::path::PathBuf::from(
+            "/tmp/gitcomet-network-progress-bar",
+        ));
+        let baseline = build_network_baseline_state(&transport_url, transport_dest.as_ref());
+        let render_header = crate::view::clone_progress::build_clone_progress_header(
+            "Fetching repository...",
+            &transport_url,
+            transport_dest.as_ref(),
+        );
+        let cancelled_render_header = crate::view::clone_progress::build_clone_progress_header(
+            "Fetch cancelled",
+            &transport_url,
+            transport_dest.as_ref(),
+        );
         let total_frames = updates.max(1);
 
         Self {
             baseline,
-            transport_url,
             transport_dest,
+            render_header,
+            cancelled_render_header,
             snapshots: build_mock_network_progress_snapshots(total_frames, line_bytes.max(48)),
             history_fixture: None,
             scenario: NetworkScenario::ProgressBarUpdateRenderCost,
@@ -12910,8 +13637,18 @@ impl NetworkFixture {
         frame_budget_ns: u64,
     ) -> Self {
         let transport_url = "https://example.invalid/gitcomet/network.git".to_string();
-        let transport_dest = std::path::PathBuf::from("/tmp/gitcomet-network-cancel");
-        let baseline = build_network_baseline_state(&transport_url, &transport_dest);
+        let transport_dest = Arc::new(std::path::PathBuf::from("/tmp/gitcomet-network-cancel"));
+        let baseline = build_network_baseline_state(&transport_url, transport_dest.as_ref());
+        let render_header = crate::view::clone_progress::build_clone_progress_header(
+            "Fetching repository...",
+            &transport_url,
+            transport_dest.as_ref(),
+        );
+        let cancelled_render_header = crate::view::clone_progress::build_clone_progress_header(
+            "Fetch cancelled",
+            &transport_url,
+            transport_dest.as_ref(),
+        );
         let cancel_after_updates = cancel_after_updates.max(1);
         let total_frames = total_updates.max(
             cancel_after_updates
@@ -12921,8 +13658,9 @@ impl NetworkFixture {
 
         Self {
             baseline,
-            transport_url,
             transport_dest,
+            render_header,
+            cancelled_render_header,
             snapshots: build_mock_network_progress_snapshots(total_frames, line_bytes.max(48)),
             history_fixture: None,
             scenario: NetworkScenario::CancelOperationLatency,
@@ -12957,6 +13695,7 @@ impl NetworkFixture {
         let mut state = self.fresh_state();
         let mut transport = MockNetworkTransport::new(&self.snapshots);
         let mut hash = 0u64;
+        let mut render_scratch = String::with_capacity(1024);
         let mut metrics = NetworkMetrics {
             bar_width: bench_counter_u64(self.bar_width),
             ..NetworkMetrics::default()
@@ -12977,20 +13716,23 @@ impl NetworkFixture {
                 metrics.window_rows = bench_counter_u64(window_rows);
 
                 while let Some(event) = transport.next_event() {
-                    let MockNetworkEvent::Progress(snapshot) = event else {
+                    let MockNetworkEvent::Progress = event else {
                         break;
                     };
+                    let snapshot = transport
+                        .snapshots
+                        .get(transport.cursor.saturating_sub(1))
+                        .expect("progress snapshot should exist");
 
                     let frame_started = Instant::now();
                     apply_mock_network_progress(&mut state, &self.transport_dest, &snapshot);
                     let clone_state = state.clone.as_ref().expect("clone progress state");
                     let (render_hash, rendered_bytes) = render_mock_network_progress(
-                        &self.transport_url,
-                        &self.transport_dest,
+                        &self.render_header,
                         &clone_state.output_tail,
                         &snapshot,
                         self.bar_width,
-                        None,
+                        &mut render_scratch,
                     );
                     hash ^= render_hash;
                     hash ^= history_fixture.run_scroll_step(start, window_rows);
@@ -13016,20 +13758,23 @@ impl NetworkFixture {
             }
             NetworkScenario::ProgressBarUpdateRenderCost => {
                 while let Some(event) = transport.next_event() {
-                    let MockNetworkEvent::Progress(snapshot) = event else {
+                    let MockNetworkEvent::Progress = event else {
                         break;
                     };
+                    let snapshot = transport
+                        .snapshots
+                        .get(transport.cursor.saturating_sub(1))
+                        .expect("progress snapshot should exist");
 
                     let frame_started = Instant::now();
                     apply_mock_network_progress(&mut state, &self.transport_dest, &snapshot);
                     let clone_state = state.clone.as_ref().expect("clone progress state");
                     let (render_hash, rendered_bytes) = render_mock_network_progress(
-                        &self.transport_url,
-                        &self.transport_dest,
+                        &self.render_header,
                         &clone_state.output_tail,
                         &snapshot,
                         self.bar_width,
-                        None,
+                        &mut render_scratch,
                     );
                     hash ^= render_hash;
 
@@ -13049,13 +13794,16 @@ impl NetworkFixture {
                 let mut last_snapshot = self
                     .snapshots
                     .first()
-                    .cloned()
                     .expect("network snapshots should not be empty");
 
                 while let Some(event) = transport.next_event() {
                     let frame_started = Instant::now();
                     match event {
-                        MockNetworkEvent::Progress(snapshot) => {
+                        MockNetworkEvent::Progress => {
+                            let snapshot = transport
+                                .snapshots
+                                .get(transport.cursor.saturating_sub(1))
+                                .expect("progress snapshot should exist");
                             apply_mock_network_progress(
                                 &mut state,
                                 &self.transport_dest,
@@ -13063,12 +13811,11 @@ impl NetworkFixture {
                             );
                             let clone_state = state.clone.as_ref().expect("clone progress state");
                             let (render_hash, rendered_bytes) = render_mock_network_progress(
-                                &self.transport_url,
-                                &self.transport_dest,
+                                &self.render_header,
                                 &clone_state.output_tail,
                                 &snapshot,
                                 self.bar_width,
-                                None,
+                                &mut render_scratch,
                             );
                             hash ^= render_hash;
 
@@ -13097,12 +13844,11 @@ impl NetworkFixture {
                         MockNetworkEvent::Cancelled => {
                             let clone_state = state.clone.as_ref().expect("clone progress state");
                             let (render_hash, rendered_bytes) = render_mock_network_progress(
-                                &self.transport_url,
-                                &self.transport_dest,
+                                &self.cancelled_render_header,
                                 &clone_state.output_tail,
                                 &last_snapshot,
                                 self.bar_width,
-                                Some("Fetch cancelled"),
+                                &mut render_scratch,
                             );
                             hash ^= render_hash;
                             metrics.total_frames = metrics.total_frames.saturating_add(1);
@@ -13209,13 +13955,13 @@ fn build_mock_network_progress_snapshots(
 #[cfg(any(test, feature = "benchmarks"))]
 fn apply_mock_network_progress(
     state: &mut AppState,
-    dest: &Path,
+    dest: &Arc<std::path::PathBuf>,
     snapshot: &MockNetworkProgressSnapshot,
 ) {
     let _ = dispatch_sync(
         state,
         Msg::Internal(InternalMsg::CloneRepoProgress {
-            dest: dest.to_path_buf(),
+            dest: Arc::clone(dest),
             line: snapshot.progress_line.clone(),
         }),
     );
@@ -13223,12 +13969,11 @@ fn apply_mock_network_progress(
 
 #[cfg(any(test, feature = "benchmarks"))]
 fn render_mock_network_progress(
-    url: &str,
-    dest: &Path,
-    output_tail: &[String],
+    header: &str,
+    output_tail: &VecDeque<String>,
     snapshot: &MockNetworkProgressSnapshot,
     bar_width: usize,
-    title: Option<&str>,
+    scratch: &mut String,
 ) -> (u64, usize) {
     let bar_width = bar_width.max(8);
     let fill = usize::try_from(
@@ -13240,39 +13985,30 @@ fn render_mock_network_progress(
     let percent =
         ((snapshot.bytes_done.saturating_mul(100)) / snapshot.bytes_total.max(1)).min(100);
 
-    let mut message = String::new();
-    message.push_str(title.unwrap_or("Fetching repository..."));
-    message.push('\n');
-    message.push_str(url);
-    message.push('\n');
-    message.push_str("-> ");
-    let _ = write!(message, "{}", dest.display());
+    crate::view::clone_progress::reset_clone_progress_message(scratch, header);
+    scratch.push('\n');
+    scratch.push('[');
+    for _ in 0..fill {
+        scratch.push('#');
+    }
+    for _ in 0..empty {
+        scratch.push('-');
+    }
     let _ = write!(
-        message,
-        "\n[{}{}] {percent:>3}% {}/{} objects | {} / {} KiB",
-        "#".repeat(fill),
-        "-".repeat(empty),
+        scratch,
+        "] {percent:>3}% {}/{} objects | {} / {} KiB",
         snapshot.objects_done,
         snapshot.objects_total,
         snapshot.bytes_done / 1024,
         snapshot.bytes_total / 1024
     );
 
-    if !output_tail.is_empty() {
-        message.push_str("\n\n");
-        let visible_start = output_tail.len().saturating_sub(12);
-        for (ix, line) in output_tail.iter().skip(visible_start).enumerate() {
-            if ix > 0 {
-                message.push('\n');
-            }
-            message.push_str(line);
-        }
-    }
+    crate::view::clone_progress::append_clone_progress_tail_window(scratch, output_tail, 12);
 
     let mut h = FxHasher::default();
-    message.hash(&mut h);
+    scratch.hash(&mut h);
     snapshot.seq.hash(&mut h);
-    (h.finish(), message.len())
+    (h.finish(), scratch.len())
 }
 
 // ---------------------------------------------------------------------------
@@ -13301,6 +14037,37 @@ pub struct DisplayMetrics {
     pub re_layout_passes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct DisplayRunCache {
+    hash: u64,
+    scale_factors_tested: u64,
+    total_layout_passes: u64,
+    total_rows_rendered: u64,
+    history_rows_per_pass: u64,
+    diff_rows_per_pass: u64,
+    layout_width_min_px: f64,
+    layout_width_max_px: f64,
+    windows_rendered: u64,
+    re_layout_passes: u64,
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+impl DisplayRunCache {
+    fn metrics(self) -> DisplayMetrics {
+        DisplayMetrics {
+            scale_factors_tested: self.scale_factors_tested,
+            total_layout_passes: self.total_layout_passes,
+            total_rows_rendered: self.total_rows_rendered,
+            history_rows_per_pass: self.history_rows_per_pass,
+            diff_rows_per_pass: self.diff_rows_per_pass,
+            layout_width_min_px: self.layout_width_min_px,
+            layout_width_max_px: self.layout_width_max_px,
+            windows_rendered: self.windows_rendered,
+            re_layout_passes: self.re_layout_passes,
+        }
+    }
+}
+
 pub struct DisplayFixture {
     scenario: DisplayScenario,
     history: HistoryListScrollFixture,
@@ -13314,6 +14081,7 @@ pub struct DisplayFixture {
     /// Sidebar and details widths (for layout computation).
     sidebar_w: f32,
     details_w: f32,
+    cache: DisplayRunCache,
 }
 
 impl DisplayFixture {
@@ -13333,7 +14101,7 @@ impl DisplayFixture {
         sidebar_w: f32,
         details_w: f32,
     ) -> Self {
-        Self {
+        let mut fixture = Self {
             scenario: DisplayScenario::RenderCostByScale,
             history: HistoryListScrollFixture::new(
                 history_commits.max(1),
@@ -13347,7 +14115,10 @@ impl DisplayFixture {
             base_window_width: base_window_width.max(400.0),
             sidebar_w,
             details_w,
-        }
+            cache: DisplayRunCache::default(),
+        };
+        fixture.cache = fixture.compute_cache();
+        fixture
     }
 
     /// `two_windows_same_repo`: render two viewports from the same repo state
@@ -13363,7 +14134,7 @@ impl DisplayFixture {
         sidebar_w: f32,
         details_w: f32,
     ) -> Self {
-        Self {
+        let mut fixture = Self {
             scenario: DisplayScenario::TwoWindowsSameRepo,
             history: HistoryListScrollFixture::new(
                 history_commits.max(1),
@@ -13377,7 +14148,10 @@ impl DisplayFixture {
             base_window_width: base_window_width.max(400.0),
             sidebar_w,
             details_w,
-        }
+            cache: DisplayRunCache::default(),
+        };
+        fixture.cache = fixture.compute_cache();
+        fixture
     }
 
     /// `window_move_between_dpis`: render at 1x, then re-render at 2x to
@@ -13393,7 +14167,7 @@ impl DisplayFixture {
         sidebar_w: f32,
         details_w: f32,
     ) -> Self {
-        Self {
+        let mut fixture = Self {
             scenario: DisplayScenario::WindowMoveBetweenDpis,
             history: HistoryListScrollFixture::new(
                 history_commits.max(1),
@@ -13407,28 +14181,31 @@ impl DisplayFixture {
             base_window_width: base_window_width.max(400.0),
             sidebar_w,
             details_w,
-        }
+            cache: DisplayRunCache::default(),
+        };
+        fixture.cache = fixture.compute_cache();
+        fixture
     }
 
     pub fn run(&self) -> u64 {
-        self.run_internal().0
+        self.cache.hash
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn run_with_metrics(&self) -> (u64, DisplayMetrics) {
-        self.run_internal()
+        (self.cache.hash, self.cache.metrics())
     }
 
-    fn run_internal(&self) -> (u64, DisplayMetrics) {
+    fn compute_cache(&self) -> DisplayRunCache {
         use crate::view::panes::main::pane_content_width_for_layout;
 
         let mut hash = 0u64;
         let total_history = self.history.total_rows();
         let history_window = self.history_window_rows.min(total_history.max(1));
-        let mut metrics = DisplayMetrics {
+        let mut cache = DisplayRunCache {
             history_rows_per_pass: bench_counter_u64(history_window),
             diff_rows_per_pass: bench_counter_u64(self.diff_window_rows),
-            ..DisplayMetrics::default()
+            ..DisplayRunCache::default()
         };
         let mut min_width: f32 = f32::MAX;
         let mut max_width: f32 = f32::MIN;
@@ -13453,20 +14230,20 @@ impl DisplayFixture {
                     if main_f > max_width {
                         max_width = main_f;
                     }
-                    metrics.total_layout_passes += 1;
+                    cache.total_layout_passes += 1;
 
                     // Render history window from the middle.
                     let history_start = total_history.saturating_sub(history_window) / 2;
                     hash ^= self.history.run_scroll_step(history_start, history_window);
-                    metrics.total_rows_rendered += history_window as u64;
+                    cache.total_rows_rendered += history_window as u64;
 
                     // Render diff window.
                     hash ^= self.diff.run_split_first_window(self.diff_window_rows);
-                    metrics.total_rows_rendered += self.diff_window_rows as u64;
+                    cache.total_rows_rendered += self.diff_window_rows as u64;
 
-                    metrics.windows_rendered += 1;
+                    cache.windows_rendered += 1;
                 }
-                metrics.scale_factors_tested = self.scale_factors.len() as u64;
+                cache.scale_factors_tested = self.scale_factors.len() as u64;
             }
             DisplayScenario::TwoWindowsSameRepo => {
                 // Two concurrent viewports at the same scale.
@@ -13482,33 +14259,33 @@ impl DisplayFixture {
                 hash ^= main_f.to_bits() as u64;
                 min_width = main_f;
                 max_width = main_f;
-                metrics.total_layout_passes += 1;
+                cache.total_layout_passes += 1;
 
                 // Window 1: history from top.
                 let history_start_1 = 0;
                 hash ^= self
                     .history
                     .run_scroll_step(history_start_1, history_window);
-                metrics.total_rows_rendered += history_window as u64;
-                metrics.windows_rendered += 1;
+                cache.total_rows_rendered += history_window as u64;
+                cache.windows_rendered += 1;
 
                 // Window 1: diff.
                 hash ^= self.diff.run_split_first_window(self.diff_window_rows);
-                metrics.total_rows_rendered += self.diff_window_rows as u64;
+                cache.total_rows_rendered += self.diff_window_rows as u64;
 
                 // Window 2: history from bottom.
                 let history_start_2 = total_history.saturating_sub(history_window);
                 hash ^= self
                     .history
                     .run_scroll_step(history_start_2, history_window);
-                metrics.total_rows_rendered += history_window as u64;
-                metrics.windows_rendered += 1;
+                cache.total_rows_rendered += history_window as u64;
+                cache.windows_rendered += 1;
 
                 // Window 2: diff (inline view instead of split).
                 hash ^= self.diff.run_inline_first_window(self.diff_window_rows);
-                metrics.total_rows_rendered += self.diff_window_rows as u64;
+                cache.total_rows_rendered += self.diff_window_rows as u64;
 
-                metrics.scale_factors_tested = 1;
+                cache.scale_factors_tested = 1;
             }
             DisplayScenario::WindowMoveBetweenDpis => {
                 // Initial render at 1x.
@@ -13525,14 +14302,14 @@ impl DisplayFixture {
                 hash ^= main_1x_f.to_bits() as u64;
                 min_width = main_1x_f;
                 max_width = main_1x_f;
-                metrics.total_layout_passes += 1;
+                cache.total_layout_passes += 1;
 
                 let history_start = total_history.saturating_sub(history_window) / 2;
                 hash ^= self.history.run_scroll_step(history_start, history_window);
-                metrics.total_rows_rendered += history_window as u64;
+                cache.total_rows_rendered += history_window as u64;
                 hash ^= self.diff.run_split_first_window(self.diff_window_rows);
-                metrics.total_rows_rendered += self.diff_window_rows as u64;
-                metrics.windows_rendered += 1;
+                cache.total_rows_rendered += self.diff_window_rows as u64;
+                cache.windows_rendered += 1;
 
                 // Re-render at higher DPI (simulates monitor move).
                 let scale_hi = self.scale_factors.last().copied().unwrap_or(2);
@@ -13552,23 +14329,23 @@ impl DisplayFixture {
                 if main_hi_f > max_width {
                     max_width = main_hi_f;
                 }
-                metrics.re_layout_passes += 1;
-                metrics.total_layout_passes += 1;
+                cache.re_layout_passes += 1;
+                cache.total_layout_passes += 1;
 
                 // Full re-render at new scale — both history and diff.
                 hash ^= self.history.run_scroll_step(history_start, history_window);
-                metrics.total_rows_rendered += history_window as u64;
+                cache.total_rows_rendered += history_window as u64;
                 hash ^= self.diff.run_split_first_window(self.diff_window_rows);
-                metrics.total_rows_rendered += self.diff_window_rows as u64;
-                metrics.windows_rendered += 1;
+                cache.total_rows_rendered += self.diff_window_rows as u64;
+                cache.windows_rendered += 1;
 
-                metrics.scale_factors_tested = self.scale_factors.len() as u64;
+                cache.scale_factors_tested = self.scale_factors.len() as u64;
             }
         }
 
-        metrics.layout_width_min_px = min_width as f64;
-        metrics.layout_width_max_px = max_width as f64;
-
-        (hash, metrics)
+        cache.hash = hash;
+        cache.layout_width_min_px = min_width as f64;
+        cache.layout_width_max_px = max_width as f64;
+        cache
     }
 }

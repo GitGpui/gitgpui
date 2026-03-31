@@ -1,8 +1,12 @@
 use crate::msg::RepoCommandKind;
+use crate::msg::RepoPath;
 use crate::session;
-use gitcomet_core::conflict_session::ConflictSession;
+use gitcomet_core::conflict_session::{
+    ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
+};
 use gitcomet_core::domain::*;
 use gitcomet_core::services::BlameLine;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -133,7 +137,7 @@ impl RepoLoadsInFlight {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictFile {
-    pub path: PathBuf,
+    pub path: RepoPath,
     pub base_bytes: Option<Arc<[u8]>>,
     pub ours_bytes: Option<Arc<[u8]>>,
     pub theirs_bytes: Option<Arc<[u8]>>,
@@ -142,6 +146,73 @@ pub struct ConflictFile {
     pub ours: Option<Arc<str>>,
     pub theirs: Option<Arc<str>>,
     pub current: Option<Arc<str>>,
+}
+
+impl ConflictFile {
+    /// Build a conflict file from stage/current parts, canonicalizing UTF-8
+    /// payloads down to text-only storage.
+    pub fn from_loaded_stage_parts(
+        path: impl Into<RepoPath>,
+        base: ConflictStageParts,
+        ours: ConflictStageParts,
+        theirs: ConflictStageParts,
+        current: ConflictStageParts,
+    ) -> Self {
+        let (base_bytes, base) = canonicalize_stage_parts(base.0, base.1);
+        let (ours_bytes, ours) = canonicalize_stage_parts(ours.0, ours.1);
+        let (theirs_bytes, theirs) = canonicalize_stage_parts(theirs.0, theirs.1);
+        let (current_bytes, current) = canonicalize_stage_parts(current.0, current.1);
+
+        Self {
+            path: path.into(),
+            base_bytes,
+            ours_bytes,
+            theirs_bytes,
+            current_bytes,
+            base,
+            ours,
+            theirs,
+            current,
+        }
+    }
+
+    /// Build a conflict file directly from an existing session without
+    /// round-tripping through staged parts first.
+    pub fn from_shared_conflict_session(
+        path: impl Into<RepoPath>,
+        session: &ConflictSession,
+    ) -> Self {
+        let (base_bytes, base) = conflict_file_side_from_payload(&session.base);
+        let (ours_bytes, ours) = conflict_file_side_from_payload(&session.ours);
+        let (theirs_bytes, theirs) = conflict_file_side_from_payload(&session.theirs);
+        let (current_bytes, current) = session
+            .current
+            .as_ref()
+            .map(conflict_file_side_from_payload)
+            .unwrap_or((None, None));
+
+        Self {
+            path: path.into(),
+            base_bytes,
+            ours_bytes,
+            theirs_bytes,
+            current_bytes,
+            base,
+            ours,
+            theirs,
+            current,
+        }
+    }
+}
+
+fn conflict_file_side_from_payload(
+    payload: &ConflictPayload,
+) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
+    match payload {
+        ConflictPayload::Text(text) => (None, Some(text.clone())),
+        ConflictPayload::Binary(bytes) => (Some(bytes.clone()), None),
+        ConflictPayload::Absent => (None, None),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -221,11 +292,11 @@ pub enum AppNotificationKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CloneOpState {
-    pub url: String,
-    pub dest: PathBuf,
+    pub url: Arc<str>,
+    pub dest: Arc<PathBuf>,
     pub status: CloneOpStatus,
     pub seq: u64,
-    pub output_tail: Vec<String>,
+    pub output_tail: VecDeque<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -789,7 +860,7 @@ mod tests {
         repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: vec![Commit {
                 id: CommitId("c1".into()),
-                parent_ids: Vec::new(),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                 summary: "s1".into(),
                 author: "a".into(),
                 time: SystemTime::UNIX_EPOCH,
@@ -932,7 +1003,7 @@ mod tests {
         let page = Arc::new(LogPage {
             commits: vec![Commit {
                 id: CommitId("c1".into()),
-                parent_ids: Vec::new(),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                 summary: "s1".into(),
                 author: "a".into(),
                 time: SystemTime::UNIX_EPOCH,

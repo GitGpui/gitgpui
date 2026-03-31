@@ -949,11 +949,11 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
             repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(diff));
             repo.diff_state.diff_file_rev = 1;
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: path.clone(),
-                    old: Some(old_text.clone()),
-                    new: Some(new_text.clone()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(old_text.clone()),
+                    Some(new_text.clone()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -3322,11 +3322,11 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
             repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(file_diff));
             repo.diff_state.diff_file_rev = 1;
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: path.clone(),
-                    old: Some(old_text.clone()),
-                    new: Some(new_text.clone()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(old_text.clone()),
+                    Some(new_text.clone()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -3619,11 +3619,11 @@ fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppC
                 gitcomet_core::domain::DiffArea::Unstaged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
+                gitcomet_core::domain::FileDiffText::new(
                     path,
-                    old: Some(old_text.to_string()),
-                    new: Some(new_text),
-                },
+                    Some(old_text.to_string()),
+                    Some(new_text),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -3745,11 +3745,11 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
                 );
                 repo.diff_state.diff_file_rev = diff_file_rev;
                 repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                    gitcomet_core::domain::FileDiffText {
-                        path: path.clone(),
-                        old: Some(old_text.clone()),
-                        new: Some(new_text.clone()),
-                    },
+                    gitcomet_core::domain::FileDiffText::new(
+                        path.clone(),
+                        Some(old_text.clone()),
+                        Some(new_text.clone()),
+                    ),
                 )));
 
                 let next_state = app_state_with_repo(repo, repo_id);
@@ -7704,11 +7704,11 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
             repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(file_diff));
             repo.diff_state.diff_file_rev = 1;
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: path.clone(),
-                    old: Some(old_text.clone()),
-                    new: Some(new_text.clone()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(old_text.clone()),
+                    Some(new_text.clone()),
+                ),
             )));
 
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);

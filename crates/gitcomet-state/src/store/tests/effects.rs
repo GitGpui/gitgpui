@@ -256,11 +256,11 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         spec: RepoSpec {
             workdir: base.clone(),
         },
-        diff: gitcomet_core::domain::FileDiffText {
-            path: rel.clone(),
-            old: Some("ours\n".to_string()),
-            new: Some("theirs\n".to_string()),
-        },
+        diff: gitcomet_core::domain::FileDiffText::new(
+            rel.clone(),
+            Some("ours\n".to_string()),
+            Some("theirs\n".to_string()),
+        ),
     });
 
     let executor = super::executor::TaskExecutor::new(1);

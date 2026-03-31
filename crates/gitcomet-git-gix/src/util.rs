@@ -3,7 +3,7 @@ use gitcomet_core::auth::{
     GITCOMET_AUTH_KIND_USERNAME_PASSWORD, GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV,
     GitAuthKind, StagedGitAuth, take_staged_git_auth,
 };
-use gitcomet_core::domain::{Commit, CommitId, LogPage};
+use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::process::configure_background_command;
 use gitcomet_core::services::{CommandOutput, Result};
@@ -753,7 +753,7 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
         let parent_ids = parents
             .split_whitespace()
             .map(|p| CommitId(p.into()))
-            .collect::<Vec<_>>();
+            .collect::<CommitParentIds>();
 
         next_commit_id_cache = parent_ids.first().cloned();
 
@@ -1140,8 +1140,8 @@ mod tests {
             CommitId("4c8124ffcf4039d292442eeccabdeca5af5c5017".into())
         );
         assert_eq!(
-            commit.parent_ids,
-            vec![CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".into())]
+            commit.parent_ids.as_slice(),
+            &[CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".into())]
         );
         assert_eq!(&*commit.author, "Tom Preston-Werner");
         assert_eq!(&*commit.summary, "implement Grit#heads");

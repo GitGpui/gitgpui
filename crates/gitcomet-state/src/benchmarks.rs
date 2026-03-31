@@ -14,6 +14,15 @@ pub fn with_set_active_repo_sync<T>(
     crate::store::with_set_active_repo_inline_for_bench(state, repo_id, f)
 }
 
+pub fn with_reorder_repo_tabs_sync<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    insert_before: Option<RepoId>,
+    f: impl FnOnce(&AppState, &[Effect]) -> T,
+) -> T {
+    crate::store::with_reorder_repo_tabs_inline_for_bench(state, repo_id, insert_before, f)
+}
+
 pub fn with_select_diff_sync<T>(
     state: &mut AppState,
     repo_id: RepoId,
@@ -171,6 +180,43 @@ mod tests {
             );
         });
         assert_eq!(state.active_repo, Some(RepoId(2)));
+    }
+
+    #[test]
+    fn reorder_repo_tabs_sync_uses_reducer_path() {
+        let mut state = AppState::default();
+
+        let mut repo1 = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/bench-repo-tab-1"),
+            },
+        );
+        repo1.open = Loadable::Ready(());
+
+        let mut repo2 = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/bench-repo-tab-2"),
+            },
+        );
+        repo2.open = Loadable::Ready(());
+
+        state.repos.push(repo1);
+        state.repos.push(repo2);
+        state.active_repo = Some(RepoId(1));
+
+        with_reorder_repo_tabs_sync(&mut state, RepoId(1), None, |_state, effects| {
+            assert!(matches!(
+                effects,
+                [Effect::PersistSession {
+                    repo_id: Some(RepoId(1)),
+                    action: "reordering repository tabs",
+                }]
+            ));
+        });
+        assert_eq!(state.repos[0].id, RepoId(2));
+        assert_eq!(state.repos[1].id, RepoId(1));
     }
 
     #[test]

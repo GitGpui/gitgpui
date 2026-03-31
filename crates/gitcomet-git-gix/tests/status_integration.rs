@@ -1703,6 +1703,135 @@ fn diff_parsed_commit_rename_preserves_rename_headers_and_hunks() {
 }
 
 #[test]
+fn diff_parsed_commit_added_file_matches_git_show_output() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "docs/added.txt", "one\ntwo");
+    run_git(repo, &["add", "docs/added.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add file"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let diff = opened
+        .diff_parsed(&DiffTarget::Commit {
+            commit_id: commit_id.clone(),
+            path: Some(PathBuf::from("docs/added.txt")),
+        })
+        .expect("parse added file commit diff");
+    let expected = run_git_output(
+        repo,
+        &[
+            "show",
+            "--no-ext-diff",
+            "--pretty=format:",
+            commit_id.as_ref(),
+            "--",
+            "docs/added.txt",
+        ],
+    );
+    let actual = diff
+        .lines
+        .iter()
+        .map(|line| line.text.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(actual, expected.trim_end_matches('\n'));
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Header
+                && line.text.as_ref().starts_with("new file mode ")),
+    );
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Context
+                && line.text.as_ref() == "\\ No newline at end of file"),
+    );
+}
+
+#[test]
+fn diff_parsed_commit_deleted_file_matches_git_show_output() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "docs/delete-me.txt", "one\ntwo");
+    run_git(repo, &["add", "docs/delete-me.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+    run_git(repo, &["rm", "docs/delete-me.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "delete file"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let diff = opened
+        .diff_parsed(&DiffTarget::Commit {
+            commit_id: commit_id.clone(),
+            path: Some(PathBuf::from("docs/delete-me.txt")),
+        })
+        .expect("parse deleted file commit diff");
+    let expected = run_git_output(
+        repo,
+        &[
+            "show",
+            "--no-ext-diff",
+            "--pretty=format:",
+            commit_id.as_ref(),
+            "--",
+            "docs/delete-me.txt",
+        ],
+    );
+    let actual = diff
+        .lines
+        .iter()
+        .map(|line| line.text.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_eq!(actual, expected.trim_end_matches('\n'));
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Header
+                && line.text.as_ref().starts_with("deleted file mode ")),
+    );
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Context
+                && line.text.as_ref() == "\\ No newline at end of file"),
+    );
+}
+
+#[test]
 fn diff_working_tree_with_absolute_file_path_reads_current_file() {
     if !require_git_shell_for_status_integration_tests() {
         return;
@@ -2031,18 +2160,39 @@ fn status_and_conflict_stages_cover_all_conflict_kinds() {
             "base stage mismatch for {}",
             fixture.path
         );
+        if stages.base.is_some() {
+            assert!(
+                stages.base_bytes.is_none(),
+                "utf-8 base stage should not retain duplicate bytes for {}",
+                fixture.path
+            );
+        }
         assert_eq!(
             stages.ours.is_some(),
             fixture.has_ours,
             "ours stage mismatch for {}",
             fixture.path
         );
+        if stages.ours.is_some() {
+            assert!(
+                stages.ours_bytes.is_none(),
+                "utf-8 ours stage should not retain duplicate bytes for {}",
+                fixture.path
+            );
+        }
         assert_eq!(
             stages.theirs.is_some(),
             fixture.has_theirs,
             "theirs stage mismatch for {}",
             fixture.path
         );
+        if stages.theirs.is_some() {
+            assert!(
+                stages.theirs_bytes.is_none(),
+                "utf-8 theirs stage should not retain duplicate bytes for {}",
+                fixture.path
+            );
+        }
 
         let session = opened
             .conflict_session(path)

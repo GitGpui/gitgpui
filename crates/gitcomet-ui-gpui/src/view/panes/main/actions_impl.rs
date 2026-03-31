@@ -1226,6 +1226,7 @@ impl MainPaneView {
             conflict_rev: repo.conflict_state.conflict_rev,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
+            resolved_outline_gutter_rows: Vec::new(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode,
@@ -1526,6 +1527,7 @@ impl MainPaneView {
                 .resolved_outline
                 .sources_index
                 .clear();
+            self.conflict_resolver.resolved_outline_gutter_rows.clear();
         } else {
             self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
         }
@@ -2559,7 +2561,7 @@ mod tests {
     #[test]
     fn conflict_file_source_fingerprint_is_stable_across_fresh_allocations() {
         let make_file = || gitcomet_state::model::ConflictFile {
-            path: std::path::PathBuf::from("index.html"),
+            path: std::path::PathBuf::from("index.html").into(),
             base_bytes: Some(std::sync::Arc::<[u8]>::from(b"base\nbytes\n".as_slice())),
             ours_bytes: None,
             theirs_bytes: Some(std::sync::Arc::<[u8]>::from(b"theirs\nbytes\n".as_slice())),

@@ -81,12 +81,29 @@ struct TreeIndexCacheEntry {
     staged: Vec<gitcomet_core::domain::FileStatus>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LogHeadPageCacheKey {
+    head_oid: Option<gix::ObjectId>,
+    limit: usize,
+    last_seen: Option<CommitId>,
+    resume_from: Option<CommitId>,
+}
+
+#[derive(Clone, Debug)]
+struct LogHeadPageCacheEntry {
+    key: LogHeadPageCacheKey,
+    page: LogPage,
+}
+
+const LOG_HEAD_PAGE_CACHE_LIMIT: usize = 32;
+
 pub(crate) struct GixRepo {
     spec: RepoSpec,
     _repo: gix::ThreadSafeRepository,
     gitlink_status_capability: std::sync::Mutex<Option<GitlinkStatusCapabilityCacheEntry>>,
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
+    log_head_page_cache: std::sync::Mutex<Vec<LogHeadPageCacheEntry>>,
 }
 
 impl GixRepo {
@@ -97,6 +114,7 @@ impl GixRepo {
             gitlink_status_capability: std::sync::Mutex::new(None),
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
+            log_head_page_cache: std::sync::Mutex::new(Vec::new()),
         }
     }
 

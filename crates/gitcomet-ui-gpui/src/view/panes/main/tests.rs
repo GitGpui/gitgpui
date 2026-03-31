@@ -86,7 +86,7 @@ fn repo_with_conflict_file(
 
 fn text_conflict_file(path: &Path, current: &str) -> ConflictFile {
     ConflictFile {
-        path: path.to_path_buf(),
+        path: path.to_path_buf().into(),
         base_bytes: None,
         ours_bytes: None,
         theirs_bytes: None,
@@ -100,7 +100,7 @@ fn text_conflict_file(path: &Path, current: &str) -> ConflictFile {
 
 fn binary_conflict_file(path: &Path) -> ConflictFile {
     ConflictFile {
-        path: path.to_path_buf(),
+        path: path.to_path_buf().into(),
         base_bytes: Some(Arc::from(&b"base"[..])),
         ours_bytes: Some(Arc::from(&b"ours"[..])),
         theirs_bytes: Some(Arc::from(&b"theirs"[..])),

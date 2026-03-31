@@ -505,11 +505,11 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                 gitcomet_core::domain::DiffArea::Staged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: file_rel.clone(),
-                    old: Some("one\ntwo\n".to_string()),
-                    new: None,
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    file_rel.clone(),
+                    Some("one\ntwo\n".to_string()),
+                    None,
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);

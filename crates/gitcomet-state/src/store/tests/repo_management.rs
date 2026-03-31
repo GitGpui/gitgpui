@@ -255,7 +255,7 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-            dest: dest.clone(),
+            dest: Arc::new(dest.clone()),
             line: "   ".to_string(),
         }),
     );
@@ -265,7 +265,7 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
             &id_alloc,
             &mut state,
             Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-                dest: dest.clone(),
+                dest: Arc::new(dest.clone()),
                 line: format!("line-{i}"),
             }),
         );
@@ -274,8 +274,8 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
     let op = state.clone.as_ref().expect("clone op set");
     assert_eq!(op.seq, 85);
     assert_eq!(op.output_tail.len(), 80);
-    assert_eq!(op.output_tail.first().map(String::as_str), Some("line-4"));
-    assert_eq!(op.output_tail.last().map(String::as_str), Some("line-83"));
+    assert_eq!(op.output_tail.front().map(String::as_str), Some("line-4"));
+    assert_eq!(op.output_tail.back().map(String::as_str), Some("line-83"));
 }
 
 #[test]
@@ -300,7 +300,7 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-            dest: PathBuf::from("/tmp/other"),
+            dest: Arc::new(PathBuf::from("/tmp/other")),
             line: "ignored".to_string(),
         }),
     );
@@ -318,7 +318,7 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-            dest: dest.clone(),
+            dest: Arc::new(dest.clone()),
             line: "ignored-too".to_string(),
         }),
     );
@@ -334,7 +334,7 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-            dest,
+            dest: Arc::new(dest),
             line: "no-op".to_string(),
         }),
     );
@@ -370,8 +370,8 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
     );
     {
         let op = state.clone.as_ref().expect("clone op set");
-        assert_eq!(op.url, "file:///tmp/success.git");
-        assert_eq!(op.dest, dest);
+        assert_eq!(&*op.url, "file:///tmp/success.git");
+        assert_eq!(op.dest.as_ref(), &dest);
         assert!(matches!(op.status, CloneOpStatus::FinishedOk));
         assert_eq!(op.seq, 1);
     }
@@ -387,7 +387,7 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
         }),
     );
     let op = state.clone.as_ref().expect("clone op set");
-    assert_eq!(op.url, "file:///tmp/failure.git");
+    assert_eq!(&*op.url, "file:///tmp/failure.git");
     assert_eq!(op.seq, 2);
     match &op.status {
         CloneOpStatus::FinishedErr(message) => {
@@ -426,8 +426,8 @@ fn clone_repo_finished_replaces_state_when_destination_differs() {
     );
 
     let op = state.clone.as_ref().expect("clone op set");
-    assert_eq!(op.url, "file:///tmp/replacement.git");
-    assert_eq!(op.dest, PathBuf::from("/tmp/replacement"));
+    assert_eq!(&*op.url, "file:///tmp/replacement.git");
+    assert_eq!(op.dest.as_ref(), &PathBuf::from("/tmp/replacement"));
     assert!(matches!(op.status, CloneOpStatus::FinishedOk));
     assert_eq!(op.seq, 1);
     assert!(op.output_tail.is_empty());
@@ -1064,7 +1064,7 @@ fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
         let content: Arc<str> = Arc::from("conflict contents");
         repo1_state.conflict_state.conflict_file =
             Loadable::Ready(Some(crate::model::ConflictFile {
-                path: conflict_path.clone(),
+                path: conflict_path.clone().into(),
                 base_bytes: None,
                 ours_bytes: None,
                 theirs_bytes: None,
