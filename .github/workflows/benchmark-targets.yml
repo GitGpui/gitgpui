@@ -30,8 +30,6 @@ jobs:
             runs_on: ubuntu-latest
           - name: macos / apple-silicon
             runs_on: macos-latest
-          - name: macos / intel
-            runs_on: macos-15-intel
           - name: windows / x86_64
             runs_on: windows-latest
     steps:
