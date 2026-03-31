@@ -81,6 +81,13 @@ impl PathDisplayCache {
         self.recent_entries + self.previous_entries
     }
 
+    #[cfg(feature = "benchmarks")]
+    pub(super) fn clear(&mut self) {
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);
+        *self = Self::default();
+    }
+
     fn rotate_generations(&mut self) {
         #[cfg(any(debug_assertions, feature = "benchmarks"))]
         PATH_DISPLAY_BENCH_COUNTERS.with(PathDisplayBenchCounters::record_clear);

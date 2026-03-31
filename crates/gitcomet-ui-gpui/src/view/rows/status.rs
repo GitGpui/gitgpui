@@ -5,13 +5,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) struct StatusSelectionBenchSnapshot {
     pub position_scan_steps: u64,
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(test)]
 pub(in crate::view) fn bench_snapshot_status_selection() -> StatusSelectionBenchSnapshot {
     #[cfg(any(debug_assertions, feature = "benchmarks"))]
     {
@@ -25,7 +25,7 @@ pub(in crate::view) fn bench_snapshot_status_selection() -> StatusSelectionBench
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(test)]
 pub(in crate::view) fn bench_reset_status_selection() {
     #[cfg(any(debug_assertions, feature = "benchmarks"))]
     {

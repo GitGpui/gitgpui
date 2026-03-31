@@ -242,7 +242,7 @@ impl AppTheme {
     }
 
     /// GitComet's default light theme loaded from an embedded JSON definition.
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(test)]
     pub fn gitcomet_light() -> Self {
         Self::from_key(DEFAULT_LIGHT_THEME_KEY)
             .unwrap_or_else(|| panic!("missing default light theme `{DEFAULT_LIGHT_THEME_KEY}`"))

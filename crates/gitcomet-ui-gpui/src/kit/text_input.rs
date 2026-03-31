@@ -3918,8 +3918,7 @@ fn truncate_line_for_shaping(line_text: &str, max_bytes: usize) -> (SharedString
 #[cfg(feature = "benchmarks")]
 #[inline]
 pub(crate) fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64, usize) {
-    let info = shaping_slice_info(text, max_bytes);
-    (info.hash(), info.capped_len)
+    hash_shaping_slice(text, max_bytes)
 }
 
 #[cfg(feature = "benchmarks")]
@@ -4754,20 +4753,6 @@ fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut FxHasher) {
         run.color.a.to_bits().hash(hasher);
     }
     total.hash(hasher);
-}
-
-#[cfg(feature = "benchmarks")]
-pub(crate) fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64, usize) {
-    let (truncated, hash) = truncate_line_for_shaping(text, max_bytes.max(1));
-    (hash, truncated.len())
-}
-
-#[cfg(feature = "benchmarks")]
-pub(crate) fn benchmark_text_input_wrap_rows_for_line(
-    line_text: &str,
-    wrap_columns: usize,
-) -> usize {
-    estimate_wrap_rows_for_line(line_text, wrap_columns)
 }
 
 #[cfg(feature = "benchmarks")]

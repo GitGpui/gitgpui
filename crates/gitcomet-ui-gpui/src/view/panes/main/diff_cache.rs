@@ -13,7 +13,7 @@ mod patch_diff;
 pub(in crate::view) use self::file_diff::bench_build_file_diff_providers;
 pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
 use self::file_diff::{build_file_diff_cache_rebuild, build_inline_text, file_diff_text_signature};
-#[allow(unused_imports)]
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
 use self::patch_diff::{
@@ -23,28 +23,6 @@ use self::patch_diff::{
 pub(in crate::view) use self::patch_diff::{
     PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
 };
-
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) fn render_svg_image_diff_preview(
-    svg_bytes: &[u8],
-) -> Option<Arc<gpui::RenderImage>> {
-    image_cache::render_svg_image_diff_preview(svg_bytes)
-}
-
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) fn bench_build_file_diff_providers(
-    old: &str,
-    new: &str,
-    _page_size: usize,
-) -> (Arc<PagedFileDiffRows>, Arc<PagedFileDiffInlineRows>) {
-    let file = gitcomet_core::domain::FileDiffText::new(
-        std::path::PathBuf::from("bench.rs"),
-        Some(old.to_owned()),
-        Some(new.to_owned()),
-    );
-    let rebuild = build_file_diff_cache_rebuild(&file, std::path::Path::new("/tmp"));
-    (rebuild.row_provider, rebuild.inline_row_provider)
-}
 
 const PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES: usize = 256;
 const FILE_DIFF_PAGE_SIZE: usize = 256;

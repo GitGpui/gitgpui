@@ -653,57 +653,6 @@ pub(in super::super) fn build_cached_diff_styled_text_with_palette(
     )
 }
 
-#[cfg(feature = "benchmarks")]
-pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_syntax_kind(
-    theme: AppTheme,
-    highlight_palette: &SyntaxHighlightPalette,
-    request: DiffTextBuildRequest<'_>,
-    kind: SyntaxTokenKind,
-) -> CachedDiffStyledText {
-    if request.text.is_empty() {
-        return empty_styled_text();
-    }
-
-    let tokens = [syntax::SyntaxToken {
-        range: 0..request.text.len(),
-        kind,
-    }];
-
-    if request.word_ranges.is_empty() && request.query.trim().is_empty() {
-        return SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|buf| {
-            prepared_document_line_highlights_from_tokens_into_with_palette(
-                highlight_palette,
-                request.text.len(),
-                &tokens,
-                buf,
-            );
-            styled_text_to_cached_from_buf(request.text, buf)
-        });
-    }
-
-    build_styled_text_fused(
-        theme,
-        FusedDiffTextBuildRequest {
-            build: request,
-            syntax_tokens_override: Some(&tokens),
-        },
-    )
-}
-
-#[cfg(feature = "benchmarks")]
-pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_string(
-    theme: AppTheme,
-    highlight_palette: &SyntaxHighlightPalette,
-    request: DiffTextBuildRequest<'_>,
-) -> CachedDiffStyledText {
-    build_cached_diff_styled_text_with_palette_and_full_text_syntax_kind(
-        theme,
-        highlight_palette,
-        request,
-        SyntaxTokenKind::String,
-    )
-}
-
 thread_local! {
     pub(super) static SYNTAX_HIGHLIGHTS_BUF: RefCell<Vec<DiffTextHighlight>> = const { RefCell::new(Vec::new()) };
     pub(super) static SINGLE_LINE_STYLED_TEXT_CACHE: RefCell<SingleLineStyledTextCache> = RefCell::new(SingleLineStyledTextCache::new());
@@ -827,48 +776,6 @@ fn build_cached_diff_styled_text_with_optional_palette(
             build: request,
             syntax_tokens_override: None,
         },
-    )
-}
-
-#[cfg(feature = "benchmarks")]
-pub(in super::super) fn build_cached_diff_styled_text_with_source_identity(
-    theme: AppTheme,
-    text: &str,
-    source_identity: Option<DiffTextSourceIdentity>,
-    word_ranges: &[Range<usize>],
-    query: &str,
-    language: Option<DiffSyntaxLanguage>,
-    syntax_mode: DiffSyntaxMode,
-    word_color: Option<gpui::Rgba>,
-) -> CachedDiffStyledText {
-    if let Some(identity) = source_identity {
-        let _ = identity.0;
-    }
-    build_cached_diff_styled_text(
-        theme,
-        text,
-        word_ranges,
-        query,
-        language,
-        syntax_mode,
-        word_color,
-    )
-}
-
-#[cfg(feature = "benchmarks")]
-pub(in super::super) fn build_cached_diff_styled_text_with_palette(
-    theme: AppTheme,
-    _palette: &SyntaxHighlightPalette,
-    request: DiffTextBuildRequest<'_>,
-) -> CachedDiffStyledText {
-    build_cached_diff_styled_text(
-        theme,
-        request.text,
-        request.word_ranges,
-        request.query,
-        request.syntax.language,
-        request.syntax.mode,
-        request.word_color,
     )
 }
 
@@ -1212,22 +1119,6 @@ pub(super) fn prepared_document_line_highlights_from_tokens(
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
     let mut highlights = Vec::with_capacity(tokens.len());
     prepared_document_line_highlights_from_tokens_into(theme, line_len, tokens, &mut highlights);
-    highlights
-}
-
-#[cfg(feature = "benchmarks")]
-fn prepared_document_line_highlights_from_tokens_with_palette(
-    highlight_palette: &SyntaxHighlightPalette,
-    line_len: usize,
-    tokens: &[syntax::SyntaxToken],
-) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    let mut highlights = Vec::with_capacity(tokens.len());
-    prepared_document_line_highlights_from_tokens_into_with_palette(
-        highlight_palette,
-        line_len,
-        tokens,
-        &mut highlights,
-    );
     highlights
 }
 

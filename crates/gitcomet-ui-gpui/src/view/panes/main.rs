@@ -13,9 +13,7 @@ mod preview;
 
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use diff_search::{
-    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, DiffSearchVisibleCandidates,
-    DiffSearchVisibleTrigramIndex, build_resolved_output_trigram_index, diff_search_query_reuse,
-    diff_search_split_row_texts_match_query,
+    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, diff_search_query_reuse,
 };
 pub(in crate::view) use helpers::*;
 

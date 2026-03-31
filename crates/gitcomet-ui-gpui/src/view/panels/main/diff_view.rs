@@ -2401,14 +2401,11 @@ impl MainPaneView {
                                             let main_w = (self.main_pane_content_width(cx)
                                                 - scrollbar_gutter)
                                                 .max(px(0.0));
-                                            let (available, min_col_w) =
-                                                diff_split_drag_params(main_w);
-                                            let (left_w, right_w) =
-                                                diff_split_column_widths_from_available(
-                                                    available,
-                                                    min_col_w,
-                                                    self.diff_split_ratio,
-                                                );
+                                            let (_, min_col_w) = diff_split_drag_params(main_w);
+                                            let (left_w, right_w) = diff_split_column_widths(
+                                                main_w,
+                                                self.diff_split_ratio,
+                                            );
 
                                             let resize_handle = |id: &'static str| {
                                                 div()

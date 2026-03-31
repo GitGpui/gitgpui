@@ -4091,7 +4091,7 @@ fn populate_block_bases_from_ancestor_impl(
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(test)]
 pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ancestor_text: &str) {
     populate_block_bases_from_ancestor_impl(segments, ancestor_text, None);
 }

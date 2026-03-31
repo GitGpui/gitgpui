@@ -403,53 +403,6 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
     }
 }
 
-#[cfg(feature = "benchmarks")]
-pub(in super::super) fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
-    theme: AppTheme,
-    _palette: &SyntaxHighlightPalette,
-    request: PreparedDiffTextBuildRequest<'_>,
-) -> PreparedDocumentLineStyledText {
-    build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
-        theme,
-        request.build.text,
-        request.build.word_ranges,
-        request.build.query,
-        request.build.syntax,
-        request.build.word_color,
-        request.prepared_line,
-    )
-}
-
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
-    theme: AppTheme,
-    language: Option<DiffSyntaxLanguage>,
-    old_source: PreparedDiffSyntaxTextSource,
-    new_source: PreparedDiffSyntaxTextSource,
-    rows: &[InlineDiffSyntaxOnlyRow<'_>],
-) -> Vec<PreparedDocumentLineStyledText> {
-    rows.iter()
-        .map(|row| {
-            build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
-                theme,
-                row.text,
-                &[],
-                "",
-                DiffSyntaxConfig {
-                    language,
-                    mode: DiffSyntaxMode::Auto,
-                },
-                None,
-                prepared_diff_syntax_line_for_inline_diff_row(
-                    old_source.document,
-                    new_source.document,
-                    row.line,
-                ),
-            )
-        })
-        .collect()
-}
-
 #[cfg(test)]
 pub(in crate::view) fn syntax_highlights_for_prepared_document_byte_range(
     theme: AppTheme,
@@ -554,11 +507,28 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_line_rang
 
 pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
     theme: AppTheme,
-    language: DiffSyntaxLanguage,
+    language: Option<DiffSyntaxLanguage>,
     old_source: PreparedDiffSyntaxTextSource,
     new_source: PreparedDiffSyntaxTextSource,
     rows: &[InlineDiffSyntaxOnlyRow<'_>],
 ) -> Vec<PreparedDocumentLineStyledText> {
+    let Some(language) = language else {
+        return rows
+            .iter()
+            .map(|row| {
+                PreparedDocumentLineStyledText::Cacheable(build_cached_diff_styled_text(
+                    theme,
+                    row.text,
+                    &[],
+                    "",
+                    None,
+                    DiffSyntaxMode::HeuristicOnly,
+                    None,
+                ))
+            })
+            .collect();
+    };
+
     #[derive(Clone, Copy)]
     struct SideRow<'a> {
         result_ix: usize,

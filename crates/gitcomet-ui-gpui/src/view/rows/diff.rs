@@ -144,7 +144,7 @@ impl MainPaneView {
                     let batched_styles =
                         build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
                             theme,
-                            language,
+                            Some(language),
                             PreparedDiffSyntaxTextSource {
                                 document: this.file_diff_split_prepared_syntax_document(
                                     DiffTextRegion::SplitLeft,

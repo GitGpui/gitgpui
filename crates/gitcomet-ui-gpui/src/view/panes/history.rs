@@ -224,7 +224,7 @@ pub(in crate::view) fn history_resize_state_visible_columns(
     Some(state.visible_columns)
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(test)]
 #[inline]
 pub(in crate::view) fn history_resize_state_visible_columns_for_current_width(
     available: Pixels,
@@ -264,7 +264,7 @@ pub(in crate::view) fn history_column_drag_clamped_width_for_state(
     next
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(test)]
 fn history_column_drag_clamped_width(
     handle: HistoryColResizeHandle,
     candidate: Pixels,
@@ -290,7 +290,7 @@ fn history_column_width_for_handle(
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
+#[cfg(test)]
 pub(in crate::view) fn history_resize_state_preserves_visible_columns(
     available: Pixels,
     layout: HistoryColumnDragLayout,
