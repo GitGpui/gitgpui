@@ -197,7 +197,7 @@ fn extract_merge_fixtures_e2e_writes_fixture_sets() {
 fn extract_merge_fixtures_e2e_non_repo_exits_two() {
     let non_repo = tempfile::Builder::new()
         .prefix("gitcomet-extract-non-repo-it-")
-        .tempdir_in("/tmp")
+        .tempdir()
         .expect("create non-repo dir outside repo");
     let out = tempfile::tempdir().expect("create output dir");
 

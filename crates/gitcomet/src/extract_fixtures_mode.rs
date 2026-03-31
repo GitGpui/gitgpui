@@ -177,7 +177,7 @@ mod tests {
     fn run_extract_merge_fixtures_errors_for_non_repo() {
         let non_repo = tempfile::Builder::new()
             .prefix("gitcomet-extract-non-repo-")
-            .tempdir_in("/tmp")
+            .tempdir()
             .expect("create temp dir outside repo");
         let out = tempfile::tempdir().expect("create output dir");
         let config = ExtractMergeFixturesConfig {

@@ -312,6 +312,11 @@ pub(super) use prepared::{
 pub(super) use prepared::{prepared_document_parse_mode, prepared_document_source_version};
 
 #[cfg(test)]
+pub(super) fn reset_prepared_syntax_cache() {
+    prepared::reset_prepared_syntax_cache();
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};

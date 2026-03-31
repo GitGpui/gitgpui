@@ -927,7 +927,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let outside_tmp = tempfile::Builder::new()
             .prefix("gitcomet-difftool-outside-")
-            .tempdir_in("/tmp")
+            .tempdir()
             .expect("create outside temp dir");
         let left = tmp.path().join("left");
         let right = tmp.path().join("right");

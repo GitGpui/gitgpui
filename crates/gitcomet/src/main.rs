@@ -769,7 +769,7 @@ mod tests {
     fn build_focused_mergetool_gui_config_errors_without_repo_root() {
         let tmp = tempfile::Builder::new()
             .prefix("gitcomet-mergetool-no-repo-")
-            .tempdir_in("/tmp")
+            .tempdir()
             .expect("create temp dir outside repo");
         let merged = tmp.path().join("outside-repo/merged.txt");
 

@@ -1357,6 +1357,7 @@ mod tests {
 
     #[test]
     fn nonblocking_prepared_document_byte_range_upgrades_after_chunk_build() {
+        syntax::reset_prepared_syntax_cache();
         let theme = AppTheme::gitcomet_dark();
         let text = "/* open comment\nstill comment */ let x = 1;";
         let line_starts = vec![0, "/* open comment\n".len()];
