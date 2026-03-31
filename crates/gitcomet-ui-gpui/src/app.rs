@@ -10,8 +10,9 @@ use gitcomet_state::store::AppStore;
 #[cfg(target_os = "macos")]
 use gpui::{Action, Menu, MenuItem, OsAction, SystemMenuType};
 use gpui::{
-    App, AppContext, Application, BorrowAppContext, Bounds, KeyBinding, TitlebarOptions, Window,
-    WindowBounds, WindowDecorations, WindowOptions, actions, point, px, size,
+    App, AppContext, Application, BorrowAppContext, Bounds, KeyBinding, Pixels, Point,
+    TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions, point, px,
+    size,
 };
 #[cfg(target_os = "windows")]
 use raw_window_handle::RawWindowHandle;
@@ -202,6 +203,30 @@ pub(crate) fn toggle_window_zoom(window: &Window) {
     }
 }
 
+pub(crate) fn show_window_system_menu(window: &Window, position: Point<Pixels>) {
+    #[cfg(target_os = "windows")]
+    if show_windows_window_system_menu(window, position) {
+        return;
+    }
+
+    window.show_window_menu(position);
+}
+
+fn window_menu_position(position: Point<Pixels>, scale_factor: f32) -> (i32, i32) {
+    (
+        (f32::from(position.x) * scale_factor).round() as i32,
+        (f32::from(position.y) * scale_factor).round() as i32,
+    )
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WindowSystemMenuRequest {
+    pub hwnd: isize,
+    pub x: i32,
+    pub y: i32,
+}
+
 #[cfg(target_os = "windows")]
 fn restore_maximized_window(window: &Window) -> bool {
     let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
@@ -214,6 +239,36 @@ fn restore_maximized_window(window: &Window) -> bool {
     // GPUI's Windows zoom path currently maps directly to SW_MAXIMIZE, so
     // restore must go through the native Win32 API until upstream toggles.
     gitcomet_win32_window_utils::restore_window(handle.hwnd.get())
+}
+
+#[cfg(target_os = "windows")]
+fn show_windows_window_system_menu(window: &Window, position: Point<Pixels>) -> bool {
+    let Some(request) = window_system_menu_request(window, position) else {
+        return false;
+    };
+
+    gitcomet_win32_window_utils::show_window_system_menu(request.hwnd, request.x, request.y);
+    true
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn window_system_menu_request(
+    window: &Window,
+    position: Point<Pixels>,
+) -> Option<WindowSystemMenuRequest> {
+    let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
+        return None;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return None;
+    };
+
+    let (x, y) = window_menu_position(position, window.scale_factor());
+    Some(WindowSystemMenuRequest {
+        hwnd: handle.hwnd.get(),
+        x,
+        y,
+    })
 }
 
 fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
@@ -1108,6 +1163,14 @@ mod tests {
             WindowZoomAction::Zoom
         };
         assert_eq!(window_zoom_action(true), expected);
+    }
+
+    #[test]
+    fn window_menu_position_scales_logical_pixels_to_device_pixels() {
+        assert_eq!(
+            window_menu_position(point(px(12.4), px(7.6)), 1.25),
+            (16, 10)
+        );
     }
 
     struct KeyBindingProbe {

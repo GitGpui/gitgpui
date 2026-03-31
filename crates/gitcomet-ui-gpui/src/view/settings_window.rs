@@ -1296,6 +1296,12 @@ impl Render for SettingsWindowView {
                 chrome::handle_titlebar_double_click(window);
                 cx.notify();
             }))
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|_this, e: &MouseUpEvent, window, cx| {
+                    chrome::show_titlebar_secondary_menu(e.position, window, cx);
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _window, cx| {
