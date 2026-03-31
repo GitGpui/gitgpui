@@ -59,6 +59,13 @@ Environment:
     Defaults to 1 in this script unless already set.
   GITCOMET_BENCH_HISTORY_HEAVY_COMMITS
     Defaults to 10000 in this script unless already set.
+  GITCOMET_PERF_PRINT_BENCH_SUMMARY
+    When truthy, print parsed artifact summaries after each benchmark case.
+  GITCOMET_PERF_SUMMARY_LOG
+    Optional file path that receives the same per-benchmark summary text.
+  GITCOMET_PERF_SUMMARY_JSONL
+    Optional file path that receives one JSON record per completed benchmark
+    case with parsed Criterion estimates and sidecar metrics when available.
 
 Notes:
   - The main Criterion suite is sharded into one benchmark per process to keep
@@ -111,6 +118,182 @@ run_section() {
   run_cmd "$@"
 }
 
+is_truthy() {
+  local value="${1:-}"
+  value="${value,,}"
+  [[ "${value}" == "1" || "${value}" == "true" || "${value}" == "yes" || "${value}" == "on" ]]
+}
+
+summary_emit_line() {
+  local line="$1"
+  echo "${line}"
+  if [[ -n "${summary_log_path}" ]]; then
+    printf '%s\n' "${line}" >> "${summary_log_path}"
+  fi
+}
+
+summary_emit_blank() {
+  echo
+  if [[ -n "${summary_log_path}" ]]; then
+    printf '\n' >> "${summary_log_path}"
+  fi
+}
+
+format_duration_ns() {
+  awk -v ns="$1" 'BEGIN {
+    if (ns == "" || ns == "null") {
+      printf "n/a";
+    } else if (ns >= 1000000) {
+      printf "%.3f ms", ns / 1000000;
+    } else if (ns >= 1000) {
+      printf "%.3f us", ns / 1000;
+    } else {
+      printf "%.0f ns", ns;
+    }
+  }'
+}
+
+criterion_estimates_path() {
+  local bench="$1"
+  printf '%s/%s/new/estimates.json\n' "${criterion_root}" "${bench}"
+}
+
+crate_local_criterion_root() {
+  if [[ "${criterion_root}" = /* ]]; then
+    return 1
+  fi
+
+  printf 'crates/gitcomet-ui-gpui/%s\n' "${criterion_root}"
+}
+
+resolve_sidecar_path() {
+  local bench="$1"
+  local candidate=""
+
+  candidate="${criterion_root}/${bench}/new/sidecar.json"
+  if [[ -f "${candidate}" ]]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+
+  if candidate="$(crate_local_criterion_root 2>/dev/null)"; then
+    candidate="${candidate}/${bench}/new/sidecar.json"
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+emit_bench_summary() {
+  local bench="$1"
+  local kind="$2"
+
+  if [[ ${dry_run} -eq 1 || ${print_bench_summary} -ne 1 ]]; then
+    return 0
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    if [[ ${bench_summary_warned_missing_jq} -eq 0 ]]; then
+      echo "Skipping per-benchmark metric summaries because jq is not installed." >&2
+      bench_summary_warned_missing_jq=1
+    fi
+    return 0
+  fi
+
+  local estimates_path
+  local sidecar_path=""
+  local has_estimates=false
+  local has_sidecar=false
+  estimates_path="$(criterion_estimates_path "${bench}")"
+
+  if [[ -f "${estimates_path}" ]]; then
+    has_estimates=true
+  fi
+  if sidecar_path="$(resolve_sidecar_path "${bench}")"; then
+    has_sidecar=true
+  fi
+
+  if [[ "${has_estimates}" != true && "${has_sidecar}" != true ]]; then
+    return 0
+  fi
+
+  local mean_ns="null"
+  local mean_upper_ns="null"
+  local median_ns="null"
+  local std_dev_ns="null"
+  local metrics_json="null"
+  local runner_json="null"
+
+  summary_emit_blank
+  summary_emit_line "-- Metrics: ${bench}"
+
+  if [[ "${has_estimates}" == true ]]; then
+    mean_ns="$(jq -r '.mean.point_estimate // "null"' "${estimates_path}")"
+    mean_upper_ns="$(jq -r '.mean.confidence_interval.upper_bound // "null"' "${estimates_path}")"
+    median_ns="$(jq -r '.median.point_estimate // "null"' "${estimates_path}")"
+    std_dev_ns="$(jq -r '.std_dev.point_estimate // "null"' "${estimates_path}")"
+
+    summary_emit_line "criterion mean=$(format_duration_ns "${mean_ns}") mean_95_upper=$(format_duration_ns "${mean_upper_ns}") median=$(format_duration_ns "${median_ns}") std_dev=$(format_duration_ns "${std_dev_ns}")"
+  fi
+
+  if [[ "${has_sidecar}" == true ]]; then
+    metrics_json="$(jq -c '.metrics // {}' "${sidecar_path}")"
+    runner_json="$(jq -c '.runner // null' "${sidecar_path}")"
+    summary_emit_line "sidecar metrics:"
+    while IFS= read -r metric_line; do
+      summary_emit_line "${metric_line}"
+    done < <(
+      jq -r '
+        (.metrics // {})
+        | to_entries
+        | map(select(.value | type == "number"))
+        | sort_by(.key)
+        | .[]
+        | "  \(.key)=\(.value)"
+      ' "${sidecar_path}"
+    )
+  fi
+
+  if [[ -n "${summary_jsonl_path}" ]]; then
+    jq -nc \
+      --arg bench "${bench}" \
+      --arg kind "${kind}" \
+      --arg estimates_path "${estimates_path}" \
+      --arg sidecar_path "${sidecar_path}" \
+      --argjson has_estimates "${has_estimates}" \
+      --argjson has_sidecar "${has_sidecar}" \
+      --argjson mean_ns "${mean_ns}" \
+      --argjson mean_upper_ns "${mean_upper_ns}" \
+      --argjson median_ns "${median_ns}" \
+      --argjson std_dev_ns "${std_dev_ns}" \
+      --argjson metrics "${metrics_json}" \
+      --argjson runner "${runner_json}" \
+      '{
+        bench: $bench,
+        kind: $kind,
+        estimates_path: (if $has_estimates then $estimates_path else null end),
+        sidecar_path: (if $has_sidecar then $sidecar_path else null end),
+        criterion: (
+          if $has_estimates then
+            {
+              mean_ns: $mean_ns,
+              mean_upper_ns: $mean_upper_ns,
+              median_ns: $median_ns,
+              std_dev_ns: $std_dev_ns
+            }
+          else
+            null
+          end
+        ),
+        metrics: (if $has_sidecar then $metrics else null end),
+        runner: (if $has_sidecar then $runner else null end)
+      }' >> "${summary_jsonl_path}"
+  fi
+}
+
 require_jq() {
   if command -v jq >/dev/null 2>&1; then
     return 0
@@ -130,7 +313,7 @@ launch_sidecar_matches_expected_shape() {
 launch_sidecar_path() {
   local bench="$1"
 
-  printf '%s/%s/new/sidecar.json\n' "${criterion_root}" "${bench}"
+  resolve_sidecar_path "${bench}" || printf '%s/%s/new/sidecar.json\n' "${criterion_root}" "${bench}"
 }
 
 prepare_fresh_reference() {
@@ -192,6 +375,9 @@ build_report_args() {
   report_args=("${report_mode[@]}")
   report_criterion_roots=()
   append_unique_report_root "${criterion_root}"
+  if crate_local_root="$(crate_local_criterion_root 2>/dev/null)"; then
+    append_unique_report_root "${crate_local_root}"
+  fi
   append_unique_report_root "target/criterion"
   append_unique_report_root "criterion"
 
@@ -253,6 +439,7 @@ run_launch_case() {
     if [[ -n "${launch_output}" ]]; then
       printf '%s\n' "${launch_output}"
     fi
+    emit_bench_summary "${bench}" "launch"
     return 0
   else
     launch_status=$?
@@ -367,6 +554,7 @@ run_main_suite() {
       env GITCOMET_PERF_SUPPRESS_MISSING_REAL_REPO_NOTICE=1 \
       cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- --noplot \
       "${main_criterion_args[@]}" --exact "${bench}"
+    emit_bench_summary "${bench}" "criterion"
   done
 }
 
@@ -387,6 +575,17 @@ main_measurement_time_set=0
 skip_idle_memory_growth_set=0
 auto_fresh_reference=0
 launch_suite_environment_blocked=0
+print_bench_summary=0
+summary_log_path="${GITCOMET_PERF_SUMMARY_LOG:-}"
+summary_jsonl_path="${GITCOMET_PERF_SUMMARY_JSONL:-}"
+bench_summary_warned_missing_jq=0
+
+if is_truthy "${GITCOMET_PERF_PRINT_BENCH_SUMMARY:-}"; then
+  print_bench_summary=1
+fi
+if [[ -n "${summary_log_path}" || -n "${summary_jsonl_path}" ]]; then
+  print_bench_summary=1
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -484,6 +683,15 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 export GITCOMET_PERF_CRITERION_ROOT="${criterion_root}"
 
+if [[ -n "${summary_log_path}" ]]; then
+  mkdir -p "$(dirname "${summary_log_path}")"
+  : > "${summary_log_path}"
+fi
+if [[ -n "${summary_jsonl_path}" ]]; then
+  mkdir -p "$(dirname "${summary_jsonl_path}")"
+  : > "${summary_jsonl_path}"
+fi
+
 if [[ -z "${MIMALLOC_PURGE_DELAY+x}" ]]; then
   export MIMALLOC_PURGE_DELAY=0
 fi
@@ -560,6 +768,15 @@ fi
 if [[ ${skip_idle_memory_growth} -eq 1 ]]; then
   echo "Skipping idle memory-growth cases."
 fi
+if [[ ${print_bench_summary} -eq 1 ]]; then
+  echo "Per-benchmark metric summaries enabled."
+  if [[ -n "${summary_log_path}" ]]; then
+    echo "Per-benchmark summary log: ${summary_log_path}"
+  fi
+  if [[ -n "${summary_jsonl_path}" ]]; then
+    echo "Per-benchmark summary JSONL: ${summary_jsonl_path}"
+  fi
+fi
 if [[ ${dry_run} -eq 1 ]]; then
   echo "Dry run mode enabled."
 fi
@@ -577,6 +794,7 @@ if [[ ${run_idle} -eq 1 ]]; then
       "Idle resource: ${bench}" \
       cargo run -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource -- \
       --bench "${bench}"
+    emit_bench_summary "${bench}" "idle"
   done
 fi
 

@@ -303,7 +303,7 @@ impl StatusSelectDiffOpenFixture {
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
         repo.status = Loadable::Ready(Arc::new(RepoStatus {
             unstaged: entries,
-            ..RepoStatus::default()
+            staged: Vec::new(),
         }));
         repo.status_rev = 1;
         repo.open = Loadable::Ready(());
@@ -332,7 +332,7 @@ impl StatusSelectDiffOpenFixture {
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
         repo.status = Loadable::Ready(Arc::new(RepoStatus {
             staged: entries,
-            ..RepoStatus::default()
+            unstaged: Vec::new(),
         }));
         repo.status_rev = 1;
         repo.open = Loadable::Ready(());

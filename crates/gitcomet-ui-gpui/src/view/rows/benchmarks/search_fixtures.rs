@@ -854,7 +854,7 @@ impl FileFuzzyFindPath {
         lowercase_bytes.make_ascii_lowercase();
         let mut char_bitmap = 0u32;
         for &b in lowercase_bytes.iter() {
-            if b >= b'a' && b <= b'z' {
+            if b.is_ascii_lowercase() {
                 char_bitmap |= 1 << (b - b'a');
             }
         }
@@ -883,16 +883,14 @@ impl AsciiCaseInsensitiveSubsequenceNeedle {
     #[inline]
     fn new(needle: &str) -> Option<Self> {
         let bytes = needle.as_bytes();
-        let Some(_) = bytes.first() else {
-            return None;
-        };
+        let _ = bytes.first()?;
 
         let mut lowercase_bytes = Vec::with_capacity(bytes.len());
         let mut required_bitmap = 0u32;
         for &byte in bytes {
             let lower = byte.to_ascii_lowercase();
             lowercase_bytes.push(lower);
-            if lower >= b'a' && lower <= b'z' {
+            if lower.is_ascii_lowercase() {
                 required_bitmap |= 1 << (lower - b'a');
             }
         }

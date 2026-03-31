@@ -107,20 +107,23 @@ fn branch_sidebar_cache_store(
 }
 
 #[derive(Clone, Debug)]
-struct HistoryWhenVm(SharedString);
+struct HistoryWhenVm {
+    _text: SharedString,
+}
 
 impl HistoryWhenVm {
     fn deferred(time: Option<SystemTime>) -> Self {
-        Self(
-            time.map(|time| {
-                time.duration_since(SystemTime::UNIX_EPOCH)
-                    .ok()
-                    .map(|elapsed| elapsed.as_secs().to_string())
-                    .unwrap_or_default()
-                    .into()
-            })
-            .unwrap_or_default(),
-        )
+        Self {
+            _text: time
+                .map(|time| {
+                    time.duration_since(SystemTime::UNIX_EPOCH)
+                        .ok()
+                        .map(|elapsed| elapsed.as_secs().to_string())
+                        .unwrap_or_default()
+                        .into()
+                })
+                .unwrap_or_default(),
+        }
     }
 }
 
@@ -136,6 +139,17 @@ impl HistoryShortShaVm {
         self.0.as_ref()
     }
 }
+
+type HistoryCommitRowVm = (
+    SharedString,
+    Arc<[SharedString]>,
+    SharedString,
+    SharedString,
+    HistoryWhenVm,
+    HistoryShortShaVm,
+    bool,
+    bool,
+);
 
 #[derive(Clone, Debug)]
 struct BenchHistoryStashTip {
@@ -240,9 +254,7 @@ fn next_history_stash_tip_for_commit_ix<'a>(
     next_stash_tip_ix: &mut usize,
     commit_ix: &usize,
 ) -> Option<&'a BenchHistoryStashTip> {
-    let Some(tip) = stash_tips.get(*next_stash_tip_ix) else {
-        return None;
-    };
+    let tip = stash_tips.get(*next_stash_tip_ix)?;
     if tip.commit_ix == *commit_ix {
         *next_stash_tip_ix = next_stash_tip_ix.saturating_add(1);
         return Some(tip);
@@ -411,7 +423,7 @@ pub struct BranchSidebarMetrics {
     pub max_branch_depth: u64,
 }
 
-pub(crate) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u64 {
+pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u64 {
     let mut h = FxHasher::default();
     rows.len().hash(&mut h);
     for row in rows.iter().take(256) {
@@ -586,7 +598,7 @@ impl BranchSidebarFixture {
                 }
                 BranchSidebarRow::Branch { depth, .. } => {
                     branch_rows = branch_rows.saturating_add(1);
-                    max_branch_depth = max_branch_depth.max(usize::from(*depth));
+                    max_branch_depth = max_branch_depth.max(*depth);
                 }
                 _ => {}
             }
@@ -858,17 +870,6 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 commit_id.hash(h);
                 path.hash(h);
             }
-        }
-    }
-
-    fn hash_repo_selected_diff_target(state: &AppState, repo_id: RepoId, h: &mut FxHasher) {
-        if let Some(target) = state
-            .repos
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .and_then(|repo| repo.diff_state.diff_target.as_ref())
-        {
-            hash_diff_target(target, h);
         }
     }
 
@@ -1647,16 +1648,7 @@ impl HistoryCacheBuildFixture {
         let has_stash_tips = !stash_tips.is_empty();
         let mut author_cache: HashMap<&str, SharedString> =
             HashMap::with_capacity_and_hasher(64, Default::default());
-        let mut commit_row_vms: Vec<(
-            SharedString,
-            Arc<[SharedString]>,
-            SharedString,
-            SharedString,
-            HistoryWhenVm,
-            HistoryShortShaVm,
-            bool,
-            bool,
-        )> = Vec::with_capacity(visible_indices.len());
+        let mut commit_row_vms: Vec<HistoryCommitRowVm> = Vec::with_capacity(visible_indices.len());
         if has_stash_tips {
             let mut next_stash_tip_ix = 0usize;
             for ix in visible_indices.iter() {
@@ -2153,15 +2145,14 @@ impl CommitDetailsFixture {
     }
 
     pub fn run(&self) -> u64 {
-        let file_rows = {
+        {
             let mut file_rows = self.file_rows.borrow_mut();
             commit_details_cached_row_hash(
                 &self.details,
                 self.message_render.as_ref(),
                 &mut file_rows,
             )
-        };
-        file_rows
+        }
     }
 
     #[cfg(any(test, feature = "benchmarks"))]

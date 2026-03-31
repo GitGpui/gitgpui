@@ -416,6 +416,7 @@ pub struct ConflictTwoWaySplitScrollFixture {
     diff_row_conflict_map: Vec<Option<usize>>,
     visible_row_indices: Vec<usize>,
     conflict_count: usize,
+    #[cfg(test)]
     syntax_mode: DiffSyntaxMode,
 }
 
@@ -520,6 +521,7 @@ impl ConflictTwoWaySplitScrollFixture {
             diff_row_conflict_map,
             visible_row_indices,
             conflict_count,
+            #[cfg(test)]
             syntax_mode,
         }
     }
@@ -542,26 +544,18 @@ impl ConflictTwoWaySplitScrollFixture {
             let Some(row) = self.diff_rows.get(row_ix) else {
                 continue;
             };
-            if row.old.is_some() {
-                if let Some(styled) = self
-                    .stable_cache
-                    .get(&(row_ix, ConflictPickSide::Ours))
-                    .cloned()
-                {
-                    styled.text_hash.hash(&mut h);
-                    styled.highlights_hash.hash(&mut h);
-                }
+            if row.old.is_some()
+                && let Some(styled) = self.stable_cache.get(&(row_ix, ConflictPickSide::Ours))
+            {
+                styled.text_hash.hash(&mut h);
+                styled.highlights_hash.hash(&mut h);
             }
 
-            if row.new.is_some() {
-                if let Some(styled) = self
-                    .stable_cache
-                    .get(&(row_ix, ConflictPickSide::Theirs))
-                    .cloned()
-                {
-                    styled.text_hash.hash(&mut h);
-                    styled.highlights_hash.hash(&mut h);
-                }
+            if row.new.is_some()
+                && let Some(styled) = self.stable_cache.get(&(row_ix, ConflictPickSide::Theirs))
+            {
+                styled.text_hash.hash(&mut h);
+                styled.highlights_hash.hash(&mut h);
             }
         }
         h.finish()
@@ -1028,22 +1022,20 @@ impl ConflictSearchQueryUpdateFixture {
         let base_has_style = !word_ranges.is_empty() || syntax_lang.is_some();
         let key = (row_ix, side);
 
-        if base_has_style {
-            if stable_cache.get(&key).is_none() {
-                stable_cache.insert(
-                    key,
-                    super::diff_text::build_cached_diff_styled_text_with_source_identity(
-                        theme,
-                        text,
-                        source_identity,
-                        word_ranges,
-                        "",
-                        syntax_lang,
-                        syntax_mode,
-                        None,
-                    ),
-                );
-            }
+        if base_has_style && stable_cache.get(&key).is_none() {
+            stable_cache.insert(
+                key,
+                super::diff_text::build_cached_diff_styled_text_with_source_identity(
+                    theme,
+                    text,
+                    source_identity,
+                    word_ranges,
+                    "",
+                    syntax_lang,
+                    syntax_mode,
+                    None,
+                ),
+            );
         }
 
         if query_active {

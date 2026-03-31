@@ -93,7 +93,7 @@ pub(crate) fn commit_file_kind_visuals(kind: FileStatusKind) -> CommitFileKindVi
     CommitFileKindVisuals { kind_key }
 }
 
-pub(crate) fn prepare_bench_diff_syntax_document(
+pub(in crate::view) fn prepare_bench_diff_syntax_document(
     language: DiffSyntaxLanguage,
     budget: DiffSyntaxBudget,
     text: &str,
@@ -111,7 +111,7 @@ pub(crate) fn prepare_bench_diff_syntax_document(
     )
 }
 
-pub(crate) fn prepare_bench_diff_syntax_document_from_shared(
+pub(in crate::view) fn prepare_bench_diff_syntax_document_from_shared(
     language: DiffSyntaxLanguage,
     budget: DiffSyntaxBudget,
     text: SharedString,
@@ -370,7 +370,7 @@ pub(crate) fn populate_conflict_state(repo: &mut RepoState, path: &str, line_cou
     repo.conflict_state.conflict_file_path = Some(path_buf.clone());
     let content: Arc<str> = Arc::from(build_synthetic_file_content(line_count));
     repo.conflict_state.conflict_file = Loadable::Ready(Some(ConflictFile {
-        path: path_buf.into(),
+        path: path_buf,
         base_bytes: None,
         ours_bytes: None,
         theirs_bytes: None,
@@ -414,7 +414,7 @@ pub(crate) fn build_synthetic_diff_lines(count: usize) -> Vec<DiffLine> {
         }
 
         let kind = match ix % 7 {
-            0 | 1 | 2 | 3 => DiffLineKind::Context,
+            0..=3 => DiffLineKind::Context,
             4 | 5 => DiffLineKind::Add,
             _ => DiffLineKind::Remove,
         };
@@ -449,9 +449,10 @@ pub(crate) fn build_repo_switch_minimal_repo_state(repo_id: RepoId, workdir: &st
 }
 
 pub(crate) fn build_synthetic_repo_status(entries: usize) -> RepoStatus {
-    let mut status = RepoStatus::default();
-    status.unstaged = build_synthetic_status_entries(entries, DiffArea::Unstaged);
-    status
+    RepoStatus {
+        staged: Vec::new(),
+        unstaged: build_synthetic_status_entries(entries, DiffArea::Unstaged),
+    }
 }
 
 pub(crate) fn build_synthetic_status_entries(entries: usize, area: DiffArea) -> Vec<FileStatus> {

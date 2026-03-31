@@ -29,6 +29,7 @@ const EXPECT_READY_REPOS_ENV: &str = "GITCOMET_PERF_STARTUP_EXPECT_READY_REPOS";
 const CLI_USAGE_EXIT_CODE: i32 = 2;
 const ENVIRONMENT_BLOCKER_EXIT_CODE: i32 = 3;
 const ENVIRONMENT_BLOCKER_MARKER: &str = "This is an environment blocker, not a benchmark result.";
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 const APP_LAUNCH_HEADLESS_NOTE: &str = "GPUI headless mode is not a substitute for app_launch because it cannot open the main window or emit comparable first_paint/first_interactive metrics.";
 
 #[cfg(windows)]
@@ -137,12 +138,14 @@ struct LaunchFixture {
     disable_auto_restore: bool,
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LinuxDisplaySocketProbe {
     label: &'static str,
     path: PathBuf,
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct LinuxDisplaySocketPlan {
     probes: Vec<LinuxDisplaySocketProbe>,
@@ -501,7 +504,7 @@ fn run_first_interactive_probe(
     if let Some(status) = child_status
         && !status.success()
     {
-        if let Some(blocker) = format_linux_display_environment_blocker(bench, stage, &stderr_tail)
+        if let Some(blocker) = detect_linux_display_environment_blocker(bench, stage, &stderr_tail)
         {
             return Err(blocker);
         }
@@ -512,7 +515,7 @@ fn run_first_interactive_probe(
     }
 
     if first_interactive.is_none() {
-        if let Some(blocker) = format_linux_display_environment_blocker(bench, stage, &stderr_tail)
+        if let Some(blocker) = detect_linux_display_environment_blocker(bench, stage, &stderr_tail)
         {
             return Err(blocker);
         }
@@ -573,7 +576,7 @@ fn finish_harness(
     } = result;
 
     if !status.success() {
-        if let Some(blocker) = format_linux_display_environment_blocker(
+        if let Some(blocker) = detect_linux_display_environment_blocker(
             &args.bench,
             "launch probe child",
             &stderr_tail,
@@ -587,7 +590,7 @@ fn finish_harness(
     }
 
     if let Some(blocker) =
-        format_linux_display_environment_blocker(&args.bench, "launch probe child", &stderr_tail)
+        detect_linux_display_environment_blocker(&args.bench, "launch probe child", &stderr_tail)
     {
         return Err(blocker);
     }
@@ -832,6 +835,7 @@ fn linux_display_preflight_blocker(bench: &str) -> Option<String> {
     }
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn format_linux_display_discovery_blocker(bench: &str, issues: &[String]) -> String {
     let reason = if issues.is_empty() {
         "Neither WAYLAND_DISPLAY nor DISPLAY resolved to a usable local compositor/X11 endpoint on this runner.".to_string()
@@ -851,6 +855,7 @@ fn format_linux_display_discovery_blocker(bench: &str, issues: &[String]) -> Str
     )
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn format_linux_display_socket_probe_blocker(
     bench: &str,
     failures: &[String],
@@ -875,22 +880,16 @@ fn format_linux_display_socket_probe_blocker(
     )
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn linux_display_socket_plan_from_env() -> LinuxDisplaySocketPlan {
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    {
-        linux_display_socket_plan(
-            env::var("WAYLAND_DISPLAY").ok().as_deref(),
-            env::var("XDG_RUNTIME_DIR").ok().as_deref(),
-            env::var("DISPLAY").ok().as_deref(),
-        )
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-    {
-        LinuxDisplaySocketPlan::default()
-    }
+    linux_display_socket_plan(
+        env::var("WAYLAND_DISPLAY").ok().as_deref(),
+        env::var("XDG_RUNTIME_DIR").ok().as_deref(),
+        env::var("DISPLAY").ok().as_deref(),
+    )
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn linux_display_socket_plan(
     wayland_display: Option<&str>,
     xdg_runtime_dir: Option<&str>,
@@ -929,6 +928,7 @@ fn linux_display_socket_plan(
     plan
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn linux_wayland_socket_path(
     wayland_display: Option<&str>,
     xdg_runtime_dir: Option<&str>,
@@ -951,11 +951,13 @@ fn linux_wayland_socket_path(
     Some(Path::new(xdg_runtime_dir).join(path))
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn linux_x11_socket_path(display: Option<&str>) -> Option<PathBuf> {
     let display_number = local_x11_display_number(display?)?;
     Some(PathBuf::from(format!("/tmp/.X11-unix/X{display_number}")))
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn local_x11_display_number(display: &str) -> Option<&str> {
     let display = display.trim();
     let local = if let Some(rest) = display.strip_prefix(':') {
@@ -976,24 +978,49 @@ fn local_x11_display_number(display: &str) -> Option<&str> {
     Some(display_number)
 }
 
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn format_linux_display_environment_blocker(
+    bench: &str,
+    stage: &str,
+    stderr_tail: &[String],
+) -> Option<String> {
+    if !is_linux_display_launch_failure(stderr_tail) {
+        return None;
+    }
+
+    Some(format!(
+        "{bench} is blocked on a usable local Wayland or X11 session; the {stage} could not open one on this runner ({}). {} {}{}",
+        linux_display_environment_snapshot(),
+        ENVIRONMENT_BLOCKER_MARKER,
+        APP_LAUNCH_HEADLESS_NOTE,
+        format_stderr_tail(stderr_tail)
+    ))
+}
+
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
+fn is_linux_display_launch_failure(stderr_tail: &[String]) -> bool {
+    let combined = stderr_tail.join("\n").to_ascii_lowercase();
+    [
+        "nocompositor",
+        "no compositor",
+        "unknown connection error",
+        "unable to open display",
+        "failed to initialize x11 client",
+        "neither display nor wayland_display is set",
+        "you can run in headless mode",
+    ]
+    .iter()
+    .any(|pattern| combined.contains(pattern))
+}
+
+fn detect_linux_display_environment_blocker(
     bench: &str,
     stage: &str,
     stderr_tail: &[String],
 ) -> Option<String> {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        if !is_linux_display_launch_failure(stderr_tail) {
-            return None;
-        }
-
-        Some(format!(
-            "{bench} is blocked on a usable local Wayland or X11 session; the {stage} could not open one on this runner ({}). {} {}{}",
-            linux_display_environment_snapshot(),
-            ENVIRONMENT_BLOCKER_MARKER,
-            APP_LAUNCH_HEADLESS_NOTE,
-            format_stderr_tail(stderr_tail)
-        ))
+        return format_linux_display_environment_blocker(bench, stage, stderr_tail);
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
@@ -1003,31 +1030,10 @@ fn format_linux_display_environment_blocker(
     }
 }
 
-fn is_linux_display_launch_failure(stderr_tail: &[String]) -> bool {
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    {
-        let combined = stderr_tail.join("\n").to_ascii_lowercase();
-        [
-            "nocompositor",
-            "no compositor",
-            "unknown connection error",
-            "unable to open display",
-            "failed to initialize x11 client",
-            "neither display nor wayland_display is set",
-            "you can run in headless mode",
-        ]
-        .iter()
-        .any(|pattern| combined.contains(pattern))
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-    {
-        let _ = stderr_tail;
-        false
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(all(
+    any(test, target_os = "linux", target_os = "freebsd"),
+    any(target_os = "linux", target_os = "freebsd")
+))]
 fn linux_display_environment_snapshot() -> String {
     [
         format_env_var("DISPLAY"),
@@ -1038,7 +1044,10 @@ fn linux_display_environment_snapshot() -> String {
     .join(", ")
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+#[cfg(all(
+    any(test, target_os = "linux", target_os = "freebsd"),
+    not(any(target_os = "linux", target_os = "freebsd"))
+))]
 fn linux_display_environment_snapshot() -> String {
     "DISPLAY=<unsupported>, WAYLAND_DISPLAY=<unsupported>, XDG_RUNTIME_DIR=<unsupported>, XAUTHORITY=<unsupported>"
         .to_string()

@@ -1,25 +1,40 @@
 #[cfg(target_os = "linux")]
 use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+#[cfg(target_os = "linux")]
 use std::env;
 #[cfg(target_os = "linux")]
 use std::fs::{self, File};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::FileExt;
+#[cfg(target_os = "linux")]
 use std::process;
+#[cfg(target_os = "linux")]
 use std::sync::Once;
+#[cfg(target_os = "linux")]
 use std::thread;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
 const DISABLE_ENV: &str = "GITCOMET_PERF_DISABLE_RAM_GUARD";
+#[cfg(target_os = "linux")]
 const RSS_LIMIT_PERCENT: u64 = 75;
+#[cfg(target_os = "linux")]
 const RSS_LIMIT_MAX_GIB_ENV: &str = "GITCOMET_PERF_RAM_GUARD_MAX_GIB";
+#[cfg(target_os = "linux")]
 const DEFAULT_RSS_LIMIT_MAX_KIB: u64 = 8 * 1024 * 1024;
+#[cfg(target_os = "linux")]
 const RSS_LIMIT_DESCRIPTION: &str =
     "smaller of configured GiB cap and 75% of startup available RAM";
+#[cfg(target_os = "linux")]
 const RSS_LIMIT_TOLERANCE_KIB: u64 = 256 * 1024;
+#[cfg(target_os = "linux")]
 const AS_LIMIT_MULTIPLIER: u64 = 2;
+#[cfg(target_os = "linux")]
 const AS_LIMIT_HEADROOM_KIB: u64 = 2 * 1024 * 1024;
+#[cfg(target_os = "linux")]
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(target_os = "linux")]
 const OVER_LIMIT_POLL_THRESHOLD: u32 = 5;
 #[cfg(target_os = "linux")]
 const PROC_STATUS_BUFFER_LEN: usize = 4096;
@@ -121,11 +136,6 @@ pub fn process_rss_kib(_pid: u32) -> Option<u64> {
 fn process_vmsize_kib(pid: u32) -> Option<u64> {
     let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     parse_status_kib(&status, "VmSize:")
-}
-
-#[cfg(not(target_os = "linux"))]
-fn process_vmsize_kib(_pid: u32) -> Option<u64> {
-    None
 }
 
 #[cfg(target_os = "linux")]
@@ -270,7 +280,6 @@ fn parse_status_kib_bytes(status: &[u8], key: &[u8]) -> Option<u64> {
         saw_digit.then_some(rss_kib)
     })
 }
-
 fn env_flag(key: &str) -> bool {
     env::var(key)
         .ok()
@@ -279,10 +288,12 @@ fn env_flag(key: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "linux")]
 fn env_u64(key: &str) -> Option<u64> {
     env::var(key).ok()?.trim().parse().ok()
 }
 
+#[cfg(target_os = "linux")]
 fn parse_bool_flag(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),

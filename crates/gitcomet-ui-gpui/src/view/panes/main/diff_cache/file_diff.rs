@@ -970,7 +970,7 @@ impl PagedFileDiffRows {
     }
 
     #[cfg(test)]
-    fn cached_page_count(&self) -> usize {
+    pub(in crate::view) fn cached_page_count(&self) -> usize {
         self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
     }
 
@@ -1093,7 +1093,7 @@ impl PagedFileDiffInlineRows {
     }
 
     #[cfg(test)]
-    fn cached_page_count(&self) -> usize {
+    pub(in crate::view) fn cached_page_count(&self) -> usize {
         self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
     }
 

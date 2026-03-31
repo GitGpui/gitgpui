@@ -137,8 +137,10 @@ impl FsEventFixture {
     }
 
     fn execute(&self) -> (u64, FsEventMetrics) {
-        let mut metrics = FsEventMetrics::default();
-        metrics.tracked_files = u64::try_from(self.tracked_files).unwrap_or(u64::MAX);
+        let mut metrics = FsEventMetrics {
+            tracked_files: u64::try_from(self.tracked_files).unwrap_or(u64::MAX),
+            ..FsEventMetrics::default()
+        };
 
         match &self.scenario {
             FsEventScenario::SingleFileSave { .. } => {

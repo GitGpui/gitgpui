@@ -39,8 +39,8 @@ impl StagingFixture {
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
         repo.status = Loadable::Ready(Arc::new(RepoStatus {
+            staged: Vec::new(),
             unstaged: entries,
-            ..RepoStatus::default()
         }));
         repo.status_rev = 1;
         repo.open = Loadable::Ready(());
@@ -72,7 +72,7 @@ impl StagingFixture {
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
         repo.status = Loadable::Ready(Arc::new(RepoStatus {
             staged: entries,
-            ..RepoStatus::default()
+            unstaged: Vec::new(),
         }));
         repo.status_rev = 1;
         repo.open = Loadable::Ready(());
@@ -106,11 +106,7 @@ impl StagingFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            unstaged,
-            staged,
-            ..RepoStatus::default()
-        }));
+        repo.status = Loadable::Ready(Arc::new(RepoStatus { unstaged, staged }));
         repo.status_rev = 1;
         repo.open = Loadable::Ready(());
 
@@ -1543,7 +1539,7 @@ impl TextModelFragmentedEditFixture {
         for edit in &self.edits {
             let start = edit.offset.min(text.len());
             let end = edit.offset.saturating_add(edit.delete_len).min(text.len());
-            let deleted_newlines = memchr::memchr_iter(b'\n', text[start..end].as_bytes()).count();
+            let deleted_newlines = memchr::memchr_iter(b'\n', &text.as_bytes()[start..end]).count();
             deleted_bytes = deleted_bytes.saturating_add(end.saturating_sub(start));
             inserted_bytes = inserted_bytes.saturating_add(edit.insert.len());
             line_starts_after = line_starts_after

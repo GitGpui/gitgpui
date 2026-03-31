@@ -205,8 +205,7 @@ impl LargeFileDiffScrollFixture {
                 let mut hasher = FxHasher::default();
                 end.saturating_sub(actual_start).hash(&mut hasher);
 
-                for line_ix in actual_start..end {
-                    let cache_slot = &cache[line_ix];
+                for (line_ix, cache_slot) in cache.iter().enumerate().take(end).skip(actual_start) {
                     let fingerprint = if let Some(fingerprint) = cache_slot.get() {
                         fingerprint
                     } else {
@@ -362,7 +361,7 @@ fn history_scroll_row_fingerprint(commit: &Commit, graph_row: &history_graph::Gr
 
 enum KeyboardArrowScrollScenario {
     History(HistoryListScrollFixture),
-    Diff(LargeFileDiffScrollFixture),
+    Diff(Box<LargeFileDiffScrollFixture>),
 }
 
 pub struct KeyboardArrowScrollFixture {
@@ -419,9 +418,9 @@ impl KeyboardArrowScrollFixture {
     ) -> Self {
         let total_rows = lines.max(1);
         Self {
-            scenario: KeyboardArrowScrollScenario::Diff(
+            scenario: KeyboardArrowScrollScenario::Diff(Box::new(
                 LargeFileDiffScrollFixture::new_with_line_bytes(total_rows, line_bytes.max(1)),
-            ),
+            )),
             total_rows,
             window_rows: window_rows.max(1),
             scroll_step_rows: scroll_step_rows.max(1),
@@ -854,7 +853,6 @@ impl KeyboardStageUnstageToggleFixture {
         repo.status = Loadable::Ready(Arc::new(RepoStatus {
             unstaged: entries.clone(),
             staged: entries,
-            ..RepoStatus::default()
         }));
         repo.status_rev = 1;
         repo.open = Loadable::Ready(());

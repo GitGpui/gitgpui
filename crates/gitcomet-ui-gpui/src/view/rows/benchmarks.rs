@@ -78,16 +78,17 @@ pub(crate) use git_ops::{
     hash_parsed_diff, hash_repo_status, run_git,
 };
 pub use real_repo::*;
+pub(in crate::view) use repo_history::hash_branch_sidebar_rows;
 pub use repo_history::*;
 pub(crate) use repo_history::{
     CommitDetailsMessageRenderConfig, CommitDetailsMessageRenderState,
-    CommitDetailsVisibleMessageLine, hash_branch_sidebar_rows, reset_repo_switch_bench_state,
+    CommitDetailsVisibleMessageLine, reset_repo_switch_bench_state,
 };
 pub use runtime_fixtures::*;
 pub use scroll_fixtures::*;
 pub use search_fixtures::*;
 pub use status_fixtures::*;
-pub(crate) use support::*;
+pub(in crate::view) use support::*;
 pub use syntax::*;
 pub use text_fixtures::*;
 pub(crate) use text_fixtures::{estimate_tabbed_wrap_rows, wrap_columns_for_benchmark_width};
