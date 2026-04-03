@@ -22,7 +22,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
@@ -66,7 +66,7 @@ stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.26.7"
+tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
 tree-sitter-css = "0.25.0"
 tree-sitter-go = "0.25.0"
@@ -80,7 +80,7 @@ tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 unicode-segmentation = "1.13.2"
 url = "2.5.8"
-windows = "0.62"
+windows = "0.62.2"
 zed-reqwest = { version = "0.12.15-zed", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
 
 [workspace.lints.rust]
