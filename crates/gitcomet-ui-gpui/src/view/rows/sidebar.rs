@@ -1,5 +1,37 @@
 use super::*;
 
+fn worktree_paths_by_branch(repo: &RepoState) -> HashMap<String, std::path::PathBuf> {
+    let Loadable::Ready(worktrees) = &repo.worktrees else {
+        return HashMap::default();
+    };
+
+    let mut worktree_paths = HashMap::default();
+    for worktree in worktrees.iter() {
+        if worktree.path == repo.spec.workdir {
+            continue;
+        }
+
+        let Some(branch) = worktree.branch.clone() else {
+            continue;
+        };
+
+        worktree_paths
+            .entry(branch)
+            .or_insert_with(|| worktree.path.clone());
+    }
+
+    worktree_paths
+}
+
+fn branch_workspace_badge_path(
+    listed_workspace_path: Option<&std::path::Path>,
+    active_workspace_path: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    listed_workspace_path
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| active_workspace_path.map(std::path::Path::to_path_buf))
+}
+
 pub(in crate::view) fn active_workspace_paths_by_branch(
     repo: &RepoState,
     open_repos: &[RepoState],
@@ -36,10 +68,6 @@ pub(in crate::view) fn active_workspace_paths_by_branch(
     }
 
     active_workspaces
-}
-
-fn repo_shows_workspace_badges(repo: &RepoState) -> bool {
-    matches!(&repo.worktrees, Loadable::Ready(worktrees) if worktrees.len() > 1)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,7 +112,10 @@ impl SidebarPaneView {
             return Vec::new();
         };
         let repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
-        let show_workspace_badges = this.active_repo().is_some_and(repo_shows_workspace_badges);
+        let worktree_paths_by_branch = this
+            .active_repo()
+            .map(worktree_paths_by_branch)
+            .unwrap_or_default();
         let active_workspace_paths_by_branch = this.active_workspace_paths_by_branch();
         let theme = this.theme;
         let icon_primary = theme.colors.accent;
@@ -1374,15 +1405,25 @@ impl SidebarPaneView {
                             .to_owned()
                             .into();
                     let workspace_path = if section == BranchSection::Local {
+                        worktree_paths_by_branch.get(name.as_ref()).cloned()
+                    } else {
+                        None
+                    };
+                    let active_workspace_path = if section == BranchSection::Local {
                         active_workspace_paths_by_branch.get(name.as_ref()).cloned()
                     } else {
                         None
                     };
-                    let has_active_workspace = workspace_path.is_some();
-                    let show_workspace_badge = has_active_workspace && show_workspace_badges;
-                    let show_branch_context_menu_indicator = !has_active_workspace;
+                    let workspace_badge_path = branch_workspace_badge_path(
+                        workspace_path.as_deref(),
+                        active_workspace_path.as_deref(),
+                    );
+                    let has_worktree = workspace_badge_path.is_some();
+                    let has_active_workspace = active_workspace_path.is_some();
+                    let show_workspace_badge = has_worktree;
+                    let show_branch_context_menu_indicator = !has_worktree;
                     let workspace_row_menu_invoker: Option<SharedString> =
-                        workspace_path.as_ref().map(|path| {
+                        workspace_badge_path.as_ref().map(|path| {
                             format!("worktree_menu_{}_{}", repo_id.0, path.display()).into()
                         });
                     let workspace_menu_active = workspace_row_menu_invoker
@@ -1421,12 +1462,21 @@ impl SidebarPaneView {
                         theme.colors.text_muted,
                         if theme.is_dark { 0.55 } else { 0.40 },
                     );
-                    let worktree_action_active_border = with_alpha(
+                    let worktree_action_open_border = with_alpha(
                         theme.colors.accent,
                         if theme.is_dark { 0.56 } else { 0.34 },
                     );
+                    let worktree_action_open_hover_border = with_alpha(
+                        theme.colors.accent,
+                        if theme.is_dark { 0.72 } else { 0.46 },
+                    );
+                    let worktree_action_active_border = with_alpha(
+                        theme.colors.accent,
+                        if theme.is_dark { 0.84 } else { 0.68 },
+                    );
                     let worktree_action_text = theme.colors.text_muted;
                     let worktree_action_hover_text = theme.colors.text;
+                    let worktree_action_open_text = theme.colors.accent;
                     let worktree_action_active_text = theme.colors.accent;
                     let mut row = div()
                         .id(("branch_item", ix))
@@ -1546,18 +1596,42 @@ impl SidebarPaneView {
                     }
 
                     if show_workspace_badge {
-                        let Some(workspace_path) = workspace_path.clone() else {
-                            unreachable!("workspace badge requires an active workspace path");
+                        let Some(workspace_badge_path) = workspace_badge_path.clone() else {
+                            unreachable!("workspace badge requires a worktree path");
                         };
                         let workspace_menu_invoker_for_click = workspace_row_menu_invoker.clone();
                         let workspace_menu_invoker_for_right_click =
                             workspace_row_menu_invoker.clone();
-                        let workspace_path_for_menu = workspace_path.clone();
-                        let workspace_path_for_open = workspace_path.clone();
+                        let workspace_path_for_menu = workspace_badge_path.clone();
+                        let workspace_path_for_open = workspace_badge_path.clone();
                         let worktree_badge_tooltip: SharedString =
-                            workspace_path.display().to_string().into();
+                            workspace_badge_path.display().to_string().into();
                         let branch_name_for_click = name.to_string();
                         let branch_name_for_right_click = branch_name_for_click.clone();
+                        let badge_border = if workspace_menu_active {
+                            worktree_action_active_border
+                        } else if has_active_workspace {
+                            worktree_action_open_border
+                        } else {
+                            worktree_action_border
+                        };
+                        let badge_hover_border = if has_active_workspace {
+                            worktree_action_open_hover_border
+                        } else {
+                            worktree_action_hover_border
+                        };
+                        let badge_text = if workspace_menu_active {
+                            worktree_action_active_text
+                        } else if has_active_workspace {
+                            worktree_action_open_text
+                        } else {
+                            worktree_action_text
+                        };
+                        let badge_hover_text = if has_active_workspace {
+                            worktree_action_open_text
+                        } else {
+                            worktree_action_hover_text
+                        };
                         right = right.child(
                             div()
                                 .id(("branch_workspace_badge", ix))
@@ -1568,23 +1642,11 @@ impl SidebarPaneView {
                                 .py(px(0.0))
                                 .rounded(px(2.0))
                                 .border_1()
-                                .border_color(if workspace_menu_active {
-                                    worktree_action_active_border
-                                } else {
-                                    worktree_action_border
-                                })
-                                .bg(if workspace_menu_active {
-                                    worktree_action_active_bg
-                                } else {
-                                    worktree_action_bg
-                                })
+                                .border_color(badge_border)
+                                .bg(worktree_action_bg)
                                 .cursor(CursorStyle::PointingHand)
                                 .text_size(px(11.0))
-                                .text_color(if workspace_menu_active {
-                                    worktree_action_active_text
-                                } else {
-                                    worktree_action_text
-                                })
+                                .text_color(badge_text)
                                 .hover(move |s| {
                                     if workspace_menu_active {
                                         s.bg(worktree_action_active_bg)
@@ -1592,19 +1654,11 @@ impl SidebarPaneView {
                                             .text_color(worktree_action_active_text)
                                     } else {
                                         s.bg(worktree_action_bg)
-                                            .border_color(worktree_action_hover_border)
-                                            .text_color(worktree_action_hover_text)
+                                            .border_color(badge_hover_border)
+                                            .text_color(badge_hover_text)
                                     }
                                 })
-                                .child(svg_icon(
-                                    "icons/folder.svg",
-                                    if workspace_menu_active {
-                                        worktree_action_active_text
-                                    } else {
-                                        worktree_action_text
-                                    },
-                                    9.0,
-                                ))
+                                .child(svg_icon("icons/folder.svg", badge_text, 9.0))
                                 .child("Worktree")
                                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                                     if !e.standard_click() {
@@ -1651,7 +1705,7 @@ impl SidebarPaneView {
                                             PopoverKind::worktree(
                                                 repo_id,
                                                 WorktreePopoverKind::Menu {
-                                                    path: workspace_path.clone(),
+                                                    path: workspace_badge_path.clone(),
                                                     branch: Some(branch_name_for_right_click.clone()),
                                                 },
                                             ),
@@ -1982,6 +2036,76 @@ mod tests {
     use gitcomet_core::domain::{RepoSpec, Worktree};
 
     #[test]
+    fn worktree_paths_by_branch_includes_closed_worktrees() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Ready(Arc::new(vec![
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo"),
+                head: None,
+                branch: Some("main".to_string()),
+                detached: false,
+            },
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo-feature"),
+                head: None,
+                branch: Some("feature".to_string()),
+                detached: false,
+            },
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo-detached"),
+                head: None,
+                branch: None,
+                detached: true,
+            },
+        ]));
+
+        let paths = worktree_paths_by_branch(&repo);
+
+        assert_eq!(
+            paths.get("feature"),
+            Some(&std::path::PathBuf::from("/tmp/repo-feature"))
+        );
+        assert!(!paths.contains_key("main"));
+        assert!(!paths.contains_key("repo-detached"));
+    }
+
+    #[test]
+    fn worktree_paths_by_branch_prefers_first_branch_match() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Ready(Arc::new(vec![
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo-feature-a"),
+                head: None,
+                branch: Some("feature/shared".to_string()),
+                detached: false,
+            },
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo-feature-b"),
+                head: None,
+                branch: Some("feature/shared".to_string()),
+                detached: false,
+            },
+        ]));
+
+        let paths = worktree_paths_by_branch(&repo);
+
+        assert_eq!(
+            paths.get("feature/shared"),
+            Some(&std::path::PathBuf::from("/tmp/repo-feature-a"))
+        );
+    }
+
+    #[test]
     fn active_workspace_paths_by_branch_only_includes_open_worktrees() {
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -2199,39 +2323,21 @@ mod tests {
     }
 
     #[test]
-    fn repo_shows_workspace_badges_only_when_more_than_one_worktree_exists() {
-        let mut repo = RepoState::new_opening(
-            RepoId(1),
-            RepoSpec {
-                workdir: std::path::PathBuf::from("/tmp/repo"),
-            },
+    fn branch_workspace_badge_path_prefers_listed_workspace_and_falls_back_to_active() {
+        assert_eq!(
+            branch_workspace_badge_path(
+                Some(std::path::Path::new("/tmp/repo-feature-listed")),
+                Some(std::path::Path::new("/tmp/repo-feature-open")),
+            ),
+            Some(std::path::PathBuf::from("/tmp/repo-feature-listed"))
         );
-
-        assert!(!repo_shows_workspace_badges(&repo));
-
-        repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
-            path: std::path::PathBuf::from("/tmp/repo"),
-            head: None,
-            branch: Some("main".to_string()),
-            detached: false,
-        }]));
-        assert!(!repo_shows_workspace_badges(&repo));
-
-        repo.worktrees = Loadable::Ready(Arc::new(vec![
-            Worktree {
-                path: std::path::PathBuf::from("/tmp/repo"),
-                head: None,
-                branch: Some("main".to_string()),
-                detached: false,
-            },
-            Worktree {
-                path: std::path::PathBuf::from("/tmp/repo-feature"),
-                head: None,
-                branch: Some("feature".to_string()),
-                detached: false,
-            },
-        ]));
-        assert!(repo_shows_workspace_badges(&repo));
+        assert_eq!(
+            branch_workspace_badge_path(
+                None,
+                Some(std::path::Path::new("/tmp/repo-feature-open")),
+            ),
+            Some(std::path::PathBuf::from("/tmp/repo-feature-open"))
+        );
     }
 
     #[test]
