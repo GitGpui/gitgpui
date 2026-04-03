@@ -555,7 +555,7 @@ jobs:
           keychain_password="$(openssl rand -hex 24)"
           cert_path="${RUNNER_TEMP}/gitcomet-signing-cert.p12"
           api_key_path="${RUNNER_TEMP}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
-          default_keychain="$(security default-keychain -d user | tr -d '"')"
+          default_keychain="$(security default-keychain -d user | tr -d '"' | xargs)"
 
           if base64 --help 2>&1 | grep -q -- '--decode'; then
             printf '%s' "$MACOS_SIGNING_CERT_BASE64" | base64 --decode > "$cert_path"
