@@ -608,32 +608,13 @@ jobs:
         if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
         run: |
           set -euo pipefail
-
-          release_root="gitcomet-v${VERSION}-macos-${ARCH}"
-          dmg_path="dist/${release_root}.dmg"
-          app_path="dist/stage/${release_root}/GitComet.app"
-          app_binary="${app_path}/Contents/MacOS/gitcomet"
-
-          if [ ! -f "$dmg_path" ] || [ ! -d "$app_path" ]; then
-            echo "::error title=Missing macOS package::Expected $dmg_path and $app_path to exist."
-            exit 1
-          fi
-
-          xcrun notarytool submit "$dmg_path" \
-            --key "${{ steps.macos_signing.outputs.api_key_path }}" \
+          scripts/notarize-macos.sh \
+            --version "${VERSION}" \
+            --arch "${ARCH}" \
+            --out-dir dist \
+            --api-key "${{ steps.macos_signing.outputs.api_key_path }}" \
             --key-id "${MACOS_NOTARY_KEY_ID}" \
-            --issuer "${MACOS_NOTARY_ISSUER_ID}" \
-            --wait
-
-          xcrun stapler staple "$app_path"
-          xcrun stapler staple "$dmg_path"
-          xcrun stapler validate "$app_path"
-          xcrun stapler validate "$dmg_path"
-
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$app_path"
-          spctl --assess --type execute --verbose=4 "$app_binary"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+            --issuer "${MACOS_NOTARY_ISSUER_ID}"
 
       - name: Cleanup macOS signing keychain
         if: ${{ always() && steps.macos_signing_mode.outputs.enabled == 'true' }}
