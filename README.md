@@ -29,13 +29,6 @@ brew tap auto-explore/gitcomet
 brew install --cask gitcomet
 ```
 
-
-**MacOS Troubleshooting:** If you downloaded the app manually and macOS reports that GitComet *"is damaged and can't be opened"*, this is due to Apple's Gatekeeper quarantine for apps downloaded outside the App Store. To resolve this, run the following command in your terminal to remove the quarantine attribute:
-
-```bash
-xattr -d com.apple.quarantine /Applications/GitComet.app
-```
-
 optional CLI install:
 
 ```bash
