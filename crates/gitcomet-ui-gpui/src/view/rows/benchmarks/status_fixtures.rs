@@ -381,11 +381,20 @@ impl StatusSelectDiffOpenFixture {
                     match effect {
                         Effect::LoadSelectedDiff {
                             repo_id,
+                            load_patch_diff,
                             load_file_text,
+                            preview_text_side,
                             load_file_image,
                         } => {
                             repo_id.0.hash(&mut h);
+                            load_patch_diff.hash(&mut h);
                             load_file_text.hash(&mut h);
+                            let preview_text_side_key: u8 = match preview_text_side {
+                                None => 0,
+                                Some(gitcomet_core::domain::DiffPreviewTextSide::Old) => 1,
+                                Some(gitcomet_core::domain::DiffPreviewTextSide::New) => 2,
+                            };
+                            preview_text_side_key.hash(&mut h);
                             load_file_image.hash(&mut h);
                         }
                         Effect::LoadDiff { repo_id, target }

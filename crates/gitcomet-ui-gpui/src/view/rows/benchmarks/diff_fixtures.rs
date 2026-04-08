@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::diff::annotate_unified;
 
 fn build_synthetic_unified_patch(line_count: usize) -> String {
     let line_count = line_count.max(1);
