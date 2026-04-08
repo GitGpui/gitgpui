@@ -9,12 +9,10 @@ mod file_diff;
 mod image_cache;
 mod patch_diff;
 
-pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
-#[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::file_diff::{
-    bench_build_file_diff_cache_rebuild, bench_build_file_diff_providers,
+    PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild,
 };
-use self::file_diff::{build_file_diff_cache_rebuild, build_inline_text, file_diff_text_signature};
+use self::file_diff::{build_inline_text, file_diff_text_signature};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 

@@ -590,7 +590,7 @@ impl DiffRefreshFixture {
     /// that would occur when the content actually changes.
     pub fn run_rebuild_step(&self) -> u64 {
         #[cfg(feature = "benchmarks")]
-        let rebuild = crate::view::panes::main::diff_cache::bench_build_file_diff_cache_rebuild(
+        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
             &self.incoming_file,
             std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
         );
@@ -599,12 +599,12 @@ impl DiffRefreshFixture {
             unreachable!("DiffRefreshFixture::run_rebuild_step requires benchmarks feature");
 
         let mut hasher = FxHasher::default();
-        rebuild.split_rows.hash(&mut hasher);
-        rebuild.inline_rows.hash(&mut hasher);
-        rebuild.old_text_bytes.hash(&mut hasher);
-        rebuild.new_text_bytes.hash(&mut hasher);
-        rebuild.old_line_starts.hash(&mut hasher);
-        rebuild.new_line_starts.hash(&mut hasher);
+        bench_counter_u64(rebuild.row_provider.len_hint()).hash(&mut hasher);
+        bench_counter_u64(rebuild.inline_row_provider.len_hint()).hash(&mut hasher);
+        bench_counter_u64(rebuild.old_text.len()).hash(&mut hasher);
+        bench_counter_u64(rebuild.new_text.len()).hash(&mut hasher);
+        bench_counter_u64(rebuild.old_line_starts.len()).hash(&mut hasher);
+        bench_counter_u64(rebuild.new_line_starts.len()).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -631,7 +631,7 @@ impl DiffRefreshFixture {
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn measure_rebuild(&self) -> DiffRefreshMetrics {
         #[cfg(feature = "benchmarks")]
-        let rebuild = crate::view::panes::main::diff_cache::bench_build_file_diff_cache_rebuild(
+        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
             &self.incoming_file,
             std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
         );
@@ -643,12 +643,12 @@ impl DiffRefreshFixture {
             full_rebuilds: 1,
             content_signature_matches: 0,
             rows_preserved: 0,
-            rebuild_rows: rebuild.split_rows,
-            rebuild_inline_rows: rebuild.inline_rows,
-            old_text_bytes: rebuild.old_text_bytes,
-            new_text_bytes: rebuild.new_text_bytes,
-            old_line_starts: rebuild.old_line_starts,
-            new_line_starts: rebuild.new_line_starts,
+            rebuild_rows: bench_counter_u64(rebuild.row_provider.len_hint()),
+            rebuild_inline_rows: bench_counter_u64(rebuild.inline_row_provider.len_hint()),
+            old_text_bytes: bench_counter_u64(rebuild.old_text.len()),
+            new_text_bytes: bench_counter_u64(rebuild.new_text.len()),
+            old_line_starts: bench_counter_u64(rebuild.old_line_starts.len()),
+            new_line_starts: bench_counter_u64(rebuild.new_line_starts.len()),
         }
     }
 }
@@ -700,9 +700,8 @@ impl FileDiffOpenFixture {
             }
         }
         #[cfg(feature = "benchmarks")]
-        let (split, inline) = crate::view::panes::main::diff_cache::bench_build_file_diff_providers(
-            &old_text, &new_text, 256,
-        );
+        let (split, inline) =
+            build_bench_file_diff_rebuild_from_text("src/bench_diff_open.rs", &old_text, &new_text);
         #[cfg(not(feature = "benchmarks"))]
         let (split, inline) = unreachable!("FileDiffOpenFixture requires benchmarks feature");
 

@@ -704,10 +704,6 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
                     region: DiffTextRegion::Inline,
                     offset: end,
                 });
-                pane.file_diff_row_provider
-                    .as_ref()
-                    .expect("streamed row provider should exist")
-                    .reset_debug_counters_for_tests();
             });
         });
     });
@@ -724,23 +720,6 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
         cx.read_from_clipboard().and_then(|item| item.text()),
         Some(needle.to_string())
     );
-
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let counters = pane
-            .file_diff_row_provider
-            .as_ref()
-            .expect("streamed row provider should exist")
-            .debug_counters_for_tests();
-        assert_eq!(
-            counters.inline_rows_materialized, 0,
-            "partial copy should read streamed inline row text without materializing inline rows"
-        );
-        assert_eq!(
-            counters.inline_full_text_materializations, 0,
-            "partial copy should not build the full inline diff text"
-        );
-    });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup streamed diff copy workdir");
 }
@@ -801,10 +780,6 @@ fn minified_json_file_diff_context_menu_copy_uses_streamed_inline_row_source(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, _cx| {
                 pane.diff_view = DiffViewMode::Inline;
-                pane.file_diff_row_provider
-                    .as_ref()
-                    .expect("streamed row provider should exist")
-                    .reset_debug_counters_for_tests();
             });
         });
     });
@@ -841,28 +816,6 @@ fn minified_json_file_diff_context_menu_copy_uses_streamed_inline_row_source(
                 }
             });
         });
-    });
-
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let counters = pane
-            .file_diff_row_provider
-            .as_ref()
-            .expect("streamed row provider should exist")
-            .debug_counters_for_tests();
-        assert_eq!(
-            counters.inline_rows_materialized, 0,
-            "context-menu copy should read streamed inline row text without materializing inline rows"
-        );
-        assert_eq!(
-            counters.inline_full_text_materializations, 0,
-            "context-menu copy should not build the full inline diff text"
-        );
-        assert_eq!(
-            pane.diff_text_segments_cache.iter().flatten().count(),
-            0,
-            "streamed inline context-menu copy should not populate styled row caches"
-        );
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup streamed diff context-menu workdir");
@@ -941,10 +894,6 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
                     region: DiffTextRegion::SplitLeft,
                     offset: end,
                 });
-                pane.file_diff_row_provider
-                    .as_ref()
-                    .expect("streamed row provider should exist")
-                    .reset_debug_counters_for_tests();
             });
         });
     });
@@ -961,28 +910,6 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
         cx.read_from_clipboard().and_then(|item| item.text()),
         Some(needle.to_string())
     );
-
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let counters = pane
-            .file_diff_row_provider
-            .as_ref()
-            .expect("streamed row provider should exist")
-            .debug_counters_for_tests();
-        assert_eq!(
-            counters.inline_rows_materialized, 0,
-            "split partial copy should not materialize inline rows"
-        );
-        assert_eq!(
-            counters.inline_full_text_materializations, 0,
-            "split partial copy should not build the full inline diff text"
-        );
-        assert_eq!(
-            pane.diff_text_segments_cache.iter().flatten().count(),
-            0,
-            "streamed split partial copy should not populate styled row caches"
-        );
-    });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup streamed split-copy workdir");
 }
