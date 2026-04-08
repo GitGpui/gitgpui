@@ -563,7 +563,8 @@ fn oversized_json_preview_uses_visible_line_fallback_without_prepared_syntax_doc
 
 #[gpui::test]
 fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::TestAppContext) {
-    const PAYLOAD_BYTES: usize = 256 * 1024;
+    const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
+    const PAYLOAD_BYTES: usize = PREPARED_DOCUMENT_MAX_BYTES + 256 * 1024;
 
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -579,10 +580,15 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
     let file_rel = std::path::PathBuf::from("streamed_preview.json");
     let preview_abs_path = workdir.join(&file_rel);
     let long_json = format!(
-        r#"{{"needle":"preview-streamed","payload":"{}","tail":true}}"#,
+        r#"{{"title":"Ä","needle":"preview-streamed","payload":"{}","tail":true}}"#,
         "x".repeat(PAYLOAD_BYTES)
     );
     let lines: Arc<Vec<String>> = Arc::new(vec![long_json.clone()]);
+
+    assert!(
+        long_json.len() > PREPARED_DOCUMENT_MAX_BYTES,
+        "fixture should exceed the prepared-document byte gate"
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create streamed preview workdir");
@@ -618,6 +624,43 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
         let _ = window.draw(app);
     });
 
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "streamed minified preview horizontal overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
+                && pane.worktree_preview_text.len() == long_json.len()
+                && pane.worktree_preview_text.len() > PREPARED_DOCUMENT_MAX_BYTES
+                && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Json)
+                && pane.worktree_preview_prepared_syntax_document().is_none()
+                && pane
+                    .worktree_preview_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .width
+                    > px(0.0)
+        },
+        |pane| {
+            format!(
+                "preview_path={:?} text_len={} language={:?} prepared_document={:?} max_offset={:?}",
+                pane.worktree_preview_path.clone(),
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_syntax_language,
+                pane.worktree_preview_prepared_syntax_document(),
+                pane.worktree_preview_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+            )
+        },
+    );
+
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let hitbox = pane
@@ -631,6 +674,10 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
         assert!(
             pane.worktree_preview_segments_cache_get(0).is_none(),
             "streamed preview rows should bypass the full-line styled row cache"
+        );
+        assert!(
+            pane.worktree_preview_prepared_syntax_document().is_none(),
+            "oversized minified preview should stay on the streamed heuristic fallback path"
         );
 
         let paint_record = rows::diff_paint_log_for_tests()
@@ -646,6 +693,47 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
         assert!(
             !paint_record.text.is_empty(),
             "streamed preview should still paint a non-empty visible slice"
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+                let max_offset = handle.max_offset();
+                handle.set_offset(point(-max_offset.width.min(px(2400.0)), px(0.0)));
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, _app| {
+        let paint_record = rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| record.visible_ix == 0 && record.region == DiffTextRegion::Inline)
+            .expect(
+                "horizontally scrolled streamed preview draw should record the visible line paint",
+            );
+        assert!(
+            paint_record.text.as_ref().starts_with('x'),
+            "scrolled preview slice should start inside the payload string, got {:?}",
+            &paint_record.text.as_ref()[..paint_record.text.len().min(32)]
+        );
+        assert!(
+            paint_record
+                .highlights
+                .iter()
+                .any(|(range, color, background)| {
+                    range.start == 0 && range.end > 32 && color.is_some() && background.is_none()
+                }),
+            "scrolled preview slice should keep string highlighting from the payload context: {:?}",
+            paint_record.highlights
         );
     });
 
@@ -753,11 +841,49 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
         let _ = window.draw(app);
     });
 
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "committed deleted streamed preview horizontal overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.worktree_preview_path.as_ref() == Some(&workdir.join(&file_rel))
+                && pane.worktree_preview_source_path.as_ref() == Some(&preview_source_path)
+                && pane.worktree_preview_text.is_empty()
+                && pane.worktree_preview_prepared_syntax_document().is_none()
+                && pane
+                    .worktree_preview_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .width
+                    > px(0.0)
+        },
+        |pane| {
+            format!(
+                "preview_path={:?} source_path={:?} prepared_document={:?} max_offset={:?}",
+                pane.worktree_preview_path,
+                pane.worktree_preview_source_path,
+                pane.worktree_preview_prepared_syntax_document(),
+                pane.worktree_preview_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+            )
+        },
+    );
+
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(
             pane.worktree_preview_text.is_empty(),
             "committed deleted preview should stay file-backed"
+        );
+        assert!(
+            pane.worktree_preview_prepared_syntax_document().is_none(),
+            "committed deleted preview should stay on the streamed heuristic path"
         );
         let hitbox = pane
             .diff_text_hitboxes
@@ -785,6 +911,47 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
         assert!(
             !paint_record.text.is_empty(),
             "committed deleted streamed preview should still paint a non-empty visible slice"
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+                let max_offset = handle.max_offset();
+                handle.set_offset(point(-max_offset.width.min(px(2400.0)), px(0.0)));
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, _app| {
+        let paint_record = rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| record.visible_ix == 0 && record.region == DiffTextRegion::Inline)
+            .expect(
+                "horizontally scrolled committed deleted streamed preview should record the visible line paint",
+            );
+        assert!(
+            paint_record.text.as_ref().starts_with('x'),
+            "scrolled committed deleted preview slice should start inside the payload string, got {:?}",
+            &paint_record.text.as_ref()[..paint_record.text.len().min(32)]
+        );
+        assert!(
+            paint_record
+                .highlights
+                .iter()
+                .any(|(range, color, background)| {
+                    range.start == 0 && range.end > 32 && color.is_some() && background.is_none()
+                }),
+            "scrolled committed deleted preview slice should keep payload string highlighting: {:?}",
+            paint_record.highlights
         );
     });
 

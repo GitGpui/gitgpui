@@ -2,6 +2,7 @@ use super::canvas::keyed_canvas;
 use super::diff_text::{
     PreparedDocumentByteRangeHighlights, build_cached_diff_query_overlay_styled_text,
     build_cached_diff_styled_text, build_cached_diff_styled_text_from_relative_highlights,
+    syntax_highlights_for_streamed_line_slice_heuristic,
 };
 use super::*;
 use gpui::{
@@ -9,6 +10,7 @@ use gpui::{
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
 };
 use rustc_hash::{FxHashMap, FxHasher};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -499,12 +501,12 @@ fn streamed_diff_text_relative_prepared_highlights(
 fn build_streamed_diff_slice_styled_text(
     theme: AppTheme,
     spec: &StreamedDiffTextPaintSpec,
-    slice_range: &Range<usize>,
-) -> (CachedDiffStyledText, bool) {
-    let slice_text = spec
+    requested_slice_range: &Range<usize>,
+) -> (CachedDiffStyledText, bool, Range<usize>) {
+    let (slice_text, resolved_slice_range) = spec
         .raw_text
-        .slice_text(slice_range.clone())
-        .unwrap_or_default();
+        .slice_text_resolved(requested_slice_range.clone())
+        .unwrap_or((Cow::Borrowed(""), 0..0));
     let slice_text_ref = slice_text.as_ref();
 
     let mut pending = false;
@@ -519,18 +521,34 @@ fn build_streamed_diff_slice_styled_text(
             None,
         ),
         StreamedDiffTextSyntaxSource::Heuristic { language, mode } => {
-            build_cached_diff_styled_text(
+            match syntax_highlights_for_streamed_line_slice_heuristic(
                 theme,
-                slice_text_ref,
-                &[],
-                "",
-                Some(*language),
-                *mode,
-                None,
-            )
+                &spec.raw_text,
+                *language,
+                requested_slice_range.clone(),
+                resolved_slice_range.clone(),
+            ) {
+                Some(highlights) => build_cached_diff_styled_text_from_relative_highlights(
+                    slice_text_ref,
+                    highlights.as_slice(),
+                ),
+                None => build_cached_diff_styled_text(
+                    theme,
+                    slice_text_ref,
+                    &[],
+                    "",
+                    Some(*language),
+                    *mode,
+                    None,
+                ),
+            }
         }
         StreamedDiffTextSyntaxSource::Prepared { language, .. } => {
-            match streamed_diff_text_relative_prepared_highlights(theme, spec, slice_range) {
+            match streamed_diff_text_relative_prepared_highlights(
+                theme,
+                spec,
+                &resolved_slice_range,
+            ) {
                 Some(result) => {
                     pending = result.pending;
                     let StreamedDiffTextSyntaxSource::Prepared {
@@ -545,11 +563,13 @@ fn build_streamed_diff_slice_styled_text(
                         .get(*line_ix)
                         .copied()
                         .unwrap_or_default()
-                        .saturating_add(slice_range.start);
+                        .saturating_add(resolved_slice_range.start);
                     let mut relative = Vec::with_capacity(result.highlights.len());
                     for (range, style) in result.highlights {
                         let start = range.start.max(line_start);
-                        let end = range.end.min(line_start.saturating_add(slice_range.len()));
+                        let end = range
+                            .end
+                            .min(line_start.saturating_add(resolved_slice_range.len()));
                         if start < end {
                             relative.push((
                                 start.saturating_sub(line_start)..end.saturating_sub(line_start),
@@ -578,7 +598,7 @@ fn build_streamed_diff_slice_styled_text(
     if !spec.word_ranges.is_empty()
         && let Some(mut color) = spec.word_color
     {
-        let clipped = clip_ranges_to_slice(spec.word_ranges.as_ref(), slice_range);
+        let clipped = clip_ranges_to_slice(spec.word_ranges.as_ref(), &resolved_slice_range);
         if !clipped.is_empty() {
             color.a = if theme.is_dark { 0.22 } else { 0.16 };
             base =
@@ -590,7 +610,7 @@ fn build_streamed_diff_slice_styled_text(
         base = build_cached_diff_query_overlay_styled_text(theme, &base, spec.query.as_ref());
     }
 
-    (base, pending)
+    (base, pending, resolved_slice_range)
 }
 
 fn diff_text_paint_payload(
@@ -1561,7 +1581,7 @@ fn paint_selectable_diff_text(
             cell_width,
             overscan_columns,
         );
-        let (slice_styled, pending) =
+        let (slice_styled, pending, resolved_slice_range) =
             build_streamed_diff_slice_styled_text(theme, spec, &slice_range);
         let (layout_key, layout, shaped_new) = ensure_layout_cached(
             view,
@@ -1575,10 +1595,10 @@ fn paint_selectable_diff_text(
             window,
             cx,
         );
-        paint_x = bounds.left() + cell_width * slice_range.start as f32;
+        paint_x = bounds.left() + cell_width * resolved_slice_range.start as f32;
         hitbox_cell_width = Some(cell_width);
         pending_prepared_syntax = pending;
-        streamed_slice_range = Some(slice_range);
+        streamed_slice_range = Some(resolved_slice_range);
         let required_row_w =
             (row_extra + cell_width * spec.raw_text.len() as f32 + px(16.0)).round();
         streamed_styled = Some(slice_styled);

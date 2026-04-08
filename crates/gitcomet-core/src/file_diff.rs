@@ -30,6 +30,9 @@ const SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD: usize = 100_000;
 const PATIENCE_POSITIONAL_FALLBACK_LINE_THRESHOLD: usize = 2_048;
 const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_CHANGED_RATIO_DENOMINATOR: usize = 4;
 const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_BLOCK_LEN: usize = 1;
+// UTF-8 code points are at most 4 bytes wide, so 3 bytes of lookaround is
+// enough to recover the nearest character boundary around any requested slice.
+const UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffEofNewline {
@@ -84,6 +87,41 @@ fn read_utf8_file_subslice(
     subrange: Range<usize>,
     ascii_only: bool,
 ) -> Option<Arc<str>> {
+    read_utf8_file_subslice_with_range(path, base_range, subrange, ascii_only).map(|(text, _)| text)
+}
+
+fn clamp_byte_up_to_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset < text.len() && !text.is_char_boundary(offset) {
+        offset += 1;
+    }
+    offset
+}
+
+fn clamp_byte_down_to_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+fn resolved_utf8_text_subslice_range(text: &str, range: Range<usize>) -> Option<Range<usize>> {
+    if range.start > range.end || range.end > text.len() {
+        return None;
+    }
+
+    let start = clamp_byte_up_to_char_boundary(text, range.start);
+    let end = clamp_byte_down_to_char_boundary(text, range.end).max(start);
+    Some(start..end)
+}
+
+fn read_utf8_file_subslice_with_range(
+    path: &PathBuf,
+    base_range: &Range<usize>,
+    subrange: Range<usize>,
+    ascii_only: bool,
+) -> Option<(Arc<str>, Range<usize>)> {
     if subrange.start > subrange.end
         || subrange.end > base_range.end.saturating_sub(base_range.start)
     {
@@ -93,11 +131,15 @@ fn read_utf8_file_subslice(
     let start = base_range.start.saturating_add(subrange.start);
     let end = base_range.start.saturating_add(subrange.end);
     if ascii_only {
-        return read_utf8_file_slice(path, start..end);
+        return read_utf8_file_slice(path, start..end).map(|text| (text, subrange));
     }
 
-    let read_start = start.saturating_sub(3).max(base_range.start);
-    let read_end = end.saturating_add(3).min(base_range.end);
+    let read_start = start
+        .saturating_sub(UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES)
+        .max(base_range.start);
+    let read_end = end
+        .saturating_add(UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES)
+        .min(base_range.end);
     let bytes = read_file_bytes(path, read_start..read_end)?;
     let requested_start = start.saturating_sub(read_start).min(bytes.len());
     let requested_end = end.saturating_sub(read_start).min(bytes.len());
@@ -112,13 +154,20 @@ fn read_utf8_file_subslice(
         local_end -= 1;
     }
 
+    let resolved_range = read_start
+        .saturating_add(local_start)
+        .saturating_sub(base_range.start)
+        ..read_start
+            .saturating_add(local_end)
+            .saturating_sub(base_range.start);
     if local_end <= local_start {
-        return Some(Arc::from(""));
+        return Some((Arc::from(""), resolved_range));
     }
 
     String::from_utf8(bytes[local_start..local_end].to_vec())
         .ok()
         .map(Arc::from)
+        .map(|text| (text, resolved_range))
 }
 
 impl FileDiffLineText {
@@ -219,6 +268,33 @@ impl FileDiffLineText {
         }
     }
 
+    pub fn slice_bytes(&self, range: Range<usize>) -> Option<Cow<'_, [u8]>> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => Some(Cow::Borrowed(
+                text.as_bytes().get(range).unwrap_or_default(),
+            )),
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                Some(Cow::Borrowed(
+                    text.as_bytes().get(start..end).unwrap_or_default(),
+                ))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => Some(Cow::Borrowed(
+                text.as_ref().as_bytes().get(range).unwrap_or_default(),
+            )),
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                let start = slice.range.start.saturating_add(range.start);
+                let end = slice.range.start.saturating_add(range.end);
+                read_file_bytes(slice.path.as_ref(), start..end).map(Cow::Owned)
+            }
+        }
+    }
+
     pub fn slice_text(&self, range: Range<usize>) -> Option<Cow<'_, str>> {
         if range.start > range.end || range.end > self.len() {
             return None;
@@ -240,6 +316,52 @@ impl FileDiffLineText {
                 read_utf8_file_subslice(slice.path.as_ref(), &slice.range, range, slice.ascii_only)
                     .map(|text| Cow::Owned(text.as_ref().to_string()))
             }
+        }
+    }
+
+    pub fn slice_text_resolved(&self, range: Range<usize>) -> Option<(Cow<'_, str>, Range<usize>)> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                let resolved_range = resolved_utf8_text_subslice_range(text.as_ref(), range)?;
+                Some((
+                    Cow::Borrowed(text.get(resolved_range.clone()).unwrap_or_default()),
+                    resolved_range,
+                ))
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                let resolved_absolute =
+                    resolved_utf8_text_subslice_range(text.as_ref(), start..end)?;
+                let resolved_relative = resolved_absolute.start.saturating_sub(base.start)
+                    ..resolved_absolute.end.saturating_sub(base.start);
+                Some((
+                    Cow::Borrowed(text.get(resolved_absolute).unwrap_or_default()),
+                    resolved_relative,
+                ))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                let resolved_range = resolved_utf8_text_subslice_range(text.as_ref(), range)?;
+                Some((
+                    Cow::Borrowed(
+                        text.as_ref()
+                            .get(resolved_range.clone())
+                            .unwrap_or_default(),
+                    ),
+                    resolved_range,
+                ))
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => read_utf8_file_subslice_with_range(
+                slice.path.as_ref(),
+                &slice.range,
+                range,
+                slice.ascii_only,
+            )
+            .map(|(text, resolved_range)| (Cow::Owned(text.as_ref().to_string()), resolved_range)),
         }
     }
 
@@ -3151,6 +3273,37 @@ mod tests {
         }
 
         (old_line_to_row, new_line_to_row)
+    }
+
+    #[test]
+    fn file_slice_text_resolved_clamps_to_utf8_char_boundaries() {
+        let text = "aÄ日z";
+        let temp_path = std::env::temp_dir().join(format!(
+            "gitcomet_file_diff_utf8_slice_{}_{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be monotonic enough for test temp path")
+                .as_nanos()
+        ));
+        std::fs::write(&temp_path, text.as_bytes()).expect("write UTF-8 file slice fixture");
+
+        let raw_text =
+            FileDiffLineText::file_slice(Arc::new(temp_path.clone()), 0..text.len(), false, false);
+
+        let (slice_text, resolved_range) = raw_text
+            .slice_text_resolved(2..6)
+            .expect("UTF-8 file slice should resolve");
+        assert_eq!(slice_text.as_ref(), "日");
+        assert_eq!(resolved_range, 3..6);
+
+        let (empty_slice, empty_range) = raw_text
+            .slice_text_resolved(2..5)
+            .expect("partial UTF-8 slice should still resolve");
+        assert!(empty_slice.is_empty());
+        assert_eq!(empty_range, 3..3);
+
+        let _ = std::fs::remove_file(&temp_path);
     }
 
     #[test]

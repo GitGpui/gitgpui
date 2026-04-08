@@ -266,17 +266,17 @@ unsafe fn usable_size(ptr: *mut c_void) -> usize {
 
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
     {
-        return unsafe { malloc_usable_size(ptr) };
+        unsafe { malloc_usable_size(ptr) }
     }
 
     #[cfg(target_os = "macos")]
     {
-        return unsafe { malloc_size(ptr.cast_const()) };
+        unsafe { malloc_size(ptr.cast_const()) }
     }
 
     #[cfg(windows)]
     {
-        return unsafe { _msize(ptr) as usize };
+        unsafe { _msize(ptr) as usize }
     }
 
     #[cfg(not(any(

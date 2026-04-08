@@ -319,6 +319,25 @@ pub(super) fn reset_prepared_syntax_cache() {
     prepared::reset_prepared_syntax_cache();
 }
 
+pub(super) fn syntax_tokens_for_streamed_line_slice_heuristic(
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    language: DiffSyntaxLanguage,
+    requested_slice_range: Range<usize>,
+    resolved_slice_range: Range<usize>,
+) -> Option<Vec<SyntaxToken>> {
+    heuristic::syntax_tokens_for_streamed_line_slice_heuristic(
+        raw_text,
+        language,
+        requested_slice_range,
+        resolved_slice_range,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn reset_streamed_heuristic_line_cache() {
+    heuristic::reset_streamed_heuristic_line_cache();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,6 +371,38 @@ mod tests {
                 text.is_char_boundary(token.range.end),
                 "{token:?} end is not a char boundary in {text:?}"
             );
+        }
+    }
+
+    struct TempFileBackedLineFixture {
+        path: std::path::PathBuf,
+        raw_text: gitcomet_core::file_diff::FileDiffLineText,
+    }
+
+    impl TempFileBackedLineFixture {
+        fn new(name: &str, text: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "gitcomet_{name}_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock should be monotonic enough for test temp path")
+                    .as_nanos()
+            ));
+            std::fs::write(&path, text.as_bytes()).expect("write streamed slice fixture");
+            let raw_text = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                Arc::new(path.clone()),
+                0..text.len(),
+                false,
+                false,
+            );
+            Self { path, raw_text }
+        }
+    }
+
+    impl Drop for TempFileBackedLineFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 
@@ -551,6 +602,163 @@ mod tests {
                 .iter()
                 .all(|pass| pass.containing_byte_range.is_some()),
             "pathological line subpasses should use containing byte ranges"
+        );
+    }
+
+    #[test]
+    fn streamed_ascii_json_slice_keeps_string_state_after_checkpoint() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+        reset_streamed_heuristic_line_cache();
+
+        let payload = "x".repeat(CHECKPOINT_SPACING * 2);
+        let text = format!(r#"{{"payload":"{payload}","tail":true}}"#);
+        let payload_start = text.find(&payload).expect("payload should be present");
+        let slice_start = payload_start + CHECKPOINT_SPACING + 137;
+        let slice_end = slice_start + 256;
+        let raw_text = gitcomet_core::file_diff::FileDiffLineText::shared(Arc::from(text));
+        let (slice_text, resolved_range) = raw_text
+            .slice_text_resolved(slice_start..slice_end)
+            .expect("ASCII streamed slice should resolve");
+
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &raw_text,
+            DiffSyntaxLanguage::Json,
+            slice_start..slice_end,
+            resolved_range,
+        )
+        .expect("ASCII streamed slice should be supported");
+        assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+
+        assert!(
+            tokens.iter().any(|token| {
+                token.kind == SyntaxTokenKind::String
+                    && token.range.start == 0
+                    && token.range.end > 64
+            }),
+            "slice that starts inside the payload string should keep string highlighting: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn streamed_ascii_block_comment_slice_keeps_comment_state_and_tail_tokens() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+        reset_streamed_heuristic_line_cache();
+
+        let comment = "x".repeat(CHECKPOINT_SPACING + 192);
+        let text = format!("/*{comment}*/ let value = 1;");
+        let comment_start = text.find(&comment).expect("comment body should be present");
+        let comment_end = comment_start + comment.len();
+        let slice_start = comment_start + CHECKPOINT_SPACING;
+        let slice_end = text.len();
+        let raw_text = gitcomet_core::file_diff::FileDiffLineText::shared(Arc::from(text));
+        let (slice_text, resolved_range) = raw_text
+            .slice_text_resolved(slice_start..slice_end)
+            .expect("ASCII streamed slice should resolve");
+
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &raw_text,
+            DiffSyntaxLanguage::Rust,
+            slice_start..slice_end,
+            resolved_range,
+        )
+        .expect("ASCII streamed slice should be supported");
+        assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+
+        let comment_tail_len = comment_end.saturating_add(2).saturating_sub(slice_start);
+        assert!(
+            tokens.iter().any(|token| {
+                token.kind == SyntaxTokenKind::Comment
+                    && token.range.start == 0
+                    && token.range.end >= comment_tail_len
+            }),
+            "slice should preserve the continued block comment: {tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Keyword),
+            "tail after the closing comment should still tokenize normally: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn streamed_utf8_file_backed_json_slice_keeps_string_state_after_checkpoint() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+        reset_streamed_heuristic_line_cache();
+
+        let payload = "x".repeat(CHECKPOINT_SPACING * 2);
+        let text = format!(r#"{{"title":"Ä","payload":"{payload}","tail":true}}"#);
+        let payload_start = text.find(&payload).expect("payload should be present");
+        let slice_start = payload_start + CHECKPOINT_SPACING + 137;
+        let slice_end = slice_start + 256;
+        let fixture = TempFileBackedLineFixture::new("streamed_utf8_json_slice.json", &text);
+        let (slice_text, resolved_range) = fixture
+            .raw_text
+            .slice_text_resolved(slice_start..slice_end)
+            .expect("UTF-8 streamed slice should resolve");
+
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &fixture.raw_text,
+            DiffSyntaxLanguage::Json,
+            slice_start..slice_end,
+            resolved_range,
+        )
+        .expect("UTF-8 streamed slice should be supported");
+
+        assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+        assert!(
+            tokens.iter().any(|token| {
+                token.kind == SyntaxTokenKind::String
+                    && token.range.start == 0
+                    && token.range.end > 64
+            }),
+            "UTF-8 file-backed slice that starts inside the payload string should keep string highlighting: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn streamed_utf8_file_backed_block_comment_slice_keeps_comment_state_and_tail_tokens() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+        reset_streamed_heuristic_line_cache();
+
+        let comment = "x".repeat(CHECKPOINT_SPACING + 192);
+        let text = format!(r#"let title = "Ä"; /*{comment}*/ let value = 1;"#);
+        let comment_start = text.find(&comment).expect("comment body should be present");
+        let comment_end = comment_start + comment.len();
+        let slice_start = comment_start + CHECKPOINT_SPACING;
+        let slice_end = text.len();
+        let fixture = TempFileBackedLineFixture::new("streamed_utf8_comment_slice.rs", &text);
+        let (slice_text, resolved_range) = fixture
+            .raw_text
+            .slice_text_resolved(slice_start..slice_end)
+            .expect("UTF-8 streamed slice should resolve");
+
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &fixture.raw_text,
+            DiffSyntaxLanguage::Rust,
+            slice_start..slice_end,
+            resolved_range.clone(),
+        )
+        .expect("UTF-8 streamed slice should be supported");
+
+        assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+
+        let comment_tail_len = comment_end
+            .saturating_add(2)
+            .saturating_sub(resolved_range.start);
+        assert!(
+            tokens.iter().any(|token| {
+                token.kind == SyntaxTokenKind::Comment
+                    && token.range.start == 0
+                    && token.range.end >= comment_tail_len
+            }),
+            "UTF-8 file-backed slice should preserve the continued block comment: {tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Keyword),
+            "tail after the closing comment should still tokenize normally: {tokens:?}"
         );
     }
 

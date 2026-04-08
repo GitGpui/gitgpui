@@ -328,7 +328,8 @@ fn oversized_json_file_diff_uses_visible_line_fallback_without_prepared_syntax_d
 
 #[gpui::test]
 fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpui::TestAppContext) {
-    const PAYLOAD_BYTES: usize = 256 * 1024;
+    const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
+    const PAYLOAD_BYTES: usize = PREPARED_DOCUMENT_MAX_BYTES + 256 * 1024;
 
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -351,6 +352,15 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
         "x".repeat(PAYLOAD_BYTES)
     );
 
+    assert!(
+        old_text.len() > PREPARED_DOCUMENT_MAX_BYTES,
+        "old-side fixture should exceed the prepared-document byte gate"
+    );
+    assert!(
+        new_text.len() > PREPARED_DOCUMENT_MAX_BYTES,
+        "new-side fixture should exceed the prepared-document byte gate"
+    );
+
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create streamed diff workdir");
 
@@ -363,13 +373,29 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
         |pane| {
             pane.file_diff_cache_inflight.is_none()
                 && pane.file_diff_cache_path == Some(workdir.join(&path))
+                && pane.file_diff_cache_language == Some(rows::DiffSyntaxLanguage::Json)
+                && pane.file_diff_old_text.len() == old_text.len()
+                && pane.file_diff_old_text.len() > PREPARED_DOCUMENT_MAX_BYTES
+                && pane.file_diff_new_text.len() == new_text.len()
+                && pane.file_diff_new_text.len() > PREPARED_DOCUMENT_MAX_BYTES
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                    .is_none()
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_none()
                 && pane.diff_visible_len() >= 1
         },
         |pane| {
             format!(
-                "inflight={:?} cache_path={:?} diff_visible_len={} inline_provider={} split_provider={}",
+                "inflight={:?} cache_path={:?} language={:?} old_text_len={} new_text_len={} left_doc={:?} right_doc={:?} diff_visible_len={} inline_provider={} split_provider={}",
                 pane.file_diff_cache_inflight,
                 pane.file_diff_cache_path.clone(),
+                pane.file_diff_cache_language,
+                pane.file_diff_old_text.len(),
+                pane.file_diff_new_text.len(),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
                 pane.diff_visible_len(),
                 pane.file_diff_inline_row_provider.is_some(),
                 pane.file_diff_row_provider.is_some(),
@@ -400,6 +426,32 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
         let _ = window.draw(app);
     });
 
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "streamed minified inline diff horizontal overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.file_diff_cache_language == Some(rows::DiffSyntaxLanguage::Json)
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                    .is_none()
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_none()
+                && pane.diff_scroll.0.borrow().base_handle.max_offset().width > px(0.0)
+        },
+        |pane| {
+            format!(
+                "language={:?} left_doc={:?} right_doc={:?} max_offset={:?}",
+                pane.file_diff_cache_language,
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+                pane.diff_scroll.0.borrow().base_handle.max_offset()
+            )
+        },
+    );
+
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let hitbox = pane
@@ -415,6 +467,16 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
             0,
             "streamed giant inline diff rows should bypass the full-line styled cache"
         );
+        assert!(
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                .is_none(),
+            "oversized minified inline diff should keep the left side on the streamed heuristic fallback path"
+        );
+        assert!(
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                .is_none(),
+            "oversized minified inline diff should keep the right side on the streamed heuristic fallback path"
+        );
 
         let paint_record = rows::diff_paint_log_for_tests()
             .into_iter()
@@ -425,6 +487,47 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
             "streamed inline diff should paint only a visible slice, got {} of {} bytes",
             paint_record.text.len(),
             old_text.len()
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let handle = pane.diff_scroll.0.borrow().base_handle.clone();
+                let max_offset = handle.max_offset();
+                handle.set_offset(point(-max_offset.width.min(px(2400.0)), px(0.0)));
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, _app| {
+        let paint_record = rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| record.visible_ix == 0 && record.region == DiffTextRegion::Inline)
+            .expect(
+                "horizontally scrolled streamed inline diff should record the visible line paint",
+            );
+        assert!(
+            paint_record.text.as_ref().starts_with('x'),
+            "scrolled inline diff slice should start inside the JSON payload string, got {:?}",
+            &paint_record.text.as_ref()[..paint_record.text.len().min(32)]
+        );
+        assert!(
+            paint_record
+                .highlights
+                .iter()
+                .any(|(range, color, background)| {
+                    range.start == 0 && range.end > 32 && color.is_some() && background.is_none()
+                }),
+            "scrolled inline diff slice should keep payload string highlighting: {:?}",
+            paint_record.highlights
         );
     });
 
