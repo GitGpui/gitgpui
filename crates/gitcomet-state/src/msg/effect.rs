@@ -161,6 +161,9 @@ pub enum Effect {
         dest: PathBuf,
         auth: Option<StagedGitAuth>,
     },
+    AbortCloneRepo {
+        dest: PathBuf,
+    },
     ExportPatch {
         repo_id: RepoId,
         commit_id: CommitId,

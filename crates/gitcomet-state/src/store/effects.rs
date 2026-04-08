@@ -232,6 +232,7 @@ pub(super) fn schedule_effect(
         Effect::CloneRepo { url, dest, auth } => {
             clone::schedule_clone_repo(executor, msg_tx, url, dest, auth)
         }
+        Effect::AbortCloneRepo { dest } => clone::schedule_abort_clone_repo(msg_tx, dest),
         Effect::ExportPatch {
             repo_id,
             commit_id,
