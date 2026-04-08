@@ -187,15 +187,17 @@ pub(in crate::view) fn diff_paint_log_for_tests() -> Vec<DiffPaintRecord> {
     DIFF_PAINT_LOG.with(|log| log.borrow().clone())
 }
 
-pub(super) fn is_streamable_diff_text(text: &str) -> bool {
-    text.len() >= STREAMED_DIFF_TEXT_MIN_BYTES && text.is_ascii() && !text.contains('\t')
+pub(in crate::view) fn is_streamable_diff_text(
+    text: &gitcomet_core::file_diff::FileDiffLineText,
+) -> bool {
+    text.len() >= STREAMED_DIFF_TEXT_MIN_BYTES && !text.has_tabs_without_loading()
 }
 
 fn should_stream_diff_text(spec: Option<&StreamedDiffTextPaintSpec>) -> bool {
     let Some(spec) = spec else {
         return false;
     };
-    is_streamable_diff_text(spec.raw_text.as_ref())
+    is_streamable_diff_text(&spec.raw_text)
 }
 
 fn streamed_diff_text_cell_width_cache_key(base_style: &TextStyle, font_size: Pixels) -> u64 {
@@ -313,9 +315,7 @@ fn hash_range(hasher: &mut FxHasher, range: &Range<usize>) {
 }
 
 fn streamed_diff_text_text_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
-    let mut hasher = FxHasher::default();
-    spec.raw_text.hash(&mut hasher);
-    hasher.finish()
+    spec.raw_text.identity_hash_without_loading()
 }
 
 fn streamed_diff_text_highlights_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
@@ -503,15 +503,15 @@ fn build_streamed_diff_slice_styled_text(
 ) -> (CachedDiffStyledText, bool) {
     let slice_text = spec
         .raw_text
-        .as_ref()
-        .get(slice_range.clone())
+        .slice_text(slice_range.clone())
         .unwrap_or_default();
+    let slice_text_ref = slice_text.as_ref();
 
     let mut pending = false;
     let mut base = match &spec.syntax {
         StreamedDiffTextSyntaxSource::None => build_cached_diff_styled_text(
             theme,
-            slice_text,
+            slice_text_ref,
             &[],
             "",
             None,
@@ -519,7 +519,15 @@ fn build_streamed_diff_slice_styled_text(
             None,
         ),
         StreamedDiffTextSyntaxSource::Heuristic { language, mode } => {
-            build_cached_diff_styled_text(theme, slice_text, &[], "", Some(*language), *mode, None)
+            build_cached_diff_styled_text(
+                theme,
+                slice_text_ref,
+                &[],
+                "",
+                Some(*language),
+                *mode,
+                None,
+            )
         }
         StreamedDiffTextSyntaxSource::Prepared { language, .. } => {
             match streamed_diff_text_relative_prepared_highlights(theme, spec, slice_range) {
@@ -550,13 +558,13 @@ fn build_streamed_diff_slice_styled_text(
                         }
                     }
                     build_cached_diff_styled_text_from_relative_highlights(
-                        slice_text,
+                        slice_text_ref,
                         relative.as_slice(),
                     )
                 }
                 None => build_cached_diff_styled_text(
                     theme,
-                    slice_text,
+                    slice_text_ref,
                     &[],
                     "",
                     Some(*language),

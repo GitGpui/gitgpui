@@ -10,47 +10,28 @@ use crate::view::markdown_preview::{
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use rustc_hash::FxHasher;
 
-fn resolved_output_line_byte_range(
-    text: &str,
-    line_starts: &[usize],
-    line_ix: usize,
-) -> Range<usize> {
-    let text_len = text.len();
-    let start = line_starts
-        .get(line_ix)
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
-    let mut end = line_starts
-        .get(line_ix.saturating_add(1))
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
-    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-        end = end.saturating_sub(1);
-    }
-    start..end
+#[derive(Clone)]
+struct WorktreePreviewPreparedSyntaxSource {
+    document_text: Arc<str>,
+    line_starts: Arc<[usize]>,
+    document: rows::PreparedDiffSyntaxDocument,
 }
 
 fn worktree_preview_streamed_spec(
-    source_text: &Arc<str>,
-    line_starts: &Arc<[usize]>,
+    raw_text: gitcomet_core::file_diff::FileDiffLineText,
     line_ix: usize,
     query: &SharedString,
     language: Option<rows::DiffSyntaxLanguage>,
     syntax_mode: rows::DiffSyntaxMode,
-    syntax_document: Option<rows::PreparedDiffSyntaxDocument>,
+    prepared_syntax_source: Option<&WorktreePreviewPreparedSyntaxSource>,
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
-    let raw_range =
-        resolved_output_line_byte_range(source_text.as_ref(), line_starts.as_ref(), line_ix);
-    let line = source_text.get(raw_range.clone()).unwrap_or_default();
-    diff_canvas::is_streamable_diff_text(line).then(|| {
-        let syntax = match (language, syntax_document) {
-            (Some(language), Some(document)) => {
+    diff_canvas::is_streamable_diff_text(&raw_text).then(|| {
+        let syntax = match (language, prepared_syntax_source) {
+            (Some(language), Some(prepared_syntax_source)) => {
                 diff_canvas::StreamedDiffTextSyntaxSource::Prepared {
-                    document_text: Arc::clone(source_text),
-                    line_starts: Arc::clone(line_starts),
-                    document,
+                    document_text: Arc::clone(&prepared_syntax_source.document_text),
+                    line_starts: Arc::clone(&prepared_syntax_source.line_starts),
+                    document: prepared_syntax_source.document,
                     language,
                     line_ix,
                 }
@@ -62,10 +43,7 @@ fn worktree_preview_streamed_spec(
             (None, _) => diff_canvas::StreamedDiffTextSyntaxSource::None,
         };
         diff_canvas::StreamedDiffTextPaintSpec {
-            raw_text: gitcomet_core::file_diff::FileDiffLineText::shared_slice(
-                Arc::clone(source_text),
-                raw_range,
-            ),
+            raw_text,
             query: query.clone(),
             word_ranges: Arc::from([]),
             word_color: None,
@@ -91,9 +69,6 @@ impl MainPaneView {
         let Some(line_count) = this.worktree_preview_line_count() else {
             return Vec::new();
         };
-        let source_text = this.worktree_preview_text.clone();
-        let source_text_arc: Arc<str> = source_text.clone().into();
-        let line_starts = Arc::clone(&this.worktree_preview_line_starts);
 
         let should_clear_cache = match this.worktree_preview_segments_cache_path.as_ref() {
             Some(p) => p != path,
@@ -108,6 +83,16 @@ impl MainPaneView {
         let language = this.worktree_preview_syntax_language;
         let syntax_document = this.worktree_preview_prepared_syntax_document();
         let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
+        let prepared_syntax_source = match syntax_document {
+            Some(document) if !this.worktree_preview_text.is_empty() => {
+                Some(WorktreePreviewPreparedSyntaxSource {
+                    document_text: Arc::from(this.worktree_preview_text.as_ref()),
+                    line_starts: Arc::clone(&this.worktree_preview_line_starts),
+                    document,
+                })
+            }
+            _ => None,
+        };
         let highlight_palette = syntax_highlight_palette(theme);
 
         let bar_color = worktree_preview_bar_color(this, theme);
@@ -117,18 +102,29 @@ impl MainPaneView {
         range
             .take_while(|ix| *ix < line_count)
             .map(|ix| {
-                let line = rows::resolved_output_line_text(source_text.as_ref(), &line_starts, ix);
+                let Some(raw_text) = this.worktree_preview_line_raw_text(ix) else {
+                    return diff_canvas::worktree_preview_row_canvas(
+                        theme,
+                        cx.entity(),
+                        ix,
+                        min_width,
+                        bar_color,
+                        line_number_string(u32::try_from(ix + 1).ok()),
+                        None,
+                        None,
+                    );
+                };
                 let streamed_spec = worktree_preview_streamed_spec(
-                    &source_text_arc,
-                    &line_starts,
+                    raw_text.clone(),
                     ix,
                     &query,
                     language,
                     syntax_mode,
-                    syntax_document,
+                    prepared_syntax_source.as_ref(),
                 );
                 let mut pending_styled = None;
                 if streamed_spec.is_none() && this.worktree_preview_segments_cache_get(ix).is_none() {
+                    let line = raw_text.as_ref();
                     let (styled, is_pending) =
                         build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
                             theme,

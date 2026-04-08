@@ -216,6 +216,18 @@ pub enum DiffTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiffPreviewTextSide {
+    Old,
+    New,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffPreviewTextFile {
+    pub path: PathBuf,
+    pub side: DiffPreviewTextSide,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Diff {
     pub target: DiffTarget,

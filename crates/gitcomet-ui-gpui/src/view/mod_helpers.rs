@@ -2075,6 +2075,7 @@ pub(super) enum PopoverKind {
         discard_lines_patch: Option<String>,
         lines_count: usize,
         copy_text: Option<String>,
+        copy_target: Option<(usize, DiffTextRegion)>,
     },
     ConflictResolverInputRowMenu {
         line_label: SharedString,

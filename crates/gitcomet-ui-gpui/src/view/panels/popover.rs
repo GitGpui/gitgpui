@@ -1590,6 +1590,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 lines_count,
                 copy_text,
+                copy_target,
             } => self
                 .context_menu_view(
                     PopoverKind::DiffEditorMenu {
@@ -1602,6 +1603,7 @@ impl PopoverHost {
                         discard_lines_patch,
                         lines_count,
                         copy_text,
+                        copy_target,
                     },
                     cx,
                 )

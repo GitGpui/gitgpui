@@ -369,6 +369,8 @@ pub struct DiffState {
     pub diff: Loadable<Shared<Diff>>,
     pub diff_file_rev: u64,
     pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
+    pub diff_preview_text_file_rev: u64,
+    pub diff_preview_text_file: Loadable<Option<Shared<DiffPreviewTextFile>>>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
@@ -381,6 +383,8 @@ impl Default for DiffState {
             diff: Loadable::NotLoaded,
             diff_file_rev: 0,
             diff_file: Loadable::NotLoaded,
+            diff_preview_text_file_rev: 0,
+            diff_preview_text_file: Loadable::NotLoaded,
             diff_file_image: Loadable::NotLoaded,
         }
     }

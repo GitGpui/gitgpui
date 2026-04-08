@@ -49,7 +49,7 @@ fn streamed_diff_text_spec_with_syntax(
     word_color: Option<gpui::Rgba>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
-    diff_canvas::is_streamable_diff_text(raw_text.as_ref()).then(|| {
+    diff_canvas::is_streamable_diff_text(&raw_text).then(|| {
         diff_canvas::StreamedDiffTextPaintSpec {
             raw_text,
             query: query.clone(),
@@ -179,7 +179,7 @@ impl MainPaneView {
                     };
                     if this
                         .file_diff_inline_render_data(inline_ix)
-                        .is_some_and(|row| diff_canvas::is_streamable_diff_text(row.text.as_ref()))
+                        .is_some_and(|row| diff_canvas::is_streamable_diff_text(&row.text))
                     {
                         continue;
                     }

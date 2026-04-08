@@ -1,8 +1,14 @@
 use crate::domain::SharedLineText;
+use rustc_hash::FxHasher;
+use std::borrow::Cow;
 use std::cell::OnceCell;
+use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffRowKind {
@@ -36,11 +42,83 @@ enum FileDiffLineTextStorage {
     Owned(Arc<str>),
     SharedSlice { text: Arc<str>, range: Range<usize> },
     SharedLine(SharedLineText),
+    FileSlice(Arc<FileDiffLineFileSlice>),
 }
 
 #[derive(Clone, Debug)]
 pub struct FileDiffLineText {
     storage: FileDiffLineTextStorage,
+}
+
+#[derive(Debug)]
+struct FileDiffLineFileSlice {
+    path: Arc<PathBuf>,
+    range: Range<usize>,
+    ascii_only: bool,
+    has_tabs: bool,
+    text: OnceLock<Arc<str>>,
+}
+
+fn read_file_bytes(path: &PathBuf, range: Range<usize>) -> Option<Vec<u8>> {
+    if range.start > range.end {
+        return None;
+    }
+
+    let mut file = File::open(path).ok()?;
+    file.seek(SeekFrom::Start(u64::try_from(range.start).ok()?))
+        .ok()?;
+    let mut bytes = vec![0u8; range.end.saturating_sub(range.start)];
+    file.read_exact(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+fn read_utf8_file_slice(path: &PathBuf, range: Range<usize>) -> Option<Arc<str>> {
+    let bytes = read_file_bytes(path, range)?;
+    let text = String::from_utf8(bytes).ok()?;
+    Some(Arc::from(text))
+}
+
+fn read_utf8_file_subslice(
+    path: &PathBuf,
+    base_range: &Range<usize>,
+    subrange: Range<usize>,
+    ascii_only: bool,
+) -> Option<Arc<str>> {
+    if subrange.start > subrange.end
+        || subrange.end > base_range.end.saturating_sub(base_range.start)
+    {
+        return None;
+    }
+
+    let start = base_range.start.saturating_add(subrange.start);
+    let end = base_range.start.saturating_add(subrange.end);
+    if ascii_only {
+        return read_utf8_file_slice(path, start..end);
+    }
+
+    let read_start = start.saturating_sub(3).max(base_range.start);
+    let read_end = end.saturating_add(3).min(base_range.end);
+    let bytes = read_file_bytes(path, read_start..read_end)?;
+    let requested_start = start.saturating_sub(read_start).min(bytes.len());
+    let requested_end = end.saturating_sub(read_start).min(bytes.len());
+
+    let mut local_start = requested_start;
+    while local_start < bytes.len() && (bytes[local_start] & 0b1100_0000) == 0b1000_0000 {
+        local_start += 1;
+    }
+
+    let mut local_end = requested_end.max(local_start).min(bytes.len());
+    while local_end > local_start && std::str::from_utf8(&bytes[local_start..local_end]).is_err() {
+        local_end -= 1;
+    }
+
+    if local_end <= local_start {
+        return Some(Arc::from(""));
+    }
+
+    String::from_utf8(bytes[local_start..local_end].to_vec())
+        .ok()
+        .map(Arc::from)
 }
 
 impl FileDiffLineText {
@@ -66,6 +144,23 @@ impl FileDiffLineText {
         }
     }
 
+    pub fn file_slice(
+        path: Arc<PathBuf>,
+        range: Range<usize>,
+        ascii_only: bool,
+        has_tabs: bool,
+    ) -> Self {
+        Self {
+            storage: FileDiffLineTextStorage::FileSlice(Arc::new(FileDiffLineFileSlice {
+                path,
+                range,
+                ascii_only,
+                has_tabs,
+                text: OnceLock::new(),
+            })),
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match &self.storage {
             FileDiffLineTextStorage::Owned(text) => text.as_ref(),
@@ -73,6 +168,13 @@ impl FileDiffLineText {
                 .get(range.clone())
                 .expect("shared file-diff line range should stay valid"),
             FileDiffLineTextStorage::SharedLine(text) => text.as_ref(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice
+                .text
+                .get_or_init(|| {
+                    read_utf8_file_slice(slice.path.as_ref(), slice.range.clone())
+                        .unwrap_or_else(|| Arc::<str>::from(""))
+                })
+                .as_ref(),
         }
     }
 
@@ -81,7 +183,64 @@ impl FileDiffLineText {
     }
 
     pub fn len(&self) -> usize {
-        self.as_str().len()
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.len(),
+            FileDiffLineTextStorage::SharedSlice { range, .. } => {
+                range.end.saturating_sub(range.start)
+            }
+            FileDiffLineTextStorage::SharedLine(text) => text.len(),
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                slice.range.end.saturating_sub(slice.range.start)
+            }
+        }
+    }
+
+    pub fn is_ascii_without_loading(&self) -> bool {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.is_ascii(),
+            FileDiffLineTextStorage::SharedSlice { text, range } => text
+                .as_bytes()
+                .get(range.clone())
+                .is_some_and(|bytes| bytes.is_ascii()),
+            FileDiffLineTextStorage::SharedLine(text) => text.as_ref().is_ascii(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice.ascii_only,
+        }
+    }
+
+    pub fn has_tabs_without_loading(&self) -> bool {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.contains('\t'),
+            FileDiffLineTextStorage::SharedSlice { text, range } => text
+                .as_bytes()
+                .get(range.clone())
+                .is_some_and(|bytes| bytes.contains(&b'\t')),
+            FileDiffLineTextStorage::SharedLine(text) => text.as_ref().contains('\t'),
+            FileDiffLineTextStorage::FileSlice(slice) => slice.has_tabs,
+        }
+    }
+
+    pub fn slice_text(&self, range: Range<usize>) -> Option<Cow<'_, str>> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                Some(Cow::Borrowed(text.get(range).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                Some(Cow::Borrowed(text.get(start..end).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                Some(Cow::Borrowed(text.as_ref().get(range).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                read_utf8_file_subslice(slice.path.as_ref(), &slice.range, range, slice.ascii_only)
+                    .map(|text| Cow::Owned(text.as_ref().to_string()))
+            }
+        }
     }
 
     pub fn shares_backing_with(&self, other: &Self) -> bool {
@@ -102,8 +261,42 @@ impl FileDiffLineText {
             (FileDiffLineTextStorage::SharedLine(a), FileDiffLineTextStorage::SharedLine(b)) => {
                 a.shares_storage_with(b)
             }
+            (FileDiffLineTextStorage::FileSlice(a), FileDiffLineTextStorage::FileSlice(b)) => {
+                Arc::ptr_eq(a, b)
+            }
             _ => false,
         }
+    }
+
+    pub fn identity_hash_without_loading(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                0u8.hash(&mut hasher);
+                (text.as_ptr() as usize).hash(&mut hasher);
+                text.len().hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range } => {
+                1u8.hash(&mut hasher);
+                (text.as_ptr() as usize).hash(&mut hasher);
+                text.len().hash(&mut hasher);
+                range.start.hash(&mut hasher);
+                range.end.hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                2u8.hash(&mut hasher);
+                text.as_ref().hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                3u8.hash(&mut hasher);
+                slice.path.hash(&mut hasher);
+                slice.range.start.hash(&mut hasher);
+                slice.range.end.hash(&mut hasher);
+                slice.ascii_only.hash(&mut hasher);
+                slice.has_tabs.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 }
 
@@ -168,6 +361,13 @@ impl From<FileDiffLineText> for Arc<str> {
                     .expect("shared file-diff line range should stay valid"),
             ),
             FileDiffLineTextStorage::SharedLine(text) => text.to_arc(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice
+                .text
+                .get_or_init(|| {
+                    read_utf8_file_slice(slice.path.as_ref(), slice.range.clone())
+                        .unwrap_or_else(|| Arc::<str>::from(""))
+                })
+                .clone(),
         }
     }
 }

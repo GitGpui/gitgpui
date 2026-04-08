@@ -326,7 +326,7 @@ impl MainPaneView {
             }
             return self
                 .worktree_preview_line_text(visible_ix)
-                .map(expand_tabs)
+                .map(|line| expand_tabs(line.as_ref()))
                 .unwrap_or(fallback);
         }
 
@@ -439,8 +439,14 @@ impl MainPaneView {
                 return 0;
             }
             return self
-                .worktree_preview_line_text(visible_ix)
-                .map(display_len)
+                .worktree_preview_line_raw_text(visible_ix)
+                .map(|line| {
+                    if line.has_tabs_without_loading() {
+                        display_len(line.as_ref())
+                    } else {
+                        line.len()
+                    }
+                })
                 .unwrap_or(0);
         }
 
@@ -568,8 +574,15 @@ impl MainPaneView {
             if region != DiffTextRegion::Inline {
                 return;
             }
+            if let Some(raw_text) = self.worktree_preview_line_raw_text(visible_ix)
+                && !raw_text.has_tabs_without_loading()
+                && let Some(slice) = raw_text.slice_text(range.clone())
+            {
+                out.push_str(slice.as_ref());
+                return;
+            }
             if let Some(text) = self.worktree_preview_line_text(visible_ix) {
-                append_diff_display_text_slice(out, text, range, expanded_tabs);
+                append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
             }
             return;
         }
@@ -783,6 +796,21 @@ impl MainPaneView {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
     }
 
+    pub(in super::super::super) fn copy_diff_text_for_context_menu_to_clipboard(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(text) = self
+            .selected_diff_text_string()
+            .or_else(|| self.diff_text_string_for_region(visible_ix, region))
+        else {
+            return;
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+    }
+
     pub(in super::super::super) fn open_diff_editor_context_menu(
         &mut self,
         visible_ix: usize,
@@ -803,9 +831,23 @@ impl MainPaneView {
         };
         let is_file_preview = self.is_file_preview_active();
 
-        let copy_text = self
-            .selected_diff_text_string()
-            .or_else(|| self.diff_text_string_for_region(visible_ix, region));
+        let selected_copy_text = self.selected_diff_text_string();
+        let copy_target = if selected_copy_text.is_none()
+            && self.is_file_preview_active()
+            && region == DiffTextRegion::Inline
+            && self
+                .worktree_preview_line_raw_text(visible_ix)
+                .is_some_and(|line| rows::is_streamable_diff_text(&line))
+        {
+            Some((visible_ix, region))
+        } else {
+            None
+        };
+        let copy_text = if copy_target.is_some() {
+            selected_copy_text
+        } else {
+            selected_copy_text.or_else(|| self.diff_text_string_for_region(visible_ix, region))
+        };
 
         let list_len = if is_file_preview {
             self.worktree_preview_line_count().unwrap_or(0)
@@ -1092,6 +1134,7 @@ impl MainPaneView {
                 discard_lines_patch,
                 lines_count,
                 copy_text,
+                copy_target,
             },
             anchor,
             window,

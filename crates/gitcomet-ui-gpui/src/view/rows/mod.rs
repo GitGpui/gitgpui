@@ -418,6 +418,7 @@ pub(in crate::view) use diff_text::{
     resolved_output_line_text, syntax_highlights_for_line,
 };
 
+pub(in crate::view) use self::diff_canvas::is_streamable_diff_text;
 #[cfg(test)]
 pub(in crate::view) use self::diff_canvas::{
     DiffPaintRecord, clear_diff_paint_log_for_tests, diff_paint_log_for_tests,

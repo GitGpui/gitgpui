@@ -34,9 +34,9 @@ fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestA
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.worktree_preview_line_count(), Some(3));
         assert_eq!(pane.worktree_preview_line_starts.as_ref(), &[0, 6, 11]);
-        assert_eq!(pane.worktree_preview_line_text(0), Some("alpha"));
-        assert_eq!(pane.worktree_preview_line_text(1), Some("beta"));
-        assert_eq!(pane.worktree_preview_line_text(2), Some(""));
+        assert_eq!(pane.worktree_preview_line_text(0).as_deref(), Some("alpha"));
+        assert_eq!(pane.worktree_preview_line_text(1).as_deref(), Some("beta"));
+        assert_eq!(pane.worktree_preview_line_text(2).as_deref(), Some(""));
     });
 }
 
@@ -653,6 +653,145 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
+    cx: &mut gpui::TestAppContext,
+) {
+    const PAYLOAD_BYTES: usize = 256 * 1024;
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(193);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_committed_deleted_streamed_preview",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("report.json");
+    let preview_source_path = workdir.join(".committed_deleted_preview_source.json");
+    let commit_id = gitcomet_core::domain::CommitId("deadbeef".into());
+    let long_json = format!(
+        r#"{{"title":"Ä","needle":"preview-streamed","payload":"{}","tail":true}}"#,
+        "x".repeat(PAYLOAD_BYTES)
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create committed deleted preview workdir");
+    std::fs::write(&preview_source_path, &long_json)
+        .expect("write committed deleted preview source");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
+                commit_id: commit_id.clone(),
+                path: Some(file_rel.clone()),
+            });
+            repo.diff_state.diff_state_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Error(
+                "parsed patch diff should not be consulted for committed deleted preview".into(),
+            );
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Error(
+                "materialized diff_file should not be consulted for committed deleted preview"
+                    .into(),
+            );
+            repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                    path: preview_source_path.clone(),
+                    side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                }),
+            ));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "remove report".to_string(),
+                    committed_at: "2026-04-07T12:00:00Z".to_string(),
+                    parent_ids: vec![],
+                    files: vec![gitcomet_core::domain::CommitFileChange {
+                        path: file_rel.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Deleted,
+                    }],
+                },
+            ));
+            repo.history_state.commit_details_rev = 1;
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "committed deleted streamed preview indexed source",
+        |pane| {
+            pane.worktree_preview_path.as_ref() == Some(&workdir.join(&file_rel))
+                && pane.worktree_preview_source_path.as_ref() == Some(&preview_source_path)
+                && matches!(
+                    pane.worktree_preview,
+                    gitcomet_state::model::Loadable::Ready(1)
+                )
+                && pane.worktree_preview_text.is_empty()
+        },
+        |pane| {
+            format!(
+                "preview={:?} preview_path={:?} source_path={:?} text_len={} line_count={:?}",
+                pane.worktree_preview,
+                pane.worktree_preview_path,
+                pane.worktree_preview_source_path,
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_line_count(),
+            )
+        },
+    );
+
+    cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.worktree_preview_text.is_empty(),
+            "committed deleted preview should stay file-backed"
+        );
+        let hitbox = pane
+            .diff_text_hitboxes
+            .get(&(0, DiffTextRegion::Inline))
+            .expect("streamed preview row should install a diff hitbox");
+        assert!(
+            hitbox.streamed_ascii_monospace_cell_width.is_some(),
+            "giant UTF-8 preview row should still use streamed hit-testing"
+        );
+        assert!(
+            pane.worktree_preview_segments_cache_get(0).is_none(),
+            "streamed indexed preview rows should bypass the full-line styled row cache"
+        );
+
+        let paint_record = rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| record.visible_ix == 0 && record.region == DiffTextRegion::Inline)
+            .expect("committed deleted streamed preview should record the visible line paint");
+        assert!(
+            paint_record.text.len() < long_json.len(),
+            "committed deleted streamed preview should paint only a visible slice, got {} of {} bytes",
+            paint_record.text.len(),
+            long_json.len()
+        );
+        assert!(
+            !paint_record.text.is_empty(),
+            "committed deleted streamed preview should still paint a non-empty visible slice"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup committed deleted preview fixture");
+}
+
+#[gpui::test]
 fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::TestAppContext) {
     const PAYLOAD_BYTES: usize = 256 * 1024;
 
@@ -749,6 +888,7 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
 ) {
     const PAYLOAD_BYTES: usize = 96 * 1024;
 
+    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -766,7 +906,6 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
         r#"{{"needle":"preview-streamed-context-menu","payload":"{}","tail":true}}"#,
         "x".repeat(PAYLOAD_BYTES)
     );
-    let lines: Arc<Vec<String>> = Arc::new(vec![long_json.clone()]);
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create streamed preview context-menu workdir");
@@ -782,20 +921,46 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
                 gitcomet_core::domain::FileStatusKind::Added,
                 gitcomet_core::domain::DiffArea::Staged,
             );
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Error(
+                "materialized diff_file should not be consulted for streamed preview context menu"
+                    .into(),
+            );
+            repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                    path: preview_abs_path.clone(),
+                    side: gitcomet_core::domain::DiffPreviewTextSide::New,
+                }),
+            ));
+            repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
             let next_state = app_state_with_repo(repo, repo_id);
             push_test_state(this, Arc::clone(&next_state), cx);
         });
     });
 
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let lines = Arc::clone(&lines);
-            let preview_abs_path = preview_abs_path.clone();
-            this.main_pane.update(cx, |pane, cx| {
-                set_ready_worktree_preview(pane, preview_abs_path, lines, long_json.len(), cx);
-            });
-        });
-    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "streamed preview ready before opening preview context menu",
+        |pane| {
+            pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
+                && pane.worktree_preview_source_path.as_ref() == Some(&preview_abs_path)
+                && matches!(
+                    pane.worktree_preview,
+                    gitcomet_state::model::Loadable::Ready(1)
+                )
+                && pane.worktree_preview_text.is_empty()
+        },
+        |pane| {
+            format!(
+                "preview={:?} preview_path={:?} source_path={:?} text_len={} line_count={:?}",
+                pane.worktree_preview,
+                pane.worktree_preview_path,
+                pane.worktree_preview_source_path,
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_line_count(),
+            )
+        },
+    );
 
     cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
@@ -822,8 +987,13 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
                 };
 
                 match popover_kind {
-                    PopoverKind::DiffEditorMenu { copy_text, .. } => {
-                        assert_eq!(copy_text, Some(long_json.clone()));
+                    PopoverKind::DiffEditorMenu {
+                        copy_text,
+                        copy_target,
+                        ..
+                    } => {
+                        assert_eq!(copy_text, None);
+                        assert_eq!(copy_target, Some((0, DiffTextRegion::Inline)));
                     }
                     _ => panic!("expected streamed preview diff editor menu"),
                 }
@@ -831,11 +1001,50 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
         });
     });
 
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                let popover_kind = host
+                    .popover_kind_for_tests()
+                    .expect("expected streamed preview context menu popover kind");
+                let model = host
+                    .context_menu_model(&popover_kind, cx)
+                    .expect("expected streamed preview context menu model");
+                let copy_action = model.items.iter().find_map(|item| match item {
+                    ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Copy" => {
+                        Some((**action).clone())
+                    }
+                    _ => None,
+                });
+                match &copy_action {
+                    Some(ContextMenuAction::CopyDiffText { visible_ix, region }) => {
+                        assert_eq!((*visible_ix, *region), (0, DiffTextRegion::Inline));
+                    }
+                    _ => panic!("expected lazy CopyDiffText action for streamed preview"),
+                }
+                host.context_menu_activate_action(
+                    copy_action.expect("copy action should exist"),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(long_json.clone())
+    );
+
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(
             pane.worktree_preview_segments_cache_get(0).is_none(),
             "streamed preview context-menu copy should not populate the styled row cache"
+        );
+        assert!(
+            pane.worktree_preview_text.is_empty(),
+            "streamed preview context-menu copy should keep the preview file-backed"
         );
     });
 
