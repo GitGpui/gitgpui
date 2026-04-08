@@ -507,6 +507,89 @@ fn compute_synced_scroll_offsets<const N: usize>(
     std::array::from_fn(|ix| clamp_raw_scroll_y(master_y, max_scrolls[ix]))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyncedScrollAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl SyncedScrollAxis {
+    const fn includes(self, mode: DiffScrollSync) -> bool {
+        match self {
+            Self::Horizontal => mode.includes_horizontal(),
+            Self::Vertical => mode.includes_vertical(),
+        }
+    }
+
+    const fn offset_component(self, offset: Point<Pixels>) -> Pixels {
+        match self {
+            Self::Horizontal => offset.x,
+            Self::Vertical => offset.y,
+        }
+    }
+
+    const fn max_scroll_component(self, max_offset: Size<Pixels>) -> Pixels {
+        match self {
+            Self::Horizontal => max_offset.width,
+            Self::Vertical => max_offset.height,
+        }
+    }
+
+    fn with_offset_component(self, offset: Point<Pixels>, value: Pixels) -> Point<Pixels> {
+        match self {
+            Self::Horizontal => point(value, offset.y),
+            Self::Vertical => point(offset.x, value),
+        }
+    }
+}
+
+fn uniform_list_base_handle(handle: &UniformListScrollHandle) -> ScrollHandle {
+    handle.0.borrow().base_handle.clone()
+}
+
+fn snapshot_synced_scroll_offsets<const N: usize>(
+    handles: &[ScrollHandle; N],
+    axis: SyncedScrollAxis,
+) -> [Pixels; N] {
+    std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()))
+}
+
+fn sync_synced_scroll_offsets<const N: usize>(
+    handles: &[ScrollHandle; N],
+    last_synced: &mut [Pixels; N],
+    axis: SyncedScrollAxis,
+) {
+    let offsets: [Point<Pixels>; N] = std::array::from_fn(|ix| handles[ix].offset());
+    let max_scrolls = std::array::from_fn(|ix| {
+        axis.max_scroll_component(handles[ix].max_offset())
+            .max(px(0.0))
+    });
+    let targets = compute_synced_scroll_offsets(
+        std::array::from_fn(|ix| axis.offset_component(offsets[ix])),
+        max_scrolls,
+        *last_synced,
+        preferred_scroll_master_index(max_scrolls),
+    );
+
+    for ix in 0..N {
+        handles[ix].set_offset(axis.with_offset_component(offsets[ix], targets[ix]));
+    }
+    *last_synced = targets;
+}
+
+fn maybe_sync_synced_scroll_offsets<const N: usize>(
+    handles: &[ScrollHandle; N],
+    last_synced: &mut [Pixels; N],
+    axis: SyncedScrollAxis,
+    mode: DiffScrollSync,
+) {
+    if axis.includes(mode) {
+        sync_synced_scroll_offsets(handles, last_synced, axis);
+    } else {
+        *last_synced = snapshot_synced_scroll_offsets(handles, axis);
+    }
+}
+
 impl MainPaneView {
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -664,6 +747,7 @@ impl MainPaneView {
         date_time_format: DateTimeFormat,
         timezone: Timezone,
         show_timezone: bool,
+        diff_scroll_sync: DiffScrollSync,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
@@ -827,8 +911,10 @@ impl MainPaneView {
             diff_view: DiffViewMode::Split,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap: false,
+            diff_scroll_sync,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
+            diff_split_last_synced_x: [px(0.0); 2],
             diff_split_last_synced_y: [px(0.0); 2],
             diff_horizontal_min_width: px(0.0),
             diff_cache_repo_id: None,
@@ -988,8 +1074,11 @@ impl MainPaneView {
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
             conflict_preview_ours_scroll: UniformListScrollHandle::default(),
             conflict_preview_theirs_scroll: UniformListScrollHandle::default(),
-            conflict_preview_last_synced_y: [px(0.0); 3],
+            conflict_preview_last_synced_x: [px(0.0); 4],
+            conflict_preview_last_synced_y: [px(0.0); 4],
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
+            conflict_resolved_preview_gutter_scroll: UniformListScrollHandle::default(),
+            conflict_resolved_preview_gutter_last_synced_y: [px(0.0); 2],
             worktree_preview_scroll: UniformListScrollHandle::default(),
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
         };
@@ -2236,6 +2325,21 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_diff_scroll_sync(
+        &mut self,
+        next: DiffScrollSync,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_scroll_sync == next {
+            return;
+        }
+
+        self.diff_scroll_sync = next;
+        self.sync_diff_split_scroll();
+        self.sync_conflict_preview_scroll();
+        cx.notify();
+    }
+
     pub(in crate::view) fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
@@ -3264,66 +3368,64 @@ impl MainPaneView {
         None
     }
 
-    pub(in crate::view) fn sync_diff_split_vertical_scroll(&mut self) {
-        let left_handle = self.diff_scroll.0.borrow().base_handle.clone();
-        let right_handle = self.diff_split_right_scroll.0.borrow().base_handle.clone();
-        let left_offset = left_handle.offset();
-        let right_offset = right_handle.offset();
-        let max_scrolls = [
-            left_handle.max_offset().height.max(px(0.0)),
-            right_handle.max_offset().height.max(px(0.0)),
-        ];
-        let targets = compute_synced_scroll_offsets(
-            [left_offset.y, right_offset.y],
-            max_scrolls,
-            self.diff_split_last_synced_y,
-            preferred_scroll_master_index(max_scrolls),
-        );
-
-        left_handle.set_offset(point(left_offset.x, targets[0]));
-        right_handle.set_offset(point(right_offset.x, targets[1]));
-        self.diff_split_last_synced_y = targets;
+    fn diff_split_scroll_handles(&self) -> [ScrollHandle; 2] {
+        [
+            uniform_list_base_handle(&self.diff_scroll),
+            uniform_list_base_handle(&self.diff_split_right_scroll),
+        ]
     }
 
-    pub(in crate::view) fn sync_conflict_preview_vertical_scroll(&mut self) {
-        let base_handle = self
-            .conflict_resolver_diff_scroll
-            .0
-            .borrow()
-            .base_handle
-            .clone();
-        let ours_handle = self
-            .conflict_preview_ours_scroll
-            .0
-            .borrow()
-            .base_handle
-            .clone();
-        let theirs_handle = self
-            .conflict_preview_theirs_scroll
-            .0
-            .borrow()
-            .base_handle
-            .clone();
+    fn conflict_preview_scroll_handles(&self) -> [ScrollHandle; 4] {
+        [
+            uniform_list_base_handle(&self.conflict_resolver_diff_scroll),
+            uniform_list_base_handle(&self.conflict_preview_ours_scroll),
+            uniform_list_base_handle(&self.conflict_preview_theirs_scroll),
+            uniform_list_base_handle(&self.conflict_resolved_preview_scroll),
+        ]
+    }
 
-        let base_offset = base_handle.offset();
-        let ours_offset = ours_handle.offset();
-        let theirs_offset = theirs_handle.offset();
-        let max_scrolls = [
-            base_handle.max_offset().height.max(px(0.0)),
-            ours_handle.max_offset().height.max(px(0.0)),
-            theirs_handle.max_offset().height.max(px(0.0)),
-        ];
-        let targets = compute_synced_scroll_offsets(
-            [base_offset.y, ours_offset.y, theirs_offset.y],
-            max_scrolls,
-            self.conflict_preview_last_synced_y,
-            preferred_scroll_master_index(max_scrolls),
+    pub(in crate::view) fn sync_diff_split_scroll(&mut self) {
+        let handles = self.diff_split_scroll_handles();
+        maybe_sync_synced_scroll_offsets(
+            &handles,
+            &mut self.diff_split_last_synced_y,
+            SyncedScrollAxis::Vertical,
+            self.diff_scroll_sync,
         );
+        maybe_sync_synced_scroll_offsets(
+            &handles,
+            &mut self.diff_split_last_synced_x,
+            SyncedScrollAxis::Horizontal,
+            self.diff_scroll_sync,
+        );
+    }
 
-        base_handle.set_offset(point(base_offset.x, targets[0]));
-        ours_handle.set_offset(point(ours_offset.x, targets[1]));
-        theirs_handle.set_offset(point(theirs_offset.x, targets[2]));
-        self.conflict_preview_last_synced_y = targets;
+    pub(in crate::view) fn sync_conflict_preview_scroll(&mut self) {
+        let handles = self.conflict_preview_scroll_handles();
+        maybe_sync_synced_scroll_offsets(
+            &handles,
+            &mut self.conflict_preview_last_synced_y,
+            SyncedScrollAxis::Vertical,
+            self.diff_scroll_sync,
+        );
+        maybe_sync_synced_scroll_offsets(
+            &handles,
+            &mut self.conflict_preview_last_synced_x,
+            SyncedScrollAxis::Horizontal,
+            self.diff_scroll_sync,
+        );
+    }
+
+    pub(in crate::view) fn sync_conflict_resolved_output_gutter_scroll(&mut self) {
+        let handles = [
+            uniform_list_base_handle(&self.conflict_resolved_preview_gutter_scroll),
+            uniform_list_base_handle(&self.conflict_resolved_preview_scroll),
+        ];
+        sync_synced_scroll_offsets(
+            &handles,
+            &mut self.conflict_resolved_preview_gutter_last_synced_y,
+            SyncedScrollAxis::Vertical,
+        );
     }
 
     pub(in crate::view) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {
@@ -3372,5 +3474,17 @@ mod tests {
         );
 
         assert_eq!(targets, [px(-100.0), px(-100.0)]);
+    }
+
+    #[test]
+    fn synced_scroll_offsets_support_four_panes_when_output_is_scrolled() {
+        let targets = compute_synced_scroll_offsets(
+            [px(-100.0), px(-100.0), px(-100.0), px(-320.0)],
+            [px(100.0), px(100.0), px(100.0), px(500.0)],
+            [px(-100.0), px(-100.0), px(-100.0), px(-80.0)],
+            3,
+        );
+
+        assert_eq!(targets, [px(-100.0), px(-100.0), px(-100.0), px(-320.0)]);
     }
 }

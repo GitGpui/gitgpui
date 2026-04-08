@@ -633,6 +633,202 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
 }
 
 #[gpui::test]
+fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(214);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_split_scroll_sync_none",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/split_scroll_sync_none.rs");
+    let old_text = (0..160)
+        .map(|ix| format!("const LEFT_{ix:03}: &str = \"{}\";", "L".repeat(240)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let new_text = (0..160)
+        .map(|ix| format!("const RIGHT_{ix:03}: &str = \"{}\";", "R".repeat(240)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create split scroll-sync-none workdir");
+
+    seed_file_diff_state(cx, &view, repo_id, &workdir, &path, &old_text, &new_text);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "split file-diff scroll-sync-none fixture initialized",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_path == Some(workdir.join(&path))
+                && pane.diff_visible_len() >= 1
+        },
+        |pane| {
+            format!(
+                "cache_inflight={:?} cache_path={:?} diff_visible_len={} left_max={:?} right_max={:?}",
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_path.clone(),
+                pane.diff_visible_len(),
+                uniform_list_max_offset(&pane.diff_scroll),
+                uniform_list_max_offset(&pane.diff_split_right_scroll),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.diff_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                pane.diff_split_right_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "split file-diff scroll-sync matrix overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.diff_view == DiffViewMode::Split
+                && uniform_list_max_offset(&pane.diff_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.diff_split_right_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.diff_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.diff_split_right_scroll).height > px(120.0)
+        },
+        |pane| {
+            format!(
+                "diff_view={:?} left_offset={:?} right_offset={:?} left_max={:?} right_max={:?}",
+                pane.diff_view,
+                uniform_list_offset(&pane.diff_scroll),
+                uniform_list_offset(&pane.diff_split_right_scroll),
+                uniform_list_max_offset(&pane.diff_scroll),
+                uniform_list_max_offset(&pane.diff_split_right_scroll),
+            )
+        },
+    );
+
+    let reset_offsets = |cx: &mut gpui::VisualTestContext,
+                         view: &gpui::Entity<super::super::GitCometView>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    reset_uniform_list_offsets(&[&pane.diff_scroll, &pane.diff_split_right_scroll]);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    for mode in ALL_DIFF_SCROLL_SYNC_MODES {
+        set_diff_scroll_sync_for_test(cx, &view, mode);
+        cx.update(|_window, app| {
+            assert_eq!(view.read(app).diff_scroll_sync_for_test(), mode);
+        });
+
+        for axis in ScrollSyncAxis::ALL {
+            let left_offset = axis.offset(px(72.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(&pane.diff_scroll, left_offset);
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let left = uniform_list_offset(&pane.diff_scroll);
+                let right = uniform_list_offset(&pane.diff_split_right_scroll);
+                let expected = if axis.includes(mode) {
+                    axis.component(left_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(left),
+                    axis.component(left_offset),
+                    "split diff left pane should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(right),
+                    expected,
+                    "split diff right pane should {} {} scrolling from the left pane in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+            });
+
+            let right_offset = axis.offset(px(96.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(&pane.diff_split_right_scroll, right_offset);
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let left = uniform_list_offset(&pane.diff_scroll);
+                let right = uniform_list_offset(&pane.diff_split_right_scroll);
+                let expected = if axis.includes(mode) {
+                    axis.component(right_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(right),
+                    axis.component(right_offset),
+                    "split diff right pane should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(left),
+                    expected,
+                    "split diff left pane should {} {} scrolling from the right pane in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+            });
+        }
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup split scroll-sync-none workdir");
+}
+
+#[gpui::test]
 fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
     cx: &mut gpui::TestAppContext,
 ) {
