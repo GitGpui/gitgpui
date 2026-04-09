@@ -626,6 +626,7 @@ pub(super) fn reduce(
             actions_emit_effects::force_delete_branch(repo_id, name)
         }
         Msg::CloneRepo { url, dest } => repo_management::clone_repo(state, url, dest),
+        Msg::AbortCloneRepo { dest } => repo_management::abort_clone_repo(state, dest),
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress { dest, line }) => {
             repo_management::clone_repo_progress(state, dest, line)
         }

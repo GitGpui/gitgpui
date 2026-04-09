@@ -228,6 +228,9 @@ pub enum Msg {
         url: String,
         dest: PathBuf,
     },
+    AbortCloneRepo {
+        dest: PathBuf,
+    },
     ExportPatch {
         repo_id: RepoId,
         commit_id: CommitId,

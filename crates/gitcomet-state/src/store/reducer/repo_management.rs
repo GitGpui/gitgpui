@@ -7,13 +7,13 @@ use super::util::{
     selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
-    AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
-    RepoState,
+    AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
+    CloneProgressStage, DiagnosticKind, Loadable, RepoId, RepoState,
 };
 use crate::msg::Effect;
 use crate::session;
 use gitcomet_core::domain::RepoSpec;
-use gitcomet_core::error::Error;
+use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, GitRepository};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use smallvec::SmallVec;
@@ -54,6 +54,10 @@ fn is_missing_repo_error(error: &Error) -> bool {
         error.kind(),
         gitcomet_core::error::ErrorKind::Io(std::io::ErrorKind::NotFound)
     )
+}
+
+fn is_plain_clone_abort_error(error: &Error) -> bool {
+    matches!(error.kind(), ErrorKind::Backend(message) if message == "clone aborted")
 }
 
 fn persist_session_effect(
@@ -426,6 +430,7 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
         url: Arc::<str>::from(url.as_str()),
         dest: Arc::new(dest.clone()),
         status: CloneOpStatus::Running,
+        progress: CloneProgressMeter::default(),
         seq: 0,
         output_tail: VecDeque::new(),
     });
@@ -434,6 +439,54 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
         dest,
         auth: None,
     }]
+}
+
+fn parse_clone_progress_percent(line: &str) -> Option<u8> {
+    let percent_ix = line.find('%')?;
+    let digits = line[..percent_ix]
+        .chars()
+        .rev()
+        .skip_while(|ch| ch.is_ascii_whitespace())
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    digits
+        .chars()
+        .rev()
+        .collect::<String>()
+        .parse::<u8>()
+        .ok()
+        .map(|percent| percent.min(100))
+}
+
+fn parse_clone_progress_meter(line: &str) -> Option<CloneProgressMeter> {
+    let stage = if line.starts_with("Resolving deltas:") || line.starts_with("Updating files:") {
+        CloneProgressStage::RemoteObjects
+    } else if line.starts_with("Receiving objects:")
+        || line.starts_with("remote: Counting objects:")
+        || line.starts_with("remote: Compressing objects:")
+    {
+        CloneProgressStage::Loading
+    } else {
+        return None;
+    };
+    let percent = parse_clone_progress_percent(line)?;
+    Some(CloneProgressMeter { stage, percent })
+}
+
+pub(super) fn abort_clone_repo(state: &mut AppState, dest: PathBuf) -> Vec<Effect> {
+    let Some(op) = state.clone.as_mut() else {
+        return Vec::new();
+    };
+    if op.dest.as_ref() != &dest || !matches!(op.status, CloneOpStatus::Running) {
+        return Vec::new();
+    }
+
+    op.status = CloneOpStatus::Cancelling;
+    op.seq = op.seq.wrapping_add(1);
+    vec![Effect::AbortCloneRepo { dest }]
 }
 
 pub(super) fn clone_repo_progress(
@@ -448,6 +501,9 @@ pub(super) fn clone_repo_progress(
         && op.dest.as_ref() == dest.as_ref()
     {
         op.seq = op.seq.wrapping_add(1);
+        if let Some(progress) = parse_clone_progress_meter(&line) {
+            op.progress = progress;
+        }
         if !line.trim().is_empty() {
             if op.output_tail.capacity() < MAX_LINES {
                 op.output_tail
@@ -474,6 +530,12 @@ pub(super) fn clone_repo_finished(
         op.url = Arc::<str>::from(url.as_str());
         op.status = match result {
             Ok(_) => CloneOpStatus::FinishedOk,
+            Err(ref error)
+                if matches!(op.status, CloneOpStatus::Cancelling)
+                    && is_plain_clone_abort_error(error) =>
+            {
+                CloneOpStatus::Cancelled
+            }
             Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
         };
         op.seq = op.seq.wrapping_add(1);
@@ -485,6 +547,7 @@ pub(super) fn clone_repo_finished(
                 Ok(_) => CloneOpStatus::FinishedOk,
                 Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
             },
+            progress: CloneProgressMeter::default(),
             seq: 1,
             output_tail: VecDeque::new(),
         });
