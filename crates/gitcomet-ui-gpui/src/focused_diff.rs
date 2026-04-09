@@ -274,15 +274,9 @@ fn bind_focused_diff_keys(cx: &mut App) {
 ///
 /// Returns process exit code (0 on success, 2 when the window fails to launch).
 pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
-    #[cfg(target_os = "macos")]
-    {
-        let count = metal::Device::all().len();
-        if count == 0 {
-            eprintln!(
-                "Failed to launch focused diff window: no compatible Metal graphics device is available in this macOS session."
-            );
-            return FOCUSED_DIFF_EXIT_ERROR;
-        }
+    if let Err(err) = crate::app::ensure_graphics_device_available("focused diff GPUI launch") {
+        eprintln!("Failed to launch focused diff window: {err}");
+        return FOCUSED_DIFF_EXIT_ERROR;
     }
 
     let exit_code = Arc::new(AtomicI32::new(0));

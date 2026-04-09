@@ -1374,6 +1374,11 @@ impl GitCometView {
     }
 
     #[cfg(test)]
+    pub(crate) fn open_repo_panel_visible_for_test(&self) -> bool {
+        self.open_repo_panel
+    }
+
+    #[cfg(test)]
     pub(crate) fn show_timezone_for_test(&self) -> bool {
         self.show_timezone
     }
