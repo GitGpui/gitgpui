@@ -354,6 +354,9 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
             this.main_pane.update(cx, |pane, cx| {
+                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+                    foreground_parse: std::time::Duration::from_secs(1),
+                });
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path.clone(),
@@ -381,13 +384,15 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
         "worktree preview row cache before identical refresh",
         |pane| {
             pane.worktree_preview_segments_cache_path.as_ref() == Some(&preview_abs_path)
+                && pane.worktree_preview_prepared_syntax_document().is_some()
                 && pane.worktree_preview_segments_cache_get(0).is_some()
         },
         |pane| {
             format!(
-                "preview_path={:?} cache_path={:?} row_cache_present={} style_epoch={}",
+                "preview_path={:?} cache_path={:?} prepared_document={:?} row_cache_present={} style_epoch={}",
                 pane.worktree_preview_path.clone(),
                 pane.worktree_preview_segments_cache_path.clone(),
+                pane.worktree_preview_prepared_syntax_document(),
                 pane.worktree_preview_segments_cache_get(0).is_some(),
                 pane.worktree_preview_style_cache_epoch,
             )
