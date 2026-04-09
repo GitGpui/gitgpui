@@ -7,6 +7,7 @@ use gitcomet_core::domain::{
     UpstreamDivergence,
 };
 use gitcomet_core::file_diff::FileDiffRow;
+use gitcomet_core::process::refresh_git_runtime;
 use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DiagnosticKind,
@@ -452,32 +453,52 @@ impl GitCometView {
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let saved_open_repos = ui_session.open_repos.clone();
+        let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;
+        let mut deferred_repo_bootstrap = None;
 
         // Only auto-restore/open on startup if the store hasn't already been preloaded.
         // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
         // already-initialized store (notably in `gpui::test` setup).
-        let store_preloaded = !store.snapshot().repos.is_empty();
+        let initial_store_state = store.snapshot();
+        let store_preloaded = !initial_store_state.repos.is_empty();
+        let git_runtime_available = initial_store_state.git_runtime.is_available();
         let should_auto_restore = !crate::startup_probe::disable_auto_restore()
             && view_mode != GitCometViewMode::FocusedMergetool
             && cfg!(not(test))
             && !store_preloaded;
 
         if should_auto_restore {
-            if !ui_session.open_repos.is_empty() {
-                store.dispatch(Msg::RestoreSession {
-                    open_repos: ui_session.open_repos,
-                    active_repo: ui_session.active_repo,
-                });
-                startup_repo_bootstrap_pending = true;
+            if !saved_open_repos.is_empty() {
+                if git_runtime_available {
+                    store.dispatch(Msg::RestoreSession {
+                        open_repos: saved_open_repos,
+                        active_repo: saved_active_repo,
+                    });
+                    startup_repo_bootstrap_pending = true;
+                } else {
+                    deferred_repo_bootstrap = Some(DeferredRepoBootstrap::RestoreSession {
+                        open_repos: saved_open_repos,
+                        active_repo: saved_active_repo,
+                    });
+                }
             }
         } else if store_preloaded {
             if let Some(path) = initial_path.as_ref() {
-                store.dispatch(Msg::OpenRepo(path.clone()));
+                if git_runtime_available {
+                    store.dispatch(Msg::OpenRepo(path.clone()));
+                } else {
+                    deferred_repo_bootstrap = Some(DeferredRepoBootstrap::OpenRepo(path.clone()));
+                }
             }
         } else if let Some(path) = initial_path.as_ref() {
-            store.dispatch(Msg::OpenRepo(path.clone()));
-            startup_repo_bootstrap_pending = true;
+            if git_runtime_available {
+                store.dispatch(Msg::OpenRepo(path.clone()));
+                startup_repo_bootstrap_pending = true;
+            } else {
+                deferred_repo_bootstrap = Some(DeferredRepoBootstrap::OpenRepo(path.clone()));
+            }
         }
 
         let initial_state = store.snapshot();
@@ -602,6 +623,14 @@ impl GitCometView {
             if !window.is_window_active() {
                 return;
             }
+            let runtime = refresh_git_runtime();
+            if runtime != this.state.git_runtime {
+                this.store
+                    .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
+            }
+            if !runtime.is_available() {
+                return;
+            }
             if let Some(repo) = this.active_repo()
                 && matches!(repo.open, Loadable::Ready(_))
             {
@@ -720,6 +749,7 @@ impl GitCometView {
             toast_host,
             popover_host,
             focused_mergetool_bootstrap,
+            deferred_repo_bootstrap,
             startup_repo_bootstrap_pending,
             splash_backdrop_image: splash::load_splash_backdrop_image(),
             last_window_size: size(px(0.0), px(0.0)),
@@ -1186,6 +1216,10 @@ impl GitCometView {
     }
 
     fn drive_focused_mergetool_bootstrap(&mut self) {
+        if !self.state.git_runtime.is_available() {
+            return;
+        }
+
         let Some(bootstrap) = self.focused_mergetool_bootstrap.as_ref() else {
             return;
         };
@@ -1381,6 +1415,35 @@ impl GitCometView {
     #[cfg(test)]
     pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
         self.change_tracking_view
+    }
+
+    fn resume_after_git_runtime_recovery(&mut self) {
+        if let Some(bootstrap) = self.deferred_repo_bootstrap.take() {
+            match bootstrap {
+                DeferredRepoBootstrap::RestoreSession {
+                    open_repos,
+                    active_repo,
+                } => {
+                    self.startup_repo_bootstrap_pending = true;
+                    self.store.dispatch(Msg::RestoreSession {
+                        open_repos,
+                        active_repo,
+                    });
+                }
+                DeferredRepoBootstrap::OpenRepo(path) => {
+                    self.startup_repo_bootstrap_pending = true;
+                    self.store.dispatch(Msg::OpenRepo(path));
+                }
+            }
+            return;
+        }
+
+        if !self.state.repos.is_empty() {
+            let repo_ids: Vec<_> = self.state.repos.iter().map(|repo| repo.id).collect();
+            for repo_id in repo_ids {
+                self.store.dispatch(Msg::ReloadRepo { repo_id });
+            }
+        }
     }
 }
 

@@ -16,6 +16,7 @@ mod mergetool_mode;
 mod setup_mode;
 
 use cli::{AppMode, exit_code};
+use gitcomet_core::process::install_git_executable_path;
 use mimalloc::MiMalloc;
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -141,6 +142,8 @@ fn should_launch_focused_diff_gui(
 }
 
 fn main() {
+    install_configured_git_executable_preference();
+
     let mode = match cli::parse_app_mode() {
         Ok(mode) => mode,
         Err(msg) => {
@@ -286,6 +289,11 @@ fn main() {
             run_and_exit(extract_fixtures_mode::run_extract_merge_fixtures(&config))
         }
     }
+}
+
+fn install_configured_git_executable_preference() {
+    let session = gitcomet_state::session::load();
+    let _ = install_git_executable_path(session.git_executable_path);
 }
 
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]

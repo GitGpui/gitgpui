@@ -2,6 +2,7 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
+use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
 use std::path::PathBuf;
@@ -88,6 +89,7 @@ pub enum Msg {
         secret: String,
     },
     CancelAuthPrompt,
+    SetGitRuntimeState(GitRuntimeState),
     SetActiveRepo {
         repo_id: RepoId,
     },

@@ -2247,6 +2247,7 @@ dependencies = [
  "gitcomet-core",
  "gitcomet-git",
  "gitcomet-git-gix",
+ "gitcomet-state",
  "gitcomet-ui",
  "gitcomet-ui-gpui",
  "mimalloc",

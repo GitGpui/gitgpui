@@ -2328,6 +2328,15 @@ pub(super) enum FocusedMergetoolBootstrapAction {
     Complete,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum DeferredRepoBootstrap {
+    RestoreSession {
+        open_repos: Vec<std::path::PathBuf>,
+        active_repo: Option<std::path::PathBuf>,
+    },
+    OpenRepo(std::path::PathBuf),
+}
+
 pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
     let path = if path.is_relative() {
         std::env::current_dir()
@@ -2574,6 +2583,7 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
+    pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Arc<gpui::Image>,
 

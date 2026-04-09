@@ -5,13 +5,15 @@
 //! into production code so it can be reused outside ad-hoc test harnesses.
 
 use crate::merge::{MergeOptions, merge_file};
-use crate::process::configure_background_command;
+use crate::process::git_command;
 use rustc_hash::FxHashSet as HashSet;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+#[cfg(test)]
+use std::process::Command;
+use std::process::Output;
 
 fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -526,8 +528,7 @@ fn read_blob_bytes_optional(
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<Output, MergeExtractionError> {
-    let mut command = Command::new("git");
-    configure_background_command(&mut command);
+    let mut command = git_command();
     command
         .args(args)
         .current_dir(repo)

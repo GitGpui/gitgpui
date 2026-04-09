@@ -5,6 +5,7 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::*;
+use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::BlameLine;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -230,6 +231,7 @@ pub struct AppState {
     pub notifications: Vec<AppNotification>,
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
+    pub git_runtime: GitRuntimeState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

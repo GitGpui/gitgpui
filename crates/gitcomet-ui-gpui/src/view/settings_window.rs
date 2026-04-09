@@ -1,5 +1,7 @@
 use super::*;
-use gitcomet_core::process::configure_background_command;
+use gitcomet_core::process::{
+    GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
+};
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::sync::Arc;
 
@@ -50,6 +52,21 @@ enum SettingsView {
     OpenSourceLicenses,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GitExecutableMode {
+    SystemPath,
+    Custom,
+}
+
+impl GitExecutableMode {
+    fn from_preference(preference: &GitExecutablePreference) -> Self {
+        match preference {
+            GitExecutablePreference::SystemPath => Self::SystemPath,
+            GitExecutablePreference::Custom(_) => Self::Custom,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct SettingsRuntimeInfo {
     git: GitRuntimeInfo,
@@ -59,6 +76,7 @@ struct SettingsRuntimeInfo {
 
 #[derive(Clone, Debug)]
 struct GitRuntimeInfo {
+    runtime: GitRuntimeState,
     version_display: SharedString,
     compatibility: GitCompatibility,
     detail: Option<SharedString>,
@@ -69,6 +87,7 @@ enum GitCompatibility {
     Supported,
     TooOld,
     Unknown,
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,9 +118,13 @@ pub(crate) struct SettingsWindowView {
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    git_executable_mode: GitExecutableMode,
+    git_custom_path_draft: String,
+    git_executable_input: Entity<components::TextInput>,
     expanded_section: Option<SettingsSection>,
     hover_resize_edge: Option<ResizeEdge>,
     title_drag_state: chrome::TitleBarDragState,
+    _git_executable_input_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
 }
 
@@ -311,6 +334,15 @@ impl SettingsWindowView {
             .and_then(ChangeTrackingView::from_key)
             .unwrap_or_default();
         let theme = theme_mode.resolve_theme(window.appearance());
+        let runtime_info = SettingsRuntimeInfo::detect();
+        let git_executable_mode =
+            GitExecutableMode::from_preference(&runtime_info.git.runtime.preference);
+        let git_custom_path_draft = match &runtime_info.git.runtime.preference {
+            GitExecutablePreference::Custom(path) if !path.as_os_str().is_empty() => {
+                path.display().to_string()
+            }
+            _ => String::new(),
+        };
 
         let appearance_subscription = {
             let view = cx.weak_entity();
@@ -330,6 +362,35 @@ impl SettingsWindowView {
                 });
             })
         };
+
+        let git_executable_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/git".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+        git_executable_input.update(cx, |input, cx| {
+            input.set_text(git_custom_path_draft.clone(), cx);
+        });
+        let git_executable_input_subscription =
+            cx.observe(&git_executable_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let next = input.read(cx).text().to_string();
+                if this.git_custom_path_draft != next {
+                    this.git_custom_path_draft = next;
+                    cx.notify();
+                }
+                if enter_pressed && this.git_executable_mode == GitExecutableMode::Custom {
+                    this.apply_git_executable_settings(cx);
+                }
+            });
 
         Self {
             theme_mode,
@@ -352,10 +413,14 @@ impl SettingsWindowView {
             change_tracking_view,
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
-            runtime_info: SettingsRuntimeInfo::detect(),
+            runtime_info,
+            git_executable_mode,
+            git_custom_path_draft,
+            git_executable_input,
             expanded_section: None,
             hover_resize_edge: None,
             title_drag_state: chrome::TitleBarDragState::default(),
+            _git_executable_input_subscription: git_executable_input_subscription,
             _appearance_subscription: appearance_subscription,
         }
     }
@@ -389,6 +454,7 @@ impl SettingsWindowView {
             history_show_author: None,
             history_show_date: None,
             history_show_sha: None,
+            git_executable_path: Some(self.selected_git_executable_path()),
         };
 
         cx.background_spawn(async move {
@@ -437,6 +503,58 @@ impl SettingsWindowView {
             },
         )
         .detach();
+    }
+
+    fn selected_git_executable_path(&self) -> Option<std::path::PathBuf> {
+        match self.git_executable_mode {
+            GitExecutableMode::SystemPath => None,
+            GitExecutableMode::Custom => {
+                let trimmed = self.git_custom_path_draft.trim();
+                Some(if trimmed.is_empty() {
+                    std::path::PathBuf::new()
+                } else {
+                    std::path::PathBuf::from(trimmed)
+                })
+            }
+        }
+    }
+
+    fn sync_git_runtime_state(&mut self, runtime: GitRuntimeState, cx: &mut gpui::Context<Self>) {
+        self.git_executable_mode = GitExecutableMode::from_preference(&runtime.preference);
+        if let GitExecutablePreference::Custom(path) = &runtime.preference {
+            let next_draft = if path.as_os_str().is_empty() {
+                String::new()
+            } else {
+                path.display().to_string()
+            };
+            if self.git_custom_path_draft != next_draft {
+                self.git_custom_path_draft = next_draft.clone();
+                self.git_executable_input
+                    .update(cx, |input, cx| input.set_text(next_draft, cx));
+            }
+        }
+
+        self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime.clone());
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, _cx| {
+            view.store
+                .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
+        });
+        cx.notify();
+    }
+
+    fn apply_git_executable_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        let runtime = install_git_executable_path(self.selected_git_executable_path());
+        self.sync_git_runtime_state(runtime, cx);
+    }
+
+    fn set_git_executable_mode(&mut self, mode: GitExecutableMode, cx: &mut gpui::Context<Self>) {
+        if self.git_executable_mode == mode {
+            return;
+        }
+
+        self.git_executable_mode = mode;
+        self.apply_git_executable_settings(cx);
     }
 
     fn font_option_detail(&self, family: &str) -> Option<SharedString> {
@@ -1417,6 +1535,9 @@ impl Render for SettingsWindowView {
                 )
             });
 
+        self.git_executable_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+
         let content = match self.current_view {
             SettingsView::Root => {
                 let theme_row = self
@@ -1766,42 +1887,175 @@ impl Render for SettingsWindowView {
                         theme.colors.warning,
                         "Git version unknown".into(),
                     ),
+                    GitCompatibility::Unavailable => (
+                        "icons/warning.svg",
+                        theme.colors.danger,
+                        "Unavailable".into(),
+                    ),
                 };
 
-                let mut environment_card = self
-                    .card("settings_window_environment", "Environment", theme)
-                    .child(
-                        div()
-                            .id("settings_window_git")
-                            .w_full()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .rounded(px(theme.radii.row))
-                            .child(div().text_sm().child("Git"))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(svg_icon(git_icon_path, git_icon_color, px(14.0)))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                                            .text_color(theme.colors.text_muted)
-                                            .child(self.runtime_info.git.version_display.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(git_icon_color)
-                                            .child(git_status_text),
-                                    ),
-                            ),
+                let system_git_row = self
+                    .option_row(
+                        "settings_window_git_executable_system",
+                        "System PATH",
+                        Some(
+                            "Use the first `git` executable available in the current PATH.".into(),
+                        ),
+                        self.git_executable_mode == GitExecutableMode::SystemPath,
+                        theme,
                     )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_git_executable_mode(GitExecutableMode::SystemPath, cx);
+                    }));
+
+                let custom_git_row = self
+                    .option_row(
+                        "settings_window_git_executable_custom",
+                        "Custom executable",
+                        Some(
+                            "Use a specific Git binary, such as a newer standalone installation."
+                                .into(),
+                        ),
+                        self.git_executable_mode == GitExecutableMode::Custom,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_git_executable_mode(GitExecutableMode::Custom, cx);
+                    }));
+
+                let mut git_executable_card = self
+                    .card("settings_window_git_executable", "Git executable", theme)
+                    .child(system_git_row)
+                    .child(custom_git_row);
+
+                if self.git_executable_mode == GitExecutableMode::Custom {
+                    let browse_button =
+                        components::Button::new("settings_window_git_executable_browse", "Browse")
+                            .style(components::ButtonStyle::Outlined)
+                            .on_click(theme, cx, |_this, _e, window, cx| {
+                                let view = cx.weak_entity();
+                                let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+                                    files: true,
+                                    directories: false,
+                                    multiple: false,
+                                    prompt: Some("Select Git executable".into()),
+                                });
+
+                                window
+                                    .spawn(cx, async move |cx| {
+                                        let result = rx.await;
+                                        let paths = match result {
+                                            Ok(Ok(Some(paths))) => paths,
+                                            Ok(Ok(None)) => return,
+                                            Ok(Err(_)) | Err(_) => return,
+                                        };
+                                        let Some(path) = paths.into_iter().next() else {
+                                            return;
+                                        };
+                                        let _ = view.update(cx, |this, cx| {
+                                            let next = path.display().to_string();
+                                            this.git_custom_path_draft = next.clone();
+                                            this.git_executable_input
+                                                .update(cx, |input, cx| input.set_text(next, cx));
+                                            this.apply_git_executable_settings(cx);
+                                        });
+                                    })
+                                    .detach();
+                            });
+
+                    let use_path_button =
+                        components::Button::new("settings_window_git_executable_apply", "Use Path")
+                            .style(components::ButtonStyle::Filled)
+                            .on_click(theme, cx, |this, _e, _window, cx| {
+                                this.apply_git_executable_settings(cx);
+                            });
+
+                    git_executable_card = git_executable_card
+                        .child(
+                            div()
+                                .px_2()
+                                .pt_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Custom Git executable"),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .child(self.git_executable_input.clone()),
+                                )
+                                .child(browse_button)
+                                .child(use_path_button),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(
+                                    "Press Enter after editing the path to apply it immediately.",
+                                ),
+                        );
+                }
+
+                git_executable_card = git_executable_card.child(
+                    div()
+                        .id("settings_window_git_runtime")
+                        .w_full()
+                        .px_2()
+                        .py_1()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .rounded(px(theme.radii.row))
+                        .child(div().text_sm().child("Detected runtime"))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(svg_icon(git_icon_path, git_icon_color, px(14.0)))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_family(UI_MONOSPACE_FONT_FAMILY)
+                                        .text_color(theme.colors.text_muted)
+                                        .child(self.runtime_info.git.version_display.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(git_icon_color)
+                                        .child(git_status_text),
+                                ),
+                        ),
+                );
+
+                if let Some(detail) = self.runtime_info.git.detail.clone() {
+                    git_executable_card = git_executable_card.child(
+                        div()
+                            .id("settings_window_git_runtime_detail")
+                            .px_2()
+                            .pb_1()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(detail),
+                    );
+                }
+
+                let environment_card = self
+                    .card("settings_window_environment", "Environment", theme)
                     .child(self.info_row(
                         "settings_window_build",
                         "Build",
@@ -1814,17 +2068,6 @@ impl Render for SettingsWindowView {
                         self.runtime_info.operating_system.clone(),
                         theme,
                     ));
-
-                if let Some(detail) = self.runtime_info.git.detail.clone() {
-                    environment_card = environment_card.child(
-                        div()
-                            .px_2()
-                            .pt_1()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(detail),
-                    );
-                }
 
                 let links_card = self
                     .card("settings_window_links", "Links", theme)
@@ -1870,6 +2113,7 @@ impl Render for SettingsWindowView {
                     .p_3()
                     .child(general_card)
                     .child(change_tracking_card)
+                    .child(git_executable_card)
                     .child(environment_card)
                     .child(links_card)
             }
@@ -2096,8 +2340,12 @@ impl Render for SettingsWindowView {
 
 impl SettingsRuntimeInfo {
     fn detect() -> Self {
+        Self::from_runtime(refresh_git_runtime())
+    }
+
+    fn from_runtime(runtime: GitRuntimeState) -> Self {
         Self {
-            git: detect_git_runtime_info(),
+            git: git_runtime_info_from_state(runtime),
             app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
             operating_system: format!(
                 "{} ({}, {})",
@@ -2110,105 +2358,39 @@ impl SettingsRuntimeInfo {
     }
 }
 
-fn detect_git_runtime_info() -> GitRuntimeInfo {
+fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
     let compatibility_message =
         format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
-
-    let mut command = std::process::Command::new("git");
-    configure_background_command(&mut command);
-    match command.arg("--version").output() {
-        Ok(output) if output.status.success() => {
-            let version_output = if !output.stdout.is_empty() {
-                bytes_to_text_preserving_utf8(&output.stdout)
-                    .trim()
-                    .to_string()
-            } else {
-                bytes_to_text_preserving_utf8(&output.stderr)
-                    .trim()
-                    .to_string()
-            };
-
-            if version_output.is_empty() {
-                return GitRuntimeInfo {
-                    version_display: "Unavailable".into(),
-                    compatibility: GitCompatibility::Unknown,
-                    detail: Some(compatibility_message.into()),
-                };
-            }
-
-            let compatibility = match parse_git_version(&version_output) {
-                Some(version) if is_supported_git_version(version) => GitCompatibility::Supported,
-                Some(_) => GitCompatibility::TooOld,
-                None => GitCompatibility::Unknown,
-            };
-
-            GitRuntimeInfo {
-                version_display: version_output.into(),
-                compatibility,
-                detail: match compatibility {
-                    GitCompatibility::Supported => None,
-                    GitCompatibility::TooOld | GitCompatibility::Unknown => {
-                        Some(compatibility_message.into())
-                    }
-                },
-            }
+    let compatibility = if !runtime.is_available() {
+        GitCompatibility::Unavailable
+    } else {
+        match runtime.version_output().and_then(parse_git_version) {
+            Some(version) if is_supported_git_version(version) => GitCompatibility::Supported,
+            Some(_) => GitCompatibility::TooOld,
+            None => GitCompatibility::Unknown,
         }
-        Ok(output) => {
-            let stderr = bytes_to_text_preserving_utf8(&output.stderr)
-                .trim()
-                .to_string();
-            let display = if stderr.is_empty() {
-                format!("Unavailable (exit code: {})", output.status)
-            } else {
-                format!("Unavailable ({stderr})")
-            };
-            GitRuntimeInfo {
-                version_display: display.into(),
-                compatibility: GitCompatibility::Unknown,
-                detail: Some(compatibility_message.into()),
-            }
-        }
-        Err(err) => GitRuntimeInfo {
-            version_display: format!("Unavailable ({err})").into(),
-            compatibility: GitCompatibility::Unknown,
-            detail: Some(compatibility_message.into()),
-        },
+    };
+
+    let version_display = runtime
+        .version_output()
+        .unwrap_or("Unavailable")
+        .to_string()
+        .into();
+
+    let detail = match compatibility {
+        GitCompatibility::Supported => None,
+        GitCompatibility::TooOld | GitCompatibility::Unknown => Some(compatibility_message.into()),
+        GitCompatibility::Unavailable => runtime
+            .unavailable_detail()
+            .map(|detail| SharedString::from(detail.to_string())),
+    };
+
+    GitRuntimeInfo {
+        runtime,
+        version_display,
+        compatibility,
+        detail,
     }
-}
-
-fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len());
-    let mut cursor = 0usize;
-    while cursor < bytes.len() {
-        match std::str::from_utf8(&bytes[cursor..]) {
-            Ok(valid) => {
-                out.push_str(valid);
-                break;
-            }
-            Err(err) => {
-                let valid_len = err.valid_up_to();
-                if valid_len > 0 {
-                    let valid = &bytes[cursor..cursor + valid_len];
-                    out.push_str(
-                        std::str::from_utf8(valid)
-                            .expect("slice identified by valid_up_to must be valid UTF-8"),
-                    );
-                    cursor += valid_len;
-                }
-
-                let invalid_len = err.error_len().unwrap_or(1);
-                let invalid_end = cursor.saturating_add(invalid_len).min(bytes.len());
-                for byte in &bytes[cursor..invalid_end] {
-                    let _ = write!(out, "\\x{byte:02x}");
-                }
-                cursor = invalid_end;
-            }
-        }
-    }
-
-    out
 }
 
 fn parse_git_version(raw: &str) -> Option<GitVersion> {
@@ -2253,10 +2435,13 @@ mod tests {
     use super::*;
     use crate::test_support::lock_visual_test;
     use gitcomet_core::error::{Error, ErrorKind};
+    use gitcomet_core::process::{
+        GitExecutableAvailability, GitExecutablePreference, GitRuntimeState,
+    };
     use gitcomet_core::services::{GitBackend, GitRepository, Result};
     use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent};
     use std::ops::Deref;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     struct TestBackend;
 
@@ -2269,10 +2454,37 @@ mod tests {
     }
 
     #[test]
-    fn bytes_to_text_preserving_utf8_escapes_invalid_bytes() {
+    fn git_executable_mode_tracks_runtime_preference() {
         assert_eq!(
-            bytes_to_text_preserving_utf8(b"ok\xff\xfeend"),
-            "ok\\xff\\xfeend"
+            GitExecutableMode::from_preference(&GitExecutablePreference::SystemPath),
+            GitExecutableMode::SystemPath
+        );
+        assert_eq!(
+            GitExecutableMode::from_preference(&GitExecutablePreference::Custom(PathBuf::from(
+                "/opt/git/bin/git"
+            ),)),
+            GitExecutableMode::Custom
+        );
+    }
+
+    #[test]
+    fn git_runtime_info_from_state_surfaces_unavailable_detail() {
+        let runtime = GitRuntimeState {
+            preference: GitExecutablePreference::Custom(PathBuf::new()),
+            availability: GitExecutableAvailability::Unavailable {
+                detail: "Custom Git executable is not configured. Choose an executable or switch back to System PATH.".to_string(),
+            },
+        };
+
+        let info = git_runtime_info_from_state(runtime.clone());
+        assert_eq!(info.runtime, runtime);
+        assert_eq!(info.compatibility, GitCompatibility::Unavailable);
+        assert_eq!(info.version_display.as_ref(), "Unavailable");
+        assert_eq!(
+            info.detail.as_ref().map(|detail| detail.as_ref()),
+            Some(
+                "Custom Git executable is not configured. Choose an executable or switch back to System PATH."
+            )
         );
     }
 

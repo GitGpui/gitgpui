@@ -63,8 +63,28 @@ impl GitCometView {
         !self.state.repos.is_empty()
     }
 
+    fn git_runtime_unavailable(&self) -> bool {
+        !self.state.git_runtime.is_available()
+    }
+
+    fn git_runtime_unavailable_detail(&self) -> SharedString {
+        self.state
+            .git_runtime
+            .unavailable_detail()
+            .unwrap_or("GitComet could not find a usable Git executable.")
+            .to_string()
+            .into()
+    }
+
+    fn should_show_git_unavailable_overlay(&self) -> bool {
+        renders_full_chrome(self.view_mode)
+            && self.has_repo_tabs()
+            && self.git_runtime_unavailable()
+    }
+
     pub(crate) fn blocks_non_repository_actions(&self) -> bool {
         repository_entry_interstitial_active(self.view_mode, self.has_repo_tabs())
+            || matches!(self.view_mode, GitCometViewMode::Normal) && self.git_runtime_unavailable()
     }
 
     pub(crate) fn is_splash_screen_active(&self) -> bool {
@@ -154,6 +174,7 @@ impl GitCometView {
 
         div()
             .id(id)
+            .debug_selector(move || id.to_string())
             .tab_index(0)
             .h(px(36.0))
             .px(px(16.0))
@@ -223,6 +244,161 @@ impl GitCometView {
             .into_any_element()
     }
 
+    fn git_unavailable_open_settings_button(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let primary_bg = gpui::rgba(0x5ac1feff);
+        let primary_hover = gpui::rgba(0x72c7ffff);
+        let primary_active = gpui::rgba(0x48b6eeff);
+        let primary_text = gpui::rgba(0x04172bff);
+
+        Self::splash_cta_button(
+            "git_unavailable_open_settings",
+            "Open Settings",
+            "icons/cog.svg",
+            SplashCtaButtonColors {
+                icon: primary_text,
+                text: primary_text,
+                background: SplashInteractiveColors {
+                    base: primary_bg,
+                    hover: primary_hover,
+                    active: primary_active,
+                },
+                border: SplashInteractiveColors {
+                    base: primary_bg,
+                    hover: primary_hover,
+                    active: primary_active,
+                },
+            },
+        )
+        .on_click(cx.listener(|this, _e, _window, cx| {
+            this.open_repo_panel = false;
+            cx.defer(crate::view::open_settings_window);
+            cx.notify();
+        }))
+    }
+
+    fn git_unavailable_panel_content(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let detail_bg = with_alpha(
+            theme.colors.window_bg,
+            if theme.is_dark { 0.36 } else { 0.82 },
+        );
+        let detail_border =
+            with_alpha(theme.colors.border, if theme.is_dark { 0.96 } else { 0.82 });
+
+        div()
+            .id("git_unavailable_card")
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_3()
+            .child(Self::interstitial_logo(theme, px(84.0)))
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::BOLD)
+                    .text_center()
+                    .child("Git executable unavailable"),
+            )
+            .child(
+                div()
+                    .max_w(px(440.0))
+                    .text_center()
+                    .text_sm()
+                    .line_height(px(22.0))
+                    .text_color(theme.colors.text_muted)
+                    .child(
+                        "GitComet cannot open, refresh, or run repository actions until a Git executable is configured.",
+                    ),
+            )
+            .child(
+                div()
+                    .id("git_unavailable_detail")
+                    .w_full()
+                    .max_w(px(460.0))
+                    .rounded(px(theme.radii.panel))
+                    .border_1()
+                    .border_color(detail_border)
+                    .bg(detail_bg)
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .line_height(px(18.0))
+                    .text_color(theme.colors.text_muted)
+                    .child(self.git_runtime_unavailable_detail()),
+            )
+            .child(
+                div()
+                    .pt_1()
+                    .child(self.git_unavailable_open_settings_button(cx)),
+            )
+            .into_any_element()
+    }
+
+    fn git_unavailable_splash(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        self.interstitial_shell(
+            "git_unavailable_screen",
+            self.git_unavailable_panel_content(theme, cx),
+            theme,
+        )
+    }
+
+    fn git_unavailable_overlay(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let border_glow = with_alpha(theme.colors.border, if theme.is_dark { 0.86 } else { 0.74 });
+
+        div()
+            .id("git_unavailable_overlay")
+            .debug_selector(|| "git_unavailable_overlay".to_string())
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .overflow_hidden()
+            .bg(with_alpha(
+                theme.colors.window_bg,
+                if theme.is_dark { 0.76 } else { 0.82 },
+            ))
+            .child(self.interstitial_backdrop())
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .px_3()
+                    .py_4()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(560.0))
+                            .bg(with_alpha(
+                                theme.colors.surface_bg,
+                                if theme.is_dark { 0.96 } else { 0.98 },
+                            ))
+                            .border_1()
+                            .border_color(border_glow)
+                            .rounded(px(theme.radii.panel))
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::rgba(0x00000052).into(),
+                                offset: point(px(0.0), px(22.0)),
+                                blur_radius: px(52.0),
+                                spread_radius: px(0.0),
+                            }])
+                            .p_4()
+                            .child(self.git_unavailable_panel_content(theme, cx)),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn startup_repository_loading_screen(&mut self) -> AnyElement {
         let theme = self.theme;
 
@@ -266,6 +442,10 @@ impl GitCometView {
     }
 
     pub(super) fn splash_screen(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        if self.git_runtime_unavailable() {
+            return self.git_unavailable_splash(cx);
+        }
+
         let hero_text = gpui::rgba(0xf6f7fbff);
         let hero_muted = gpui::rgba(0xa8b1c6ff);
         let hero_proof = gpui::rgba(0xffffffbd);
@@ -611,7 +791,7 @@ impl GitCometView {
         }
 
         if renders_full_chrome(self.view_mode) {
-            return div()
+            let content = div()
                 .flex()
                 .flex_col()
                 .flex_1()
@@ -722,6 +902,20 @@ impl GitCometView {
                         ),
                 )
                 .into_any_element();
+
+            if self.should_show_git_unavailable_overlay() {
+                return div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(content)
+                    .child(self.git_unavailable_overlay(cx))
+                    .into_any_element();
+            }
+
+            return content;
         }
 
         div()

@@ -34,6 +34,7 @@ pub struct UiSession {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub git_executable_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -92,6 +93,7 @@ struct UiSessionFileV2 {
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    git_executable_path: Option<String>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
 }
@@ -147,6 +149,10 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
+        git_executable_path: file
+            .git_executable_path
+            .as_deref()
+            .map(path_from_storage_key),
     }
 }
 
@@ -349,6 +355,7 @@ pub struct UiSettings {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub git_executable_path: Option<Option<PathBuf>>,
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -413,6 +420,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.history_show_sha {
         file.history_show_sha = Some(value);
+    }
+    if let Some(path) = settings.git_executable_path {
+        file.git_executable_path = path.map(|path| path_storage_key(&path));
     }
 
     persist_to_path(path, &file)
@@ -1537,6 +1547,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
             },
             &path,
         )
@@ -1593,6 +1604,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
             },
             &path,
         )
@@ -1646,6 +1658,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
             },
             &path,
         )
@@ -1699,6 +1712,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
             },
             &path,
         )
@@ -1752,6 +1766,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
             },
             &path,
         )
@@ -1808,6 +1823,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
             },
             &path,
         )
@@ -1862,6 +1878,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
             },
             &path,
         )
@@ -1870,6 +1887,61 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
     }
+
+    #[test]
+    fn persist_ui_settings_round_trips_empty_custom_git_executable_path() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                repo_sidebar_collapsed_items: None,
+                theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
+                use_font_ligatures: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                change_tracking_view: None,
+                change_tracking_height: None,
+                untracked_height: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+                git_executable_path: Some(Some(PathBuf::new())),
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.git_executable_path, Some(PathBuf::new()));
+    }
+
     #[test]
     fn persist_repo_history_scope_round_trips() {
         let dir = env::temp_dir().join(format!(

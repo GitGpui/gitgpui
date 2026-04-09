@@ -53,6 +53,7 @@ impl GitCometView {
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
+                            git_executable_path: None,
                         };
 
                         Some(settings)

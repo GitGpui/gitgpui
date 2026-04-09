@@ -4,6 +4,7 @@ use gitcomet_core::domain::{
     Upstream, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_state::store::AppStore;
 use std::path::Path;
@@ -42,6 +43,24 @@ fn wait_until(description: &str, ready: impl Fn() -> bool) {
             panic!("timed out waiting for {description}");
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn available_git_runtime_state() -> GitRuntimeState {
+    GitRuntimeState {
+        preference: GitExecutablePreference::SystemPath,
+        availability: GitExecutableAvailability::Available {
+            version_output: "git version 2.51.0".to_string(),
+        },
+    }
+}
+
+fn unavailable_git_runtime_state() -> GitRuntimeState {
+    GitRuntimeState {
+        preference: GitExecutablePreference::Custom(PathBuf::new()),
+        availability: GitExecutableAvailability::Unavailable {
+            detail: "Custom Git executable is not configured. Choose an executable or switch back to System PATH.".to_string(),
+        },
     }
 }
 
@@ -1682,6 +1701,125 @@ fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppCon
 
     let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
     assert!(splash_active, "expected splash screen to be active");
+}
+
+#[gpui::test]
+fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let next = Arc::new(AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        ..AppState::default()
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.disable_poller_for_tests();
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("git_unavailable_screen")
+        .expect("expected git unavailable splash screen");
+    cx.debug_bounds("git_unavailable_open_settings")
+        .expect("expected open settings call to action");
+    assert!(
+        cx.debug_bounds("splash_open_repo_action").is_none(),
+        "expected repository entry actions to be hidden while Git is unavailable"
+    );
+
+    cx.update(|_window, app| {
+        assert!(view.read(app).is_splash_screen_active());
+        assert!(view.read(app).blocks_non_repository_actions());
+    });
+}
+
+#[gpui::test]
+fn git_unavailable_overlay_blocks_open_repositories(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut next = AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    next.repos.push(open_repo_state_with_workdir(
+        "/tmp/git-unavailable-overlay-test",
+    ));
+    let next = Arc::new(next);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.disable_poller_for_tests();
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("git_unavailable_overlay")
+        .expect("expected blocking git unavailable overlay");
+
+    cx.update(|_window, app| {
+        assert!(!view.read(app).is_splash_screen_active());
+        assert!(view.read(app).blocks_non_repository_actions());
+    });
+}
+
+#[gpui::test]
+fn git_unavailable_overlay_clears_after_runtime_recovery(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut unavailable = AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    unavailable.repos.push(open_repo_state_with_workdir(
+        "/tmp/git-unavailable-recovery-test",
+    ));
+    let unavailable = Arc::new(unavailable);
+
+    let mut recovered = AppState {
+        git_runtime: available_git_runtime_state(),
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    recovered.repos.push(open_repo_state_with_workdir(
+        "/tmp/git-unavailable-recovery-test",
+    ));
+    let recovered = Arc::new(recovered);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.disable_poller_for_tests();
+            this.apply_state_snapshot(Arc::clone(&unavailable), cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.debug_bounds("git_unavailable_overlay")
+        .expect("expected overlay before runtime recovery");
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&recovered), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds("git_unavailable_overlay").is_none(),
+        "expected overlay to disappear after runtime recovery"
+    );
+    cx.update(|_window, app| {
+        assert!(!view.read(app).blocks_non_repository_actions());
+    });
 }
 
 #[gpui::test]

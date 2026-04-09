@@ -304,6 +304,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             history_show_author: Some(false),
             history_show_date: Some(true),
             history_show_sha: Some(false),
+            git_executable_path: None,
         },
         &session_file,
     )
