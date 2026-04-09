@@ -10,7 +10,7 @@ pub(super) use crate::view::panes::main::PreparedSyntaxViewMode;
 pub(super) use gitcomet_core::error::{Error, ErrorKind};
 pub(super) use gitcomet_core::services::{GitBackend, GitRepository, Result};
 pub(super) use gitcomet_state::store::AppStore;
-pub(super) use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, px};
+pub(super) use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, point, px};
 pub(super) use std::path::Path;
 pub(super) use std::sync::Arc;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
@@ -437,6 +437,87 @@ pub(super) fn draw_and_drain_test_window(cx: &mut gpui::VisualTestContext) {
         let _ = window.draw(app);
     });
     cx.run_until_parked();
+}
+
+pub(super) const ALL_DIFF_SCROLL_SYNC_MODES: [DiffScrollSync; 4] = [
+    DiffScrollSync::Both,
+    DiffScrollSync::Vertical,
+    DiffScrollSync::Horizontal,
+    DiffScrollSync::None,
+];
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ScrollSyncAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl ScrollSyncAxis {
+    pub(super) const ALL: [Self; 2] = [Self::Horizontal, Self::Vertical];
+
+    pub(super) const fn component(self, offset: gpui::Point<Pixels>) -> Pixels {
+        match self {
+            Self::Horizontal => offset.x,
+            Self::Vertical => offset.y,
+        }
+    }
+
+    pub(super) const fn includes(self, mode: DiffScrollSync) -> bool {
+        match self {
+            Self::Horizontal => mode.includes_horizontal(),
+            Self::Vertical => mode.includes_vertical(),
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Horizontal => "horizontal",
+            Self::Vertical => "vertical",
+        }
+    }
+
+    pub(super) fn offset(self, magnitude: Pixels) -> gpui::Point<Pixels> {
+        match self {
+            Self::Horizontal => point(-magnitude, px(0.0)),
+            Self::Vertical => point(px(0.0), -magnitude),
+        }
+    }
+}
+
+pub(super) fn uniform_list_offset(handle: &gpui::UniformListScrollHandle) -> gpui::Point<Pixels> {
+    handle.0.borrow().base_handle.offset()
+}
+
+pub(super) fn uniform_list_max_offset(
+    handle: &gpui::UniformListScrollHandle,
+) -> gpui::Size<Pixels> {
+    handle.0.borrow().base_handle.max_offset()
+}
+
+pub(super) fn set_uniform_list_offset(
+    handle: &gpui::UniformListScrollHandle,
+    offset: gpui::Point<Pixels>,
+) {
+    handle.0.borrow().base_handle.set_offset(offset);
+}
+
+pub(super) fn reset_uniform_list_offsets(handles: &[&gpui::UniformListScrollHandle]) {
+    for handle in handles {
+        set_uniform_list_offset(handle, point(px(0.0), px(0.0)));
+    }
+}
+
+pub(super) fn set_diff_scroll_sync_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    mode: DiffScrollSync,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_scroll_sync(mode, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
 }
 
 pub(super) fn conflict_compare_repo_state(
