@@ -144,6 +144,185 @@ fn diff_panel_is_focused(
     })
 }
 
+fn focus_history_panel(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        let focus = history_view.read(app).history_panel_focus_handle.clone();
+        window.focus(&focus);
+        let _ = window.draw(app);
+    });
+}
+
+fn history_panel_is_focused(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> bool {
+    cx.update(|window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_panel_focus_handle
+            .is_focused(window)
+    })
+}
+
+fn history_search_is_visible(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> bool {
+    cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_search_is_visible()
+    })
+}
+
+fn history_search_input_is_focused(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> bool {
+    cx.update(|window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        let input = history_view.read(app).history_search_input.clone();
+        input.read(app).focus_handle().is_focused(window)
+    })
+}
+
+fn history_search_input_text(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> String {
+    cx.update(|_window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view
+            .read(app)
+            .history_search_input
+            .read(app)
+            .text()
+            .to_string()
+    })
+}
+
+fn focus_history_search_input(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        let focus = history_view
+            .read(app)
+            .history_search_input
+            .read(app)
+            .focus_handle();
+        window.focus(&focus);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
+fn set_history_search_text(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    text: &str,
+) {
+    let text = text.to_string();
+    cx.update(|window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view.update(app, |this, cx| {
+            this.set_history_search_text_for_test(&text, window, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
+fn flush_history_search_query_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view.update(app, |this, cx| {
+            this.flush_history_search_query_for_test(cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
+fn history_search_dispatch_pending_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> bool {
+    cx.update(|_window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view
+            .read(app)
+            .history_search_dispatch_pending_for_test()
+    })
+}
+
+fn history_search_selected_field_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<gitcomet_core::history_query::HistoryQueryField> {
+    cx.update(|_window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view
+            .read(app)
+            .history_search_selected_field_for_test()
+    })
+}
+
+fn history_search_picker_active_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> bool {
+    cx.update(|_window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view
+            .read(app)
+            .history_search_picker_active_for_test()
+    })
+}
+
+fn reopen_history_search_picker_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view.update(app, |this, cx| {
+            this.reopen_history_search_picker_for_test(cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
+fn delete_history_search_to_empty_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    backspace: bool,
+) {
+    cx.update(|window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view.update(app, |this, cx| {
+            this.delete_history_search_to_empty_for_test(backspace, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
 fn popover_is_open(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -1345,5 +1524,343 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
     assert!(
         diff_panel_is_focused(cx, &view),
         "expected dismissing change-tracking settings to restore diff-panel focus"
+    );
+}
+
+#[gpui::test]
+fn ctrl_f_opens_history_search_when_history_view_is_visible(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(707);
+    let commit_id = CommitId("abcdefabcdefabcd".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_search_shortcut",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_history_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-f");
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        history_search_is_visible(cx, &view),
+        "expected Ctrl+F to open the floating history search when the history pane is visible"
+    );
+    assert!(
+        history_search_input_is_focused(cx, &view),
+        "expected Ctrl+F to move focus into the history search input"
+    );
+    assert_eq!(
+        history_search_selected_field_for_test(cx, &view),
+        Some(gitcomet_core::history_query::HistoryQueryField::Message),
+        "expected opening history search without an active query to default to the message field"
+    );
+    assert_eq!(
+        history_search_input_text(cx, &view),
+        "",
+        "expected opening history search without an active query to start with an empty tagged value"
+    );
+    assert!(!history_search_picker_active_for_test(cx, &view));
+
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        !history_search_is_visible(cx, &view),
+        "expected Escape to close the history search panel"
+    );
+    assert!(
+        history_panel_is_focused(cx, &view),
+        "expected closing history search to restore history-panel focus"
+    );
+}
+
+#[gpui::test]
+fn history_search_input_arrow_navigation_selects_field_from_picker(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(709);
+    let commit_id = CommitId("0123456789abcdef".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_helper_keys",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_history_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-f");
+    draw_and_drain_test_window(cx);
+    delete_history_search_to_empty_for_test(cx, &view, true);
+    focus_history_search_input(cx, &view);
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        history_search_picker_active_for_test(cx, &view),
+        "expected deleting the default tag to reopen the field picker"
+    );
+
+    cx.simulate_keystrokes("down enter");
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        history_search_selected_field_for_test(cx, &view),
+        Some(gitcomet_core::history_query::HistoryQueryField::Author)
+    );
+    assert_eq!(history_search_input_text(cx, &view), "");
+    assert!(
+        !history_search_picker_active_for_test(cx, &view),
+        "expected choosing a field to leave picker mode"
+    );
+}
+
+#[gpui::test]
+fn history_search_input_debounces_dispatch_and_enter_flushes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(710);
+    let commit_id = CommitId("1111222233334444".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_search_debounce",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_history_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-f");
+    draw_and_drain_test_window(cx);
+
+    set_history_search_text(cx, &view, "alice");
+    assert!(
+        history_search_dispatch_pending_for_test(cx, &view),
+        "expected history search to enter a pending debounced state after text changes"
+    );
+
+    flush_history_search_query_for_test(cx, &view);
+    assert!(
+        !history_search_dispatch_pending_for_test(cx, &view),
+        "expected flushing the pending history search to clear the debounce state"
+    );
+
+    set_history_search_text(cx, &view, "bob");
+    draw_and_drain_test_window(cx);
+    assert!(
+        history_search_dispatch_pending_for_test(cx, &view),
+        "expected the replacement query to remain pending until it is explicitly flushed"
+    );
+
+    flush_history_search_query_for_test(cx, &view);
+    assert!(
+        !history_search_dispatch_pending_for_test(cx, &view),
+        "expected flushing the replacement history search to clear the debounce state"
+    );
+}
+
+#[gpui::test]
+fn history_search_backspace_on_empty_tag_reopens_picker(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(711);
+    let commit_id = CommitId("5555666677778888".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_search_empty_tag_backspace",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_history_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-f");
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        history_search_selected_field_for_test(cx, &view),
+        Some(gitcomet_core::history_query::HistoryQueryField::Message)
+    );
+
+    delete_history_search_to_empty_for_test(cx, &view, true);
+
+    assert!(
+        history_search_picker_active_for_test(cx, &view),
+        "expected deleting an empty tag to reopen the picker"
+    );
+    assert_eq!(history_search_input_text(cx, &view), "");
+}
+
+#[gpui::test]
+fn history_search_deleting_last_value_char_reopens_picker(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(712);
+    let commit_id = CommitId("9999aaaabbbbcccc".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_search_delete_last_char",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_history_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-f");
+    draw_and_drain_test_window(cx);
+    set_history_search_text(cx, &view, "a");
+    flush_history_search_query_for_test(cx, &view);
+
+    delete_history_search_to_empty_for_test(cx, &view, true);
+
+    assert!(
+        history_search_picker_active_for_test(cx, &view),
+        "expected deleting the last value character to return to picker mode"
+    );
+    assert_eq!(history_search_input_text(cx, &view), "");
+}
+
+#[gpui::test]
+fn history_search_retagging_preserves_value(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(713);
+    let commit_id = CommitId("ddddeeeeffff0000".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_search_retagging",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_history_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-f");
+    draw_and_drain_test_window(cx);
+    set_history_search_text(cx, &view, "alice");
+    flush_history_search_query_for_test(cx, &view);
+
+    reopen_history_search_picker_for_test(cx, &view);
+    focus_history_search_input(cx, &view);
+    assert!(
+        history_search_picker_active_for_test(cx, &view),
+        "expected clicking the field chip to reopen the picker"
+    );
+    cx.simulate_keystrokes("down down down enter");
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        history_search_selected_field_for_test(cx, &view),
+        Some(gitcomet_core::history_query::HistoryQueryField::Sha)
+    );
+    assert_eq!(history_search_input_text(cx, &view), "alice");
+}
+
+#[gpui::test]
+fn incompatible_history_query_resets_to_default_message_tag_on_bind(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(714);
+    let commit_id = CommitId("1111eeee2222ffff".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_search_incompatible_query",
+        std::process::id()
+    ));
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.history_state.history_query = Some(gitcomet_core::history_query::HistoryQuery::parse(
+        "plain-term",
+    ));
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        history_search_is_visible(cx, &view),
+        "expected an incompatible saved history query to reopen the search UI"
+    );
+    assert!(!history_search_picker_active_for_test(cx, &view));
+    assert_eq!(
+        history_search_selected_field_for_test(cx, &view),
+        Some(gitcomet_core::history_query::HistoryQueryField::Message)
+    );
+    assert_eq!(history_search_input_text(cx, &view), "");
+}
+
+#[gpui::test]
+fn ctrl_f_prefers_diff_search_when_diff_view_is_visible(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(708);
+    let commit_id = CommitId("fedcbafedcbafedc".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_shortcut",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![gitcomet_core::domain::FileStatus {
+                path: path.clone(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }],
+        }
+        .into(),
+    );
+    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    });
+    repo.diff_state.diff = Loadable::Ready(
+        simple_hunk_diff(DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-f");
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_active),
+        "expected Ctrl+F to open diff search when a diff is visible"
+    );
+    assert!(
+        !history_search_is_visible(cx, &view),
+        "expected diff search to win over history search when the diff pane is active"
     );
 }

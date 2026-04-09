@@ -42,6 +42,7 @@ actions!(
         OpenSettings,
         OpenRepository,
         OpenRecentPicker,
+        Search,
         ApplyPatch,
         Close,
         CloseWindow,
@@ -418,6 +419,9 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
             open_recent_repository_picker_in_existing_or_new_window(cx, backend);
         });
     });
+    cx.on_action(|_: &Search, cx| {
+        cx.defer(activate_contextual_search_in_active_window);
+    });
 
     cx.on_action(|_: &Close, cx| {
         cx.defer(|cx| {
@@ -504,6 +508,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-o", OpenRepository, None),
         KeyBinding::new("secondary-shift-o", OpenRecentPicker, None),
+        KeyBinding::new("secondary-f", Search, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
@@ -587,6 +592,10 @@ fn macos_app_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::os_action("Select All", crate::kit::SelectAll, OsAction::SelectAll),
             ],
+        },
+        Menu {
+            name: "Search".into(),
+            items: vec![MenuItem::action("Search…", Search)],
         },
         Menu {
             name: "Window".into(),
@@ -786,6 +795,21 @@ fn find_normal_gitcomet_window_for_repo(cx: &mut App, path: &Path) -> Option<Git
 fn activate_gitcomet_window(cx: &mut App, window: gpui::AnyWindowHandle) {
     let _ = window.update(cx, |_view, window, _cx| {
         window.activate_window();
+    });
+}
+
+fn activate_contextual_search_in_active_window(cx: &mut App) {
+    let Some(window) = active_normal_gitcomet_window(cx) else {
+        return;
+    };
+
+    let _ = window.handle.update(cx, |root_view, window, cx| {
+        let Ok(view) = root_view.downcast::<GitCometView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.activate_contextual_search(window, cx);
+        });
     });
 }
 
@@ -1254,6 +1278,7 @@ mod tests {
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenRepository))
                 .on_action(record_action_listener!(OpenRecentPicker))
+                .on_action(record_action_listener!(Search))
                 .on_action(record_action_listener!(Close))
                 .on_action(record_action_listener!(CloseWindow))
                 .on_action(record_action_listener!(PreviousRepository))
@@ -1582,6 +1607,7 @@ mod tests {
             ("secondary-,", OpenSettings.name()),
             ("secondary-o", OpenRepository.name()),
             ("secondary-shift-o", OpenRecentPicker.name()),
+            ("secondary-f", Search.name()),
             ("secondary-w", Close.name()),
             ("secondary-shift-w", CloseWindow.name()),
             ("secondary-pageup", PreviousRepository.name()),

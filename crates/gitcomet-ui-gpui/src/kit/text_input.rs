@@ -481,6 +481,12 @@ pub struct TextInput {
     redo_stack: Vec<UndoSnapshot>,
     enter_pressed: bool,
     escape_pressed: bool,
+    backspace_pressed: bool,
+    delete_pressed: bool,
+    up_pressed: bool,
+    down_pressed: bool,
+    home_pressed: bool,
+    end_pressed: bool,
 }
 
 impl TextInput {
@@ -539,6 +545,12 @@ impl TextInput {
             redo_stack: Vec::new(),
             enter_pressed: false,
             escape_pressed: false,
+            backspace_pressed: false,
+            delete_pressed: false,
+            up_pressed: false,
+            down_pressed: false,
+            home_pressed: false,
+            end_pressed: false,
         }
     }
 
@@ -597,6 +609,12 @@ impl TextInput {
             redo_stack: Vec::new(),
             enter_pressed: false,
             escape_pressed: false,
+            backspace_pressed: false,
+            delete_pressed: false,
+            up_pressed: false,
+            down_pressed: false,
+            home_pressed: false,
+            end_pressed: false,
         }
     }
 
@@ -791,9 +809,36 @@ impl TextInput {
         std::mem::take(&mut self.escape_pressed)
     }
 
+    pub fn take_backspace_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.backspace_pressed)
+    }
+
+    pub fn take_delete_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.delete_pressed)
+    }
+
     pub fn clear_transient_key_presses(&mut self) {
         self.enter_pressed = false;
         self.escape_pressed = false;
+        self.backspace_pressed = false;
+        self.delete_pressed = false;
+        self.up_pressed = false;
+        self.down_pressed = false;
+        self.home_pressed = false;
+        self.end_pressed = false;
+    }
+
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = placeholder.into();
+        if self.placeholder == placeholder {
+            return;
+        }
+        self.placeholder = placeholder;
+        cx.notify();
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
@@ -1408,6 +1453,7 @@ impl TextInput {
         let Some((target, preferred_x)) =
             self.vertical_move_target(self.cursor_offset(), -1.0, self.vertical_motion_x)
         else {
+            cx.notify();
             return;
         };
         self.move_to(target, cx);
@@ -1419,6 +1465,7 @@ impl TextInput {
         let Some((target, preferred_x)) =
             self.vertical_move_target(self.cursor_offset(), 1.0, self.vertical_motion_x)
         else {
+            cx.notify();
             return;
         };
         self.move_to(target, cx);
@@ -1793,20 +1840,31 @@ impl TextInput {
         if self.read_only {
             return;
         }
+        self.backspace_pressed = true;
+        let notify_without_edit = self.selected_range.is_empty() && self.cursor_offset() == 0;
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx)
         }
-        self.replace_text_in_range(None, "", window, cx)
+        self.replace_text_in_range(None, "", window, cx);
+        if notify_without_edit {
+            cx.notify();
+        }
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
         }
+        self.delete_pressed = true;
+        let notify_without_edit =
+            self.selected_range.is_empty() && self.cursor_offset() == self.content.len();
         if self.selected_range.is_empty() {
             self.select_to(self.next_boundary(self.cursor_offset()), cx)
         }
-        self.replace_text_in_range(None, "", window, cx)
+        self.replace_text_in_range(None, "", window, cx);
+        if notify_without_edit {
+            cx.notify();
+        }
     }
 
     fn delete_word_left(
@@ -2261,9 +2319,28 @@ impl TextInput {
             return;
         }
 
-        if event.keystroke.key.as_str() == "escape" {
-            self.escape_pressed = true;
-            cx.notify();
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.escape_pressed = true;
+                cx.notify();
+            }
+            "up" => {
+                self.up_pressed = true;
+                cx.notify();
+            }
+            "down" => {
+                self.down_pressed = true;
+                cx.notify();
+            }
+            "home" => {
+                self.home_pressed = true;
+                cx.notify();
+            }
+            "end" => {
+                self.end_pressed = true;
+                cx.notify();
+            }
+            _ => {}
         }
     }
 

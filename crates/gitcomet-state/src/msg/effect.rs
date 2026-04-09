@@ -1,6 +1,7 @@
 use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
+use gitcomet_core::history_query::HistoryQuery;
 use gitcomet_core::services::{ConflictSide, PullMode, RemoteUrlKind, ResetMode};
 use std::path::PathBuf;
 
@@ -39,6 +40,7 @@ pub enum Effect {
         scope: LogScope,
         limit: usize,
         cursor: Option<LogCursor>,
+        query: Option<HistoryQuery>,
     },
     LoadTags {
         repo_id: RepoId,

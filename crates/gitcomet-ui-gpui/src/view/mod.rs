@@ -313,6 +313,16 @@ impl GitCometView {
         });
     }
 
+    pub(crate) fn activate_contextual_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane
+            .update(cx, |pane, cx| pane.activate_contextual_search(window, cx));
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_active_context_menu_invoker(
         &mut self,
         next: Option<SharedString>,

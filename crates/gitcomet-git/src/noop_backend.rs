@@ -1,6 +1,8 @@
 #[cfg(test)]
 use gitcomet_core::domain::*;
 use gitcomet_core::error::{Error, ErrorKind};
+#[cfg(test)]
+use gitcomet_core::history_query::HistoryQuery;
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use std::path::Path;
 use std::sync::Arc;
@@ -27,7 +29,12 @@ impl GitRepository for NoopRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+        _query: Option<&HistoryQuery>,
+    ) -> Result<LogPage> {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 

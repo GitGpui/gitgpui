@@ -4,8 +4,11 @@ use crate::view::caches::{
     build_history_branch_text_by_target, build_history_tag_names_by_target,
     build_history_visible_indices, next_history_stash_tip_for_commit_ix,
 };
+use gitcomet_core::history_query::{HistoryQuery, HistoryQueryField, HistoryQueryTerm};
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
+use std::time::Duration;
 
 mod history_panel;
 
@@ -601,6 +604,146 @@ fn resolve_history_selected_list_index(
     Some(list_ix)
 }
 
+#[derive(Clone, Copy)]
+struct HistorySearchOperatorOption {
+    field: HistoryQueryField,
+    label: &'static str,
+    description: &'static str,
+}
+
+const HISTORY_SEARCH_OPERATORS: [HistorySearchOperatorOption; 6] = [
+    HistorySearchOperatorOption {
+        field: HistoryQueryField::Message,
+        label: "message:",
+        description: "Commit message",
+    },
+    HistorySearchOperatorOption {
+        field: HistoryQueryField::Author,
+        label: "author:",
+        description: "Author name or email",
+    },
+    HistorySearchOperatorOption {
+        field: HistoryQueryField::Ref,
+        label: "ref:",
+        description: "Branch or tag name",
+    },
+    HistorySearchOperatorOption {
+        field: HistoryQueryField::Sha,
+        label: "sha:",
+        description: "Full or short commit SHA",
+    },
+    HistorySearchOperatorOption {
+        field: HistoryQueryField::File,
+        label: "file:",
+        description: "Changed file path",
+    },
+    HistorySearchOperatorOption {
+        field: HistoryQueryField::Content,
+        label: "content:",
+        description: "Diff or patch text",
+    },
+];
+
+const HISTORY_SEARCH_INPUT_DEBOUNCE_MS: u64 = 180;
+const HISTORY_SEARCH_DEFAULT_FIELD: HistoryQueryField = HistoryQueryField::Message;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum HistorySearchUiState {
+    PickingField {
+        filter_text: SharedString,
+        pending_value: SharedString,
+    },
+    Tagged {
+        field: HistoryQueryField,
+        value: SharedString,
+    },
+}
+
+impl Default for HistorySearchUiState {
+    fn default() -> Self {
+        Self::Tagged {
+            field: HISTORY_SEARCH_DEFAULT_FIELD,
+            value: SharedString::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum HistorySearchRepoQueryBinding {
+    Empty,
+    Compatible {
+        field: HistoryQueryField,
+        value: SharedString,
+    },
+    Incompatible,
+}
+
+fn history_search_input_text_for_state(state: &HistorySearchUiState) -> SharedString {
+    match state {
+        HistorySearchUiState::PickingField { filter_text, .. } => filter_text.clone(),
+        HistorySearchUiState::Tagged { value, .. } => value.clone(),
+    }
+}
+
+fn history_search_input_placeholder_for_state(state: &HistorySearchUiState) -> SharedString {
+    match state {
+        HistorySearchUiState::PickingField { .. } => "Filter fields".into(),
+        HistorySearchUiState::Tagged { .. } => "Search history value".into(),
+    }
+}
+
+fn history_search_repo_query_binding(
+    query: Option<&HistoryQuery>,
+) -> HistorySearchRepoQueryBinding {
+    let Some(query) = query else {
+        return HistorySearchRepoQueryBinding::Empty;
+    };
+    let mut terms = query.terms().iter();
+    let Some(term) = terms.next() else {
+        return HistorySearchRepoQueryBinding::Empty;
+    };
+    if terms.next().is_some() {
+        return HistorySearchRepoQueryBinding::Incompatible;
+    }
+
+    match term {
+        HistoryQueryTerm::Field { field, value } if !value.trim().is_empty() => {
+            HistorySearchRepoQueryBinding::Compatible {
+                field: *field,
+                value: value.to_string().into(),
+            }
+        }
+        _ => HistorySearchRepoQueryBinding::Incompatible,
+    }
+}
+
+fn history_search_helper_selected_ix(
+    selected_ix: Option<usize>,
+    option_count: usize,
+) -> Option<usize> {
+    (option_count > 0).then(|| selected_ix.unwrap_or(0).min(option_count.saturating_sub(1)))
+}
+
+fn history_search_helper_next_selected_ix(
+    selected_ix: Option<usize>,
+    option_count: usize,
+    direction: i8,
+) -> Option<usize> {
+    let current = history_search_helper_selected_ix(selected_ix, option_count)?;
+    Some(if direction.is_negative() {
+        current.saturating_sub(1)
+    } else {
+        (current + 1).min(option_count.saturating_sub(1))
+    })
+}
+
+fn history_search_input_highlights(
+    _theme: AppTheme,
+    _raw: &str,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    Vec::new()
+}
+
 pub(in super::super) struct HistoryView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -633,6 +776,15 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
+    pub(in super::super) history_search_input: Entity<components::TextInput>,
+    _history_search_subscription: gpui::Subscription,
+    history_search_explicit_open: bool,
+    history_search_state: HistorySearchUiState,
+    history_search_bound_repo_id: Option<RepoId>,
+    history_search_helper_scroll: ScrollHandle,
+    history_search_helper_selected_ix: Option<usize>,
+    history_search_dispatch_seq: u64,
+    history_search_dispatch_pending: bool,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
 }
 
@@ -645,6 +797,7 @@ impl HistoryView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.log_rev.hash(&mut hasher);
+            repo.history_state.history_query.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.detached_head_commit.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
@@ -672,7 +825,7 @@ impl HistoryView {
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         last_window_size: Size<Pixels>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
@@ -688,6 +841,66 @@ impl HistoryView {
             this.notify_fingerprint = next_fingerprint;
             this.state = next;
             cx.notify();
+        });
+
+        let initial_history_search_state = state
+            .active_repo
+            .and_then(|repo_id| state.repos.iter().find(|repo| repo.id == repo_id))
+            .map(|repo| {
+                match history_search_repo_query_binding(repo.history_state.history_query.as_ref()) {
+                    HistorySearchRepoQueryBinding::Compatible { field, value } => {
+                        HistorySearchUiState::Tagged { field, value }
+                    }
+                    HistorySearchRepoQueryBinding::Empty
+                    | HistorySearchRepoQueryBinding::Incompatible => {
+                        HistorySearchUiState::default()
+                    }
+                }
+            })
+            .unwrap_or_default();
+        let initial_history_search_text =
+            history_search_input_text_for_state(&initial_history_search_state);
+        let initial_history_search_placeholder =
+            history_search_input_placeholder_for_state(&initial_history_search_state);
+        let history_search_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: initial_history_search_placeholder.clone(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: true,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            );
+            input.set_line_height(Some(px(20.0)), cx);
+            input
+        });
+        history_search_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_placeholder(initial_history_search_placeholder.clone(), cx);
+            input.set_text(initial_history_search_text.clone(), cx);
+        });
+        let history_search_subscription = cx.observe(&history_search_input, |this, input, cx| {
+            let (enter_pressed, backspace_pressed, delete_pressed, next) =
+                input.update(cx, |input, _| {
+                    (
+                        input.take_enter_pressed(),
+                        input.take_backspace_pressed(),
+                        input.take_delete_pressed(),
+                        SharedString::from(input.text().to_string()),
+                    )
+                });
+
+            if enter_pressed {
+                if !this.history_search_picker_is_active() {
+                    this.dispatch_history_search_query_immediately(cx);
+                }
+                return;
+            }
+
+            this.handle_history_search_input_change(next, backspace_pressed, delete_pressed, cx);
         });
 
         let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
@@ -724,6 +937,15 @@ impl HistoryView {
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
+            history_search_input,
+            _history_search_subscription: history_search_subscription,
+            history_search_explicit_open: false,
+            history_search_state: initial_history_search_state,
+            history_search_bound_repo_id: None,
+            history_search_helper_scroll: ScrollHandle::default(),
+            history_search_helper_selected_ix: None,
+            history_search_dispatch_seq: 0,
+            history_search_dispatch_pending: false,
             history_panel_focus_handle,
         }
     }
@@ -735,6 +957,459 @@ impl HistoryView {
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in super::super) fn history_query(&self) -> Option<&HistoryQuery> {
+        self.active_repo()?.history_state.history_query.as_ref()
+    }
+
+    pub(in super::super) fn history_has_active_query(&self) -> bool {
+        self.history_query().is_some()
+    }
+
+    pub(in super::super) fn history_search_is_visible(&self) -> bool {
+        self.active_repo().is_some()
+            && (self.history_search_explicit_open || self.history_has_active_query())
+    }
+
+    fn history_search_input_text(&self) -> SharedString {
+        history_search_input_text_for_state(&self.history_search_state)
+    }
+
+    fn history_search_selected_field(&self) -> Option<HistoryQueryField> {
+        match &self.history_search_state {
+            HistorySearchUiState::Tagged { field, .. } => Some(field),
+            HistorySearchUiState::PickingField { .. } => None,
+        }
+        .copied()
+    }
+
+    fn history_search_picker_is_active(&self) -> bool {
+        matches!(
+            &self.history_search_state,
+            HistorySearchUiState::PickingField { .. }
+        )
+    }
+
+    fn history_search_picker_filter_text(&self) -> Option<String> {
+        match &self.history_search_state {
+            HistorySearchUiState::PickingField { filter_text, .. } => {
+                Some(filter_text.as_ref().trim().to_ascii_lowercase())
+            }
+            HistorySearchUiState::Tagged { .. } => None,
+        }
+    }
+
+    fn history_search_operator_matches(
+        option: HistorySearchOperatorOption,
+        helper_query: &str,
+    ) -> bool {
+        helper_query.is_empty()
+            || option.label.to_ascii_lowercase().contains(helper_query)
+            || option
+                .description
+                .to_ascii_lowercase()
+                .contains(helper_query)
+    }
+
+    fn history_search_operator_options(&self) -> Vec<HistorySearchOperatorOption> {
+        let helper_query = self.history_search_picker_filter_text().unwrap_or_default();
+        HISTORY_SEARCH_OPERATORS
+            .iter()
+            .copied()
+            .filter(|option| Self::history_search_operator_matches(*option, &helper_query))
+            .collect()
+    }
+
+    fn selected_history_search_helper_field(&self) -> Option<HistoryQueryField> {
+        let options = self.history_search_operator_options();
+        history_search_helper_selected_ix(self.history_search_helper_selected_ix, options.len())
+            .and_then(|selected_ix| options.get(selected_ix))
+            .map(|option| option.field)
+    }
+
+    fn reset_history_search_helper_selection(&mut self) {
+        if !self.history_search_picker_is_active() {
+            self.history_search_helper_selected_ix = None;
+            self.history_search_helper_scroll
+                .set_offset(point(px(0.0), px(0.0)));
+            return;
+        }
+
+        let option_count = self.history_search_operator_options().len();
+        self.history_search_helper_selected_ix =
+            history_search_helper_selected_ix(None, option_count);
+        self.history_search_helper_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+    }
+
+    fn move_history_search_helper_selection(
+        &mut self,
+        direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let option_count = self.history_search_operator_options().len();
+        self.history_search_helper_selected_ix = history_search_helper_next_selected_ix(
+            self.history_search_helper_selected_ix,
+            option_count,
+            direction,
+        );
+        cx.notify();
+    }
+
+    fn set_history_search_helper_selection_edge(
+        &mut self,
+        last: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let option_count = self.history_search_operator_options().len();
+        self.history_search_helper_selected_ix = if option_count == 0 {
+            None
+        } else if last {
+            Some(option_count - 1)
+        } else {
+            Some(0)
+        };
+        cx.notify();
+    }
+
+    fn sync_history_search_input_from_state(&mut self, cx: &mut gpui::Context<Self>) {
+        let next_text = self.history_search_input_text();
+        let placeholder = history_search_input_placeholder_for_state(&self.history_search_state);
+        self.history_search_input.update(cx, |input, cx| {
+            input.set_theme(self.theme, cx);
+            input.set_placeholder(placeholder.clone(), cx);
+            input.set_text(next_text.clone(), cx);
+        });
+        self.update_history_search_input_highlights(cx);
+    }
+
+    fn set_history_search_picker_state(
+        &mut self,
+        filter_text: impl Into<SharedString>,
+        pending_value: impl Into<SharedString>,
+        preselect_field: Option<HistoryQueryField>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_search_state = HistorySearchUiState::PickingField {
+            filter_text: filter_text.into(),
+            pending_value: pending_value.into(),
+        };
+        if let Some(field) = preselect_field {
+            let options = self.history_search_operator_options();
+            self.history_search_helper_selected_ix = options
+                .iter()
+                .position(|option| option.field == field)
+                .or_else(|| history_search_helper_selected_ix(None, options.len()));
+            self.history_search_helper_scroll
+                .set_offset(point(px(0.0), px(0.0)));
+        } else {
+            self.reset_history_search_helper_selection();
+        }
+        self.sync_history_search_input_from_state(cx);
+    }
+
+    fn set_history_search_tagged_state(
+        &mut self,
+        field: HistoryQueryField,
+        value: impl Into<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_search_state = HistorySearchUiState::Tagged {
+            field,
+            value: value.into(),
+        };
+        self.history_search_helper_selected_ix = None;
+        self.history_search_helper_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        self.sync_history_search_input_from_state(cx);
+    }
+
+    fn reopen_history_search_picker(
+        &mut self,
+        pending_value: SharedString,
+        preselect_field: Option<HistoryQueryField>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.invalidate_history_search_query_dispatch();
+        self.set_history_search_picker_state("", pending_value, preselect_field, cx);
+        self.dispatch_history_search_query_from_input(cx);
+    }
+
+    fn handle_history_search_input_change(
+        &mut self,
+        next_text: SharedString,
+        backspace_pressed: bool,
+        delete_pressed: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match self.history_search_state.clone() {
+            HistorySearchUiState::PickingField {
+                filter_text,
+                pending_value,
+            } => {
+                if filter_text != next_text {
+                    self.set_history_search_picker_state(next_text, pending_value, None, cx);
+                    cx.notify();
+                }
+            }
+            HistorySearchUiState::Tagged { field, value } => {
+                if next_text.as_ref().is_empty() {
+                    if value.as_ref().is_empty() {
+                        if backspace_pressed || delete_pressed {
+                            self.reopen_history_search_picker(
+                                SharedString::default(),
+                                Some(field),
+                                cx,
+                            );
+                            cx.notify();
+                        }
+                    } else {
+                        self.reopen_history_search_picker(SharedString::default(), Some(field), cx);
+                        cx.notify();
+                    }
+                    return;
+                }
+
+                if value != next_text {
+                    self.history_search_state = HistorySearchUiState::Tagged {
+                        field,
+                        value: next_text,
+                    };
+                    self.schedule_history_search_query_dispatch(cx);
+                    self.update_history_search_input_highlights(cx);
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    fn sync_history_search_repo_binding(&mut self, cx: &mut gpui::Context<Self>) {
+        let next_repo_id = self.active_repo_id();
+        if self.history_search_bound_repo_id == next_repo_id {
+            if self.history_has_active_query() {
+                self.history_search_explicit_open = true;
+            }
+            return;
+        }
+
+        self.history_search_bound_repo_id = next_repo_id;
+        self.invalidate_history_search_query_dispatch();
+        match history_search_repo_query_binding(self.history_query()) {
+            HistorySearchRepoQueryBinding::Empty => {
+                self.history_search_explicit_open = false;
+                self.set_history_search_tagged_state(HISTORY_SEARCH_DEFAULT_FIELD, "", cx);
+            }
+            HistorySearchRepoQueryBinding::Compatible { field, value } => {
+                self.history_search_explicit_open = true;
+                self.set_history_search_tagged_state(field, value, cx);
+            }
+            HistorySearchRepoQueryBinding::Incompatible => {
+                self.history_search_explicit_open = true;
+                self.set_history_search_tagged_state(HISTORY_SEARCH_DEFAULT_FIELD, "", cx);
+                self.dispatch_history_search_query_immediately(cx);
+            }
+        }
+    }
+
+    fn history_search_dispatch_delay(&self) -> Duration {
+        Duration::from_millis(HISTORY_SEARCH_INPUT_DEBOUNCE_MS)
+    }
+
+    fn invalidate_history_search_query_dispatch(&mut self) {
+        self.history_search_dispatch_seq = self.history_search_dispatch_seq.wrapping_add(1);
+        self.history_search_dispatch_pending = false;
+    }
+
+    fn schedule_history_search_query_dispatch(&mut self, cx: &mut gpui::Context<Self>) {
+        self.history_search_dispatch_seq = self.history_search_dispatch_seq.wrapping_add(1);
+        self.history_search_dispatch_pending = true;
+        let seq = self.history_search_dispatch_seq;
+        let delay = self.history_search_dispatch_delay();
+
+        cx.spawn(
+            async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {
+                gpui::Timer::after(delay).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.history_search_dispatch_seq != seq {
+                        return;
+                    }
+
+                    this.history_search_dispatch_pending = false;
+                    this.dispatch_history_search_query_from_input(cx);
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
+    }
+
+    fn dispatch_history_search_query_immediately(&mut self, cx: &mut gpui::Context<Self>) {
+        self.invalidate_history_search_query_dispatch();
+        self.dispatch_history_search_query_from_input(cx);
+    }
+
+    fn dispatch_history_search_query_from_input(&mut self, _cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+
+        let query = match &self.history_search_state {
+            HistorySearchUiState::PickingField { .. } => None,
+            HistorySearchUiState::Tagged { field, value } => {
+                let value = value.as_ref().trim();
+                (!value.is_empty())
+                    .then(|| HistoryQuery::new(vec![HistoryQueryTerm::field(*field, value)]))
+            }
+        };
+        self.store.dispatch(Msg::SetHistoryQuery { repo_id, query });
+    }
+
+    fn update_history_search_input_highlights(&mut self, cx: &mut gpui::Context<Self>) {
+        let input_text = self.history_search_input_text();
+        let highlights = history_search_input_highlights(self.theme, input_text.as_ref());
+        self.history_search_input.update(cx, |input, cx| {
+            input.set_theme(self.theme, cx);
+            input.set_highlights(highlights, cx);
+        });
+    }
+
+    fn apply_history_search_operator(
+        &mut self,
+        field: HistoryQueryField,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_search_explicit_open = true;
+        let pending_value = match &self.history_search_state {
+            HistorySearchUiState::PickingField { pending_value, .. } => pending_value.clone(),
+            HistorySearchUiState::Tagged { value, .. } => value.clone(),
+        };
+        self.set_history_search_tagged_state(field, pending_value, cx);
+        self.dispatch_history_search_query_immediately(cx);
+    }
+
+    fn begin_history_search_retagging(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(field) = self.history_search_selected_field() else {
+            return;
+        };
+        let pending_value = match &self.history_search_state {
+            HistorySearchUiState::Tagged { value, .. } => value.clone(),
+            HistorySearchUiState::PickingField { pending_value, .. } => pending_value.clone(),
+        };
+        self.reopen_history_search_picker(pending_value, Some(field), cx);
+    }
+
+    pub(in super::super) fn activate_history_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_repo_id().is_none() {
+            return;
+        }
+
+        self.sync_history_search_repo_binding(cx);
+        self.history_search_explicit_open = true;
+        self.sync_history_search_input_from_state(cx);
+        let focus = self.history_search_input.read(cx).focus_handle();
+        window.focus(&focus);
+        cx.notify();
+    }
+
+    pub(in super::super) fn deactivate_history_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.history_search_is_visible() {
+            return;
+        }
+
+        self.invalidate_history_search_query_dispatch();
+        self.history_search_explicit_open = false;
+        self.set_history_search_tagged_state(HISTORY_SEARCH_DEFAULT_FIELD, "", cx);
+        self.dispatch_history_search_query_from_input(cx);
+        window.focus(&self.history_panel_focus_handle);
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn set_history_search_text_for_test(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_search_explicit_open = true;
+        match self.history_search_state.clone() {
+            HistorySearchUiState::PickingField { pending_value, .. } => {
+                self.set_history_search_picker_state(text.to_string(), pending_value, None, cx);
+                self.invalidate_history_search_query_dispatch();
+                self.dispatch_history_search_query_from_input(cx);
+            }
+            HistorySearchUiState::Tagged { field, value } => {
+                let next_text: SharedString = text.to_string().into();
+                if next_text.as_ref().is_empty() && !value.as_ref().is_empty() {
+                    self.reopen_history_search_picker(SharedString::default(), Some(field), cx);
+                } else {
+                    self.set_history_search_tagged_state(field, next_text.clone(), cx);
+                    if next_text.as_ref().trim().is_empty() {
+                        self.invalidate_history_search_query_dispatch();
+                        self.dispatch_history_search_query_from_input(cx);
+                    } else {
+                        self.schedule_history_search_query_dispatch(cx);
+                    }
+                }
+            }
+        }
+        let focus = self.history_search_input.read(cx).focus_handle();
+        window.focus(&focus);
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn history_search_selected_field_for_test(
+        &self,
+    ) -> Option<HistoryQueryField> {
+        self.history_search_selected_field()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn history_search_picker_active_for_test(&self) -> bool {
+        matches!(
+            &self.history_search_state,
+            HistorySearchUiState::PickingField { .. }
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn reopen_history_search_picker_for_test(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.begin_history_search_retagging(cx);
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn delete_history_search_to_empty_for_test(
+        &mut self,
+        backspace: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.handle_history_search_input_change(SharedString::default(), backspace, !backspace, cx);
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn flush_history_search_query_for_test(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.dispatch_history_search_query_immediately(cx);
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn history_search_dispatch_pending_for_test(&self) -> bool {
+        self.history_search_dispatch_pending
     }
 
     pub(in super::super) fn history_visible_column_preferences(&self) -> (bool, bool, bool) {
@@ -793,6 +1468,10 @@ impl HistoryView {
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        self.history_search_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+        });
+        self.update_history_search_input_highlights(cx);
         cx.notify();
     }
 
@@ -1780,5 +2459,49 @@ mod tests {
         );
 
         assert_eq!(list_ix, Some(5));
+    }
+
+    #[test]
+    fn history_search_default_state_uses_message_field() {
+        assert_eq!(
+            HistorySearchUiState::default(),
+            HistorySearchUiState::Tagged {
+                field: HISTORY_SEARCH_DEFAULT_FIELD,
+                value: SharedString::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn history_search_input_highlights_are_empty_for_value_text() {
+        let theme = AppTheme::gitcomet_dark();
+        let highlights = history_search_input_highlights(theme, "alice");
+        assert!(highlights.is_empty());
+    }
+
+    #[test]
+    fn history_search_helper_selected_ix_defaults_and_clamps() {
+        assert_eq!(history_search_helper_selected_ix(None, 0), None);
+        assert_eq!(history_search_helper_selected_ix(None, 3), Some(0));
+        assert_eq!(history_search_helper_selected_ix(Some(1), 3), Some(1));
+        assert_eq!(history_search_helper_selected_ix(Some(9), 3), Some(2));
+    }
+
+    #[test]
+    fn history_search_helper_next_selected_ix_stays_within_bounds() {
+        assert_eq!(history_search_helper_next_selected_ix(None, 0, 1), None);
+        assert_eq!(history_search_helper_next_selected_ix(None, 4, 1), Some(1));
+        assert_eq!(
+            history_search_helper_next_selected_ix(Some(0), 4, -1),
+            Some(0)
+        );
+        assert_eq!(
+            history_search_helper_next_selected_ix(Some(2), 4, 1),
+            Some(3)
+        );
+        assert_eq!(
+            history_search_helper_next_selected_ix(Some(3), 4, 1),
+            Some(3)
+        );
     }
 }

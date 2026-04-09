@@ -83,6 +83,31 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             )),
         )
         .child(separator())
+        .child(section_label("app_menu_search_section", "Search"))
+        .child(
+            entry(
+                "app_menu_search",
+                "Search…".into(),
+                active_repo_id.is_none(),
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+                if this.active_repo().is_none() {
+                    return;
+                }
+
+                let root_view = this.root_view.clone();
+                let window_handle = window.window_handle();
+                this.close_popover(cx);
+                cx.defer(move |cx| {
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = root_view.update(cx, |root, cx| {
+                            root.activate_contextual_search(window, cx);
+                        });
+                    });
+                });
+            })),
+        )
+        .child(separator())
         .child(section_label("app_menu_patches_section", "Patches"))
         .child(
             entry(

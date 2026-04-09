@@ -485,6 +485,7 @@ pub(super) fn append_refresh_primary_effects(
 ) {
     let repo_id = repo_state.id;
     let scope = repo_state.history_state.history_scope;
+    let query = repo_state.history_state.history_query.clone();
 
     if repo_state.loads_in_flight.request_primary_refresh_batch() {
         repo_state.set_log_loading_more(false);
@@ -497,6 +498,7 @@ pub(super) fn append_refresh_primary_effects(
             scope,
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
+            query,
         });
         return;
     }
@@ -522,7 +524,7 @@ pub(super) fn append_refresh_primary_effects(
     }
     if repo_state
         .loads_in_flight
-        .request_log(scope, DEFAULT_LOG_PAGE_SIZE, None)
+        .request_log(scope, DEFAULT_LOG_PAGE_SIZE, None, query.clone())
     {
         // Block pagination while a refresh log load is in flight, to avoid concurrent LogLoaded
         // merges with different cursors.
@@ -532,6 +534,7 @@ pub(super) fn append_refresh_primary_effects(
             scope,
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
+            query,
         });
     }
 }
@@ -576,6 +579,7 @@ pub(super) fn append_refresh_full_effects(
         repo_state.history_state.history_scope,
         DEFAULT_LOG_PAGE_SIZE,
         None,
+        repo_state.history_state.history_query.clone(),
     ) {
         repo_state.set_log_loading_more(false);
         effects.push_effect(Effect::LoadLog {
@@ -583,6 +587,7 @@ pub(super) fn append_refresh_full_effects(
             scope: repo_state.history_state.history_scope,
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
+            query: repo_state.history_state.history_query.clone(),
         });
     }
     if repo_state

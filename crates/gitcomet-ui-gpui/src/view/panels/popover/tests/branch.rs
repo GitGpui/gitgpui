@@ -45,6 +45,7 @@ impl GitRepository for TrackingRepo {
         &self,
         _limit: usize,
         _cursor: Option<&gitcomet_core::domain::LogCursor>,
+        _query: Option<&gitcomet_core::history_query::HistoryQuery>,
     ) -> Result<LogPage> {
         Ok(LogPage {
             commits: Vec::new(),

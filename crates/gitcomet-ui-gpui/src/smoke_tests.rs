@@ -1065,7 +1065,12 @@ impl GitRepository for SlowStashRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+        _query: Option<&gitcomet_core::history_query::HistoryQuery>,
+    ) -> Result<LogPage> {
         Self::unsupported()
     }
 

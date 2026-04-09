@@ -1,6 +1,7 @@
 use crate::conflict_session::ConflictSession;
 use crate::domain::*;
 use crate::error::{Error, ErrorKind};
+use crate::history_query::HistoryQuery;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -125,8 +126,18 @@ pub struct BlameLine {
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
-    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
-    fn log_all_branches_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        query: Option<&HistoryQuery>,
+    ) -> Result<LogPage>;
+    fn log_all_branches_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+        _query: Option<&HistoryQuery>,
+    ) -> Result<LogPage> {
         Err(Error::new(ErrorKind::Unsupported(
             "all-branches history is not implemented for this backend",
         )))
@@ -136,6 +147,7 @@ pub trait GitRepository: Send + Sync {
         _path: &Path,
         _limit: usize,
         _cursor: Option<&LogCursor>,
+        _query: Option<&HistoryQuery>,
     ) -> Result<LogPage> {
         Err(Error::new(ErrorKind::Unsupported(
             "file history is not implemented for this backend",

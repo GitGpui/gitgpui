@@ -5,6 +5,7 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::*;
+use gitcomet_core::history_query::HistoryQuery;
 use gitcomet_core::services::BlameLine;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -25,6 +26,7 @@ pub struct PendingLogLoad {
     pub scope: LogScope,
     pub limit: usize,
     pub cursor: Option<LogCursor>,
+    pub query: Option<HistoryQuery>,
 }
 
 impl RepoLoadsInFlight {
@@ -98,16 +100,18 @@ impl RepoLoadsInFlight {
         scope: LogScope,
         limit: usize,
         cursor: Option<LogCursor>,
+        query: Option<HistoryQuery>,
     ) -> bool {
         if self.is_in_flight(Self::LOG) {
             let next = PendingLogLoad {
                 scope,
                 limit,
                 cursor,
+                query,
             };
             match &self.pending_log {
                 // Scope changes invalidate older pending requests (including pagination).
-                Some(existing) if existing.scope != next.scope => {
+                Some(existing) if existing.scope != next.scope || existing.query != next.query => {
                     self.pending_log = Some(next);
                 }
                 // Don't let a refresh request (cursor=None) clobber a pending pagination request
@@ -325,6 +329,7 @@ pub struct PendingCommitRetry {
 #[derive(Clone, Debug)]
 pub struct HistoryState {
     pub history_scope: LogScope,
+    pub history_query: Option<HistoryQuery>,
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
@@ -344,6 +349,7 @@ impl Default for HistoryState {
     fn default() -> Self {
         Self {
             history_scope: LogScope::CurrentBranch,
+            history_query: None,
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -726,6 +732,14 @@ impl RepoState {
             return;
         }
         self.history_state.history_scope = scope;
+        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_history_query(&mut self, query: Option<HistoryQuery>) {
+        if self.history_state.history_query == query {
+            return;
+        }
+        self.history_state.history_query = query;
         self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
     }
 

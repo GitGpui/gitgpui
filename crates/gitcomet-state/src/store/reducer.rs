@@ -483,6 +483,9 @@ pub(super) fn reduce(
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
         }
+        Msg::SetHistoryQuery { repo_id, query } => {
+            external_and_history::set_history_query(state, repo_id, query)
+        }
         Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => {
             repo_management::set_fetch_prune_deleted_remote_tracking_branches(
                 state, repo_id, enabled,
@@ -957,8 +960,9 @@ pub(super) fn reduce(
             repo_id,
             scope,
             cursor,
+            query,
             result,
-        }) => external_and_history::log_loaded(state, repo_id, scope, cursor, result),
+        }) => external_and_history::log_loaded(state, repo_id, scope, cursor, query, result),
         Msg::Internal(crate::msg::InternalMsg::TagsLoaded { repo_id, result }) => {
             effects::tags_loaded(state, repo_id, result)
         }

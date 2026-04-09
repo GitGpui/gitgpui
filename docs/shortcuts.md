@@ -23,6 +23,7 @@ These shortcuts apply in the normal GitComet window.
 | Open Settings | `Cmd-,` | `Ctrl-,` | |
 | Open a repository | `Cmd-O` | `Ctrl-O` | |
 | Open recent repositories | `Cmd-Shift-O`, `Option-Cmd-O` | `Ctrl-Shift-O` | |
+| Search the active main pane | `Cmd-F` | `Ctrl-F` | Opens diff search when a diff is visible; otherwise opens the floating history search. |
 | Close the active repository tab, or close the window if no repo tab can close | `Cmd-W` | `Ctrl-W` | |
 | Close the active window | `Cmd-Shift-W` | `Ctrl-Shift-W` | |
 | Previous repository tab | `Cmd-PageUp`, `Cmd-{`, `Option-Cmd-Left` | `Ctrl-PageUp` | |
@@ -72,6 +73,24 @@ These shortcuts apply when a GitComet text input has focus.
 
 Compatibility note:
 - GitComet also keeps the opposite modifier family wired in text inputs where practical, so `Alt`-based word movement and `Ctrl`-based editing aliases remain available as portability fallbacks.
+
+## History view shortcuts
+
+These shortcuts apply when the history list is the visible main-pane content.
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Open history search | `Cmd-F` | `Ctrl-F` | Shows a floating search box below the history header. Type `?` to browse operators. |
+| Close history search | `Escape` | `Escape` | Clears the current history query and returns focus to the history panel. |
+| Move selection up / down | Arrow keys | Arrow keys | History list navigation. |
+
+History search operators:
+- `message:` searches commit messages.
+- `author:` searches author name or email.
+- `ref:` searches branch and tag names.
+- `sha:` searches full or short commit SHAs.
+- `file:` searches changed file paths across repository history.
+- `content:` searches diff / patch text across repository history.
 
 ## Diff view shortcuts
 

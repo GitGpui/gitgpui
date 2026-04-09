@@ -9,11 +9,12 @@ use gitcomet_core::domain::{
     ReflogEntry, StashEntry,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
+use gitcomet_core::history_query::{HistoryQuery, HistoryQueryField, HistoryQueryTerm};
 use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
 use gix::objs::FindExt as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -59,6 +60,69 @@ impl<'a> CursorGate<'a> {
 
         true
     }
+}
+
+#[derive(Clone, Copy)]
+struct AsciiCaseInsensitiveNeedle<'a> {
+    bytes: &'a [u8],
+    first_lower: u8,
+    first_upper: u8,
+    last_lower: u8,
+    last_upper: u8,
+}
+
+impl<'a> AsciiCaseInsensitiveNeedle<'a> {
+    fn new(needle: &'a str) -> Option<Self> {
+        let bytes = needle.as_bytes();
+        let (&first, &last) = bytes.first().zip(bytes.last())?;
+        Some(Self {
+            bytes,
+            first_lower: first.to_ascii_lowercase(),
+            first_upper: first.to_ascii_uppercase(),
+            last_lower: last.to_ascii_lowercase(),
+            last_upper: last.to_ascii_uppercase(),
+        })
+    }
+
+    fn is_match(self, haystack: &str) -> bool {
+        let haystack_bytes = haystack.as_bytes();
+        let needle_len = self.bytes.len();
+        let Some(last_start) = haystack_bytes.len().checked_sub(needle_len) else {
+            return false;
+        };
+
+        'outer: for start in 0..=last_start {
+            let first = haystack_bytes[start];
+            if first != self.first_lower && first != self.first_upper {
+                continue;
+            }
+
+            if needle_len == 1 {
+                return true;
+            }
+
+            let last = haystack_bytes[start + needle_len - 1];
+            if last != self.last_lower && last != self.last_upper {
+                continue;
+            }
+
+            for (offset, needle_byte) in self.bytes[1..needle_len - 1].iter().copied().enumerate() {
+                if !haystack_bytes[start + offset + 1].eq_ignore_ascii_case(&needle_byte) {
+                    continue 'outer;
+                }
+            }
+
+            return true;
+        }
+
+        false
+    }
+}
+
+struct LoadedHistoryCommit {
+    row: Commit,
+    message: String,
+    author_search_text: String,
 }
 
 fn reflog_lines_rev(
@@ -153,10 +217,10 @@ fn reference_commit_id(mut reference: gix::Reference<'_>) -> Result<Option<gix::
     }
 }
 
-fn commit_from_walk_info(
+fn load_history_commit_from_walk_info(
     info: &gix::revision::walk::Info<'_>,
     decode_state: &mut CommitDecodeState,
-) -> Result<Commit> {
+) -> Result<LoadedHistoryCommit> {
     let id = info.id();
     let commit = id
         .repo
@@ -167,15 +231,28 @@ fn commit_from_walk_info(
     let summary_bytes = commit.message.lines().next().unwrap_or_default();
     let summary = bstr_to_arc_str(summary_bytes);
 
-    let author = match commit.author() {
-        Ok(s) => decode_state.author_cache.intern(s.name.as_ref()),
-        Err(_) => Arc::from("unknown"),
+    let (author, author_search_text) = match commit.author() {
+        Ok(signature) => {
+            let author = decode_state.author_cache.intern(signature.name.as_ref());
+            let email = bytes_to_text_preserving_utf8(signature.email.as_ref());
+            let author_search_text = if email.is_empty() {
+                author.to_string()
+            } else {
+                format!("{author} <{email}>")
+            };
+            (author, author_search_text)
+        }
+        Err(_) => (Arc::from("unknown"), "unknown".to_string()),
     };
 
     let seconds = info
         .commit_time
         .unwrap_or_else(|| commit.committer().map(|t| t.seconds()).unwrap_or(0));
     let time = unix_seconds_to_system_time_or_epoch(seconds);
+
+    let message = bytes_to_text_preserving_utf8(commit.message.as_ref())
+        .trim_end()
+        .to_string();
 
     let commit_id = decode_state
         .next_commit_id_cache
@@ -196,13 +273,24 @@ fn commit_from_walk_info(
         parent_ids.push(parent_commit_id);
     }
 
-    Ok(Commit {
-        id: commit_id,
-        parent_ids,
-        summary,
-        author,
-        time,
+    Ok(LoadedHistoryCommit {
+        row: Commit {
+            id: commit_id,
+            parent_ids,
+            summary,
+            author,
+            time,
+        },
+        message,
+        author_search_text,
     })
+}
+
+fn commit_from_walk_info(
+    info: &gix::revision::walk::Info<'_>,
+    decode_state: &mut CommitDecodeState,
+) -> Result<Commit> {
+    load_history_commit_from_walk_info(info, decode_state).map(|loaded| loaded.row)
 }
 
 #[derive(Default)]
@@ -353,6 +441,69 @@ fn empty_log_page() -> LogPage {
     }
 }
 
+fn history_query_needs_refs(query: &HistoryQuery) -> bool {
+    query.has_plain_terms() || query.uses_field(HistoryQueryField::Ref)
+}
+
+fn history_ref_label(full_name: &str) -> String {
+    full_name
+        .strip_prefix("refs/heads/")
+        .or_else(|| full_name.strip_prefix("refs/remotes/"))
+        .or_else(|| full_name.strip_prefix("refs/tags/"))
+        .or_else(|| full_name.strip_prefix("refs/"))
+        .unwrap_or(full_name)
+        .to_string()
+}
+
+fn history_refs_text_by_target(repo: &gix::Repository) -> Result<HashMap<gix::ObjectId, Arc<str>>> {
+    let mut names_by_target: HashMap<gix::ObjectId, Vec<String>> = HashMap::default();
+
+    if let Some(head_id) = gix_head_id_or_none(repo)?
+        && let Some(head_name) = repo.head_name().ok().flatten()
+    {
+        let head_name = head_name.as_bstr().to_str_lossy();
+        let labels = names_by_target.entry(head_id).or_default();
+        labels.push("HEAD".to_string());
+        let short = history_ref_label(head_name.as_ref());
+        if short != "HEAD" {
+            labels.push(short);
+        }
+    }
+
+    let refs = repo
+        .references()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+    let iter = refs
+        .all()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references(all): {e}"))))?;
+    for reference in iter {
+        let reference =
+            reference.map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+        let full_name = reference.name().as_bstr().to_str_lossy().into_owned();
+        if !full_name.starts_with("refs/") {
+            continue;
+        }
+        let Some(target) = reference_commit_id(reference)? else {
+            continue;
+        };
+        names_by_target
+            .entry(target)
+            .or_default()
+            .push(history_ref_label(&full_name));
+    }
+
+    let mut refs_text_by_target = HashMap::default();
+    for (target, mut labels) in names_by_target {
+        labels.sort();
+        labels.dedup();
+        if labels.is_empty() {
+            continue;
+        }
+        refs_text_by_target.insert(target, Arc::from(labels.join(" ")));
+    }
+    Ok(refs_text_by_target)
+}
+
 fn object_id_from_commit_id(id: &CommitId) -> Option<gix::ObjectId> {
     gix::ObjectId::from_hex(id.as_ref().as_bytes()).ok()
 }
@@ -462,7 +613,157 @@ where
     })
 }
 
+fn log_page_from_filtered_walk<'repo, E>(
+    repo: &GixRepo,
+    walk: impl Iterator<Item = std::result::Result<gix::revision::walk::Info<'repo>, E>>,
+    limit: usize,
+    cursor: Option<&LogCursor>,
+    query: &HistoryQuery,
+    refs_text_by_target: Option<&HashMap<gix::ObjectId, Arc<str>>>,
+) -> Result<LogPage>
+where
+    E: std::fmt::Display,
+{
+    let mut decode_state = CommitDecodeState::default();
+    let mut cursor_gate = CursorGate::new(cursor);
+    let mut commits: Vec<Commit> = Vec::with_capacity(limit);
+    let mut next_cursor = None;
+
+    for result in walk {
+        let info = result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
+        if cursor_gate.should_skip_oid(info.id().as_ref()) {
+            continue;
+        }
+
+        let loaded = load_history_commit_from_walk_info(&info, &mut decode_state)?;
+        let refs_text = refs_text_by_target
+            .and_then(|refs| refs.get(&info.id().detach()))
+            .map(|text| text.as_ref());
+        if !repo.history_query_matches_loaded_commit(query, &loaded, refs_text)? {
+            continue;
+        }
+
+        if commits.len() >= limit {
+            next_cursor = commits.last().map(|commit| LogCursor {
+                last_seen: commit.id.clone(),
+                resume_from: None,
+            });
+            break;
+        }
+
+        commits.push(loaded.row);
+    }
+
+    Ok(LogPage {
+        commits,
+        next_cursor,
+    })
+}
+
 impl GixRepo {
+    fn history_query_matches_loaded_commit(
+        &self,
+        query: &HistoryQuery,
+        commit: &LoadedHistoryCommit,
+        refs_text: Option<&str>,
+    ) -> Result<bool> {
+        if query.is_empty() {
+            return Ok(true);
+        }
+
+        let mut plain_text: Option<String> = None;
+        let mut file_paths_text: Option<String> = None;
+        let mut patch_text: Option<String> = None;
+
+        for term in query.terms() {
+            let needle = match AsciiCaseInsensitiveNeedle::new(term.value()) {
+                Some(needle) => needle,
+                None => continue,
+            };
+
+            let matched = match term {
+                HistoryQueryTerm::Plain(_) => {
+                    let text = plain_text.get_or_insert_with(|| {
+                        let mut text = String::with_capacity(
+                            commit.message.len()
+                                + commit.author_search_text.len()
+                                + refs_text.map_or(0, str::len)
+                                + 4,
+                        );
+                        text.push_str(&commit.message);
+                        text.push('\n');
+                        text.push_str(&commit.author_search_text);
+                        if let Some(refs_text) = refs_text
+                            && !refs_text.is_empty()
+                        {
+                            text.push('\n');
+                            text.push_str(refs_text);
+                        }
+                        text
+                    });
+                    needle.is_match(text)
+                }
+                HistoryQueryTerm::Field { field, .. } => match field {
+                    HistoryQueryField::Message => needle.is_match(&commit.message),
+                    HistoryQueryField::Author => needle.is_match(&commit.author_search_text),
+                    HistoryQueryField::Ref => refs_text.is_some_and(|text| needle.is_match(text)),
+                    HistoryQueryField::Sha => needle.is_match(commit.row.id.as_ref()),
+                    HistoryQueryField::File => {
+                        let text = if let Some(text) = file_paths_text.as_ref() {
+                            text
+                        } else {
+                            file_paths_text =
+                                Some(self.commit_changed_paths_text(commit.row.id.as_ref())?);
+                            file_paths_text.as_ref().expect("file paths text")
+                        };
+                        needle.is_match(text)
+                    }
+                    HistoryQueryField::Content => {
+                        let text = if let Some(text) = patch_text.as_ref() {
+                            text
+                        } else {
+                            patch_text = Some(self.commit_patch_text(commit.row.id.as_ref())?);
+                            patch_text.as_ref().expect("patch text")
+                        };
+                        needle.is_match(text)
+                    }
+                },
+            };
+
+            if !matched {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    fn commit_changed_paths_text(&self, commit_id: &str) -> Result<String> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c")
+            .arg("color.ui=false")
+            .arg("--no-pager")
+            .arg("show")
+            .arg("--format=")
+            .arg("--name-status")
+            .arg("--find-renames=50%")
+            .arg(commit_id);
+        run_git_capture(cmd, "git show --name-status")
+    }
+
+    fn commit_patch_text(&self, commit_id: &str) -> Result<String> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c")
+            .arg("color.ui=false")
+            .arg("--no-pager")
+            .arg("show")
+            .arg("--format=")
+            .arg("--no-ext-diff")
+            .arg("--find-renames=50%")
+            .arg(commit_id);
+        run_git_capture(cmd, "git show")
+    }
+
     fn log_head_page_cache_key(
         head_oid: Option<gix::ObjectId>,
         limit: usize,
@@ -524,12 +825,68 @@ impl GixRepo {
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
+        query: Option<&HistoryQuery>,
     ) -> Result<LogPage> {
         if limit == 0 {
             return Ok(empty_log_page());
         }
 
         let repo = self._repo.to_thread_local();
+        if let Some(query) = query.filter(|query| !query.is_empty()) {
+            let refs_text_by_target = if history_query_needs_refs(query) {
+                Some(history_refs_text_by_target(&repo)?)
+            } else {
+                None
+            };
+
+            let page = if let Some(resume_tip) = cursor
+                .and_then(|cursor| cursor.resume_from.as_ref())
+                .and_then(object_id_from_commit_id)
+            {
+                let walk = repo
+                    .rev_walk([resume_tip])
+                    .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                        CommitTimeOrder::NewestFirst,
+                    ))
+                    .first_parent_only()
+                    .all()
+                    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
+                let mut page = log_page_from_filtered_walk(
+                    self,
+                    walk,
+                    limit,
+                    None,
+                    query,
+                    refs_text_by_target.as_ref(),
+                )?;
+                apply_first_parent_resume_hint(&mut page);
+                page
+            } else if let Some(head_id) = gix_head_id_or_none(&repo)? {
+                let walk = repo
+                    .rev_walk([head_id])
+                    .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                        CommitTimeOrder::NewestFirst,
+                    ))
+                    .first_parent_only()
+                    .all()
+                    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
+                let mut page = log_page_from_filtered_walk(
+                    self,
+                    walk,
+                    limit,
+                    cursor,
+                    query,
+                    refs_text_by_target.as_ref(),
+                )?;
+                apply_first_parent_resume_hint(&mut page);
+                page
+            } else {
+                empty_log_page()
+            };
+
+            return Ok(page);
+        }
+
         let head_id = gix_head_id_or_none(&repo)?;
         let cache_key = Self::log_head_page_cache_key(head_id, limit, cursor);
         if let Some(page) = self.cached_log_head_page(&cache_key) {
@@ -575,6 +932,7 @@ impl GixRepo {
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
+        query: Option<&HistoryQuery>,
     ) -> Result<LogPage> {
         if limit == 0 {
             return Ok(empty_log_page());
@@ -637,7 +995,23 @@ impl GixRepo {
             ))
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-        log_page_from_walk(walk, limit, cursor)
+        if let Some(query) = query.filter(|query| !query.is_empty()) {
+            let refs_text_by_target = if history_query_needs_refs(query) {
+                Some(history_refs_text_by_target(&repo)?)
+            } else {
+                None
+            };
+            log_page_from_filtered_walk(
+                self,
+                walk,
+                limit,
+                cursor,
+                query,
+                refs_text_by_target.as_ref(),
+            )
+        } else {
+            log_page_from_walk(walk, limit, cursor)
+        }
     }
 
     pub(super) fn log_file_page_impl(
@@ -645,6 +1019,7 @@ impl GixRepo {
         path: &Path,
         limit: usize,
         cursor: Option<&LogCursor>,
+        _query: Option<&HistoryQuery>,
     ) -> Result<LogPage> {
         if limit == 0 {
             return Ok(empty_log_page());

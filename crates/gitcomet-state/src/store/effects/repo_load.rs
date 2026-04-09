@@ -3,6 +3,7 @@ use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogScope};
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::history_query::HistoryQuery;
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
@@ -271,8 +272,10 @@ pub(super) fn schedule_load_log(
     scope: LogScope,
     limit: usize,
     cursor: Option<LogCursor>,
+    query: Option<HistoryQuery>,
 ) {
     let cursor_on_missing = cursor.clone();
+    let query_on_missing = query.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
@@ -281,9 +284,12 @@ pub(super) fn schedule_load_log(
         move |repo, msg_tx| {
             let result = {
                 let cursor_ref = cursor.as_ref();
+                let query_ref = query.as_ref();
                 match scope {
-                    LogScope::CurrentBranch => repo.log_head_page(limit, cursor_ref),
-                    LogScope::AllBranches => repo.log_all_branches_page(limit, cursor_ref),
+                    LogScope::CurrentBranch => repo.log_head_page(limit, cursor_ref, query_ref),
+                    LogScope::AllBranches => {
+                        repo.log_all_branches_page(limit, cursor_ref, query_ref)
+                    }
                 }
             };
             send_or_log(
@@ -292,6 +298,7 @@ pub(super) fn schedule_load_log(
                     repo_id,
                     scope,
                     cursor,
+                    query,
                     result,
                 }),
             );
@@ -303,6 +310,7 @@ pub(super) fn schedule_load_log(
                     repo_id,
                     scope,
                     cursor: cursor_on_missing,
+                    query: query_on_missing,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );
@@ -623,7 +631,7 @@ pub(super) fn schedule_load_file_history(
             Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
                 repo_id,
                 path: path.clone(),
-                result: repo.log_file_page(&path, limit, None),
+                result: repo.log_file_page(&path, limit, None, None),
             }),
         );
     });

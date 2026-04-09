@@ -1541,8 +1541,11 @@ impl HistoryView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let (show_working_tree_summary_row, worktree_counts) =
+        let (mut show_working_tree_summary_row, worktree_counts) =
             this.ensure_history_worktree_summary_cache();
+        if this.history_has_active_query() {
+            show_working_tree_summary_row = false;
+        }
         let stash_ids = this.ensure_history_stash_ids_cache();
 
         let Some(repo) = this.active_repo() else {

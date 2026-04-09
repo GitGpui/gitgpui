@@ -8,6 +8,7 @@ use crate::msg::{Effect, RepoExternalChange};
 use crate::session;
 use gitcomet_core::domain::{DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
+use gitcomet_core::history_query::HistoryQuery;
 use std::sync::Arc;
 
 const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
@@ -49,6 +50,10 @@ fn reserve_initial_paginated_log_append_slack<T>(commits: &mut Vec<T>) {
     }
 
     commits.reserve_exact(desired_spare - spare);
+}
+
+fn normalize_history_query(query: Option<HistoryQuery>) -> Option<HistoryQuery> {
+    query.filter(|query| !query.is_empty())
 }
 
 pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -> Vec<Effect> {
@@ -173,16 +178,55 @@ pub(super) fn set_history_scope(
         persist_result,
     );
 
+    let query = state.repos[repo_ix].history_state.history_query.clone();
     if state.repos[repo_ix].loads_in_flight.request_log(
         scope,
         super::util::DEFAULT_LOG_PAGE_SIZE,
         None,
+        query.clone(),
     ) {
         vec![Effect::LoadLog {
             repo_id,
             scope,
             limit: super::util::DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
+            query,
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+pub(super) fn set_history_query(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    query: Option<HistoryQuery>,
+) -> Vec<Effect> {
+    let query = normalize_history_query(query);
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    if repo_state.history_state.history_query == query {
+        return Vec::new();
+    }
+
+    repo_state.set_history_query(query.clone());
+    repo_state.retain_log_while_loading();
+    repo_state.set_log(Loadable::Loading);
+    repo_state.set_log_loading_more(false);
+    if repo_state.loads_in_flight.request_log(
+        repo_state.history_state.history_scope,
+        super::util::DEFAULT_LOG_PAGE_SIZE,
+        None,
+        query.clone(),
+    ) {
+        vec![Effect::LoadLog {
+            repo_id,
+            scope: repo_state.history_state.history_scope,
+            limit: super::util::DEFAULT_LOG_PAGE_SIZE,
+            cursor: None,
+            query,
         }]
     } else {
         Vec::new()
@@ -213,12 +257,14 @@ pub(super) fn load_more_history(
         repo_state.history_state.history_scope,
         super::util::DEFAULT_LOG_PAGE_SIZE,
         Some(cursor.clone()),
+        repo_state.history_state.history_query.clone(),
     ) {
         vec![Effect::LoadLog {
             repo_id,
             scope: repo_state.history_state.history_scope,
             limit: super::util::DEFAULT_LOG_PAGE_SIZE,
             cursor: Some(cursor),
+            query: repo_state.history_state.history_query.clone(),
         }]
     } else {
         Vec::new()
@@ -280,13 +326,16 @@ pub(super) fn log_loaded(
     repo_id: crate::model::RepoId,
     scope: LogScope,
     cursor: Option<LogCursor>,
+    query: Option<HistoryQuery>,
     result: std::result::Result<LogPage, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
 
-        if repo_state.history_state.history_scope != scope {
+        if repo_state.history_state.history_scope != scope
+            || repo_state.history_state.history_query != query
+        {
             if is_load_more {
                 repo_state.set_log_loading_more(false);
             }
@@ -297,6 +346,7 @@ pub(super) fn log_loaded(
                     scope: next.scope,
                     limit: next.limit,
                     cursor: next.cursor,
+                    query: next.query,
                 });
             }
             return effects;
@@ -350,6 +400,7 @@ pub(super) fn log_loaded(
                 scope: next.scope,
                 limit: next.limit,
                 cursor: next.cursor,
+                query: next.query,
             });
         }
     }

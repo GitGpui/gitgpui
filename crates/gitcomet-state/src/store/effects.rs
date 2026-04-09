@@ -94,7 +94,10 @@ pub(super) fn schedule_effect(
             scope,
             limit,
             cursor,
-        } => repo_load::schedule_load_log(executor, repos, msg_tx, repo_id, scope, limit, cursor),
+            query,
+        } => repo_load::schedule_load_log(
+            executor, repos, msg_tx, repo_id, scope, limit, cursor, query,
+        ),
         Effect::LoadTags { repo_id } => {
             repo_load::schedule_load_tags(executor, repos, msg_tx, repo_id)
         }

@@ -39,6 +39,24 @@ impl MainPaneView {
         window.focus(&focus);
     }
 
+    pub(in crate::view) fn activate_contextual_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let show_diff = self
+            .active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+            .is_some();
+        if show_diff {
+            self.activate_diff_search(window, cx);
+        } else {
+            self.history_view
+                .update(cx, |view, cx| view.activate_history_search(window, cx));
+        }
+        cx.notify();
+    }
+
     pub(in crate::view) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let repo_id = self.active_repo_id();

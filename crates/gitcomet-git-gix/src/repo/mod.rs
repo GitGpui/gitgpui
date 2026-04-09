@@ -7,6 +7,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
+use gitcomet_core::history_query::HistoryQuery;
 use gitcomet_core::services::{
     BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
     PullMode, RemoteUrlKind, ResetMode, Result,
@@ -141,14 +142,24 @@ impl GitRepository for GixRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        query: Option<&HistoryQuery>,
+    ) -> Result<LogPage> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
-        self.log_head_page_impl(limit, cursor)
+        self.log_head_page_impl(limit, cursor, query)
     }
 
-    fn log_all_branches_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_all_branches_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        query: Option<&HistoryQuery>,
+    ) -> Result<LogPage> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
-        self.log_all_branches_page_impl(limit, cursor)
+        self.log_all_branches_page_impl(limit, cursor, query)
     }
 
     fn log_file_page(
@@ -156,9 +167,10 @@ impl GitRepository for GixRepo {
         path: &Path,
         limit: usize,
         cursor: Option<&LogCursor>,
+        query: Option<&HistoryQuery>,
     ) -> Result<LogPage> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
-        self.log_file_page_impl(path, limit, cursor)
+        self.log_file_page_impl(path, limit, cursor, query)
     }
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {

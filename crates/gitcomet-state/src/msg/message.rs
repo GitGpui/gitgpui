@@ -2,6 +2,7 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
+use gitcomet_core::history_query::HistoryQuery;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
 use std::path::PathBuf;
@@ -105,6 +106,10 @@ pub enum Msg {
     SetHistoryScope {
         repo_id: RepoId,
         scope: LogScope,
+    },
+    SetHistoryQuery {
+        repo_id: RepoId,
+        query: Option<HistoryQuery>,
     },
     SetFetchPruneDeletedRemoteTrackingBranches {
         repo_id: RepoId,
@@ -524,6 +529,7 @@ pub enum InternalMsg {
         repo_id: RepoId,
         scope: LogScope,
         cursor: Option<LogCursor>,
+        query: Option<HistoryQuery>,
         result: Result<LogPage, Error>,
     },
     TagsLoaded {

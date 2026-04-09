@@ -74,12 +74,14 @@ impl std::fmt::Debug for InternalMsg {
                 repo_id,
                 scope,
                 cursor,
+                query,
                 result,
             } => f
                 .debug_struct("LogLoaded")
                 .field("repo_id", repo_id)
                 .field("scope", scope)
                 .field("cursor", cursor)
+                .field("query", query)
                 .field("result", result)
                 .finish(),
             InternalMsg::TagsLoaded { repo_id, result } => f
