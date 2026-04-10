@@ -16,7 +16,7 @@ use gpui::{
     size,
 };
 #[cfg(target_os = "windows")]
-use gpui_windows::WindowsPlatform;
+use gpui::WindowsPlatform;
 #[cfg(target_os = "windows")]
 use raw_window_handle::RawWindowHandle;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -224,6 +224,11 @@ pub(crate) fn application() -> gpui::Application {
     ))
 }
 
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn application() -> gpui::Application {
+    gpui::application()
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn window_menu_position(position: Point<Pixels>, scale_factor: f32) -> (i32, i32) {
     (
@@ -317,7 +322,7 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
         }
         bind_text_input_keys(cx);
         if quit_when_all_windows_closed {
-            cx.on_window_closed(|cx, _window_id| {
+            cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }

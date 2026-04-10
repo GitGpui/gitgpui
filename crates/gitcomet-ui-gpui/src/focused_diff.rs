@@ -289,7 +289,7 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                 if let Err(err) = crate::bundled_fonts::register(cx) {
                     eprintln!("Failed to register bundled fonts: {err:#}");
                 }
-                cx.on_window_closed(|cx, _window_id| {
+                cx.on_window_closed(|cx| {
                     if cx.windows().is_empty() {
                         cx.quit();
                     }
