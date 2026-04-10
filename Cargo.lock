@@ -3310,7 +3310,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.3.3"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=36a02847c23f05bf53402a8e5668afb7dca55730#36a02847c23f05bf53402a8e5668afb7dca55730"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c78a3e7deedf3fc9df0b878d2007c517f95ca613#c78a3e7deedf3fc9df0b878d2007c517f95ca613"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -3415,7 +3415,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce-macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=36a02847c23f05bf53402a8e5668afb7dca55730#36a02847c23f05bf53402a8e5668afb7dca55730"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c78a3e7deedf3fc9df0b878d2007c517f95ca613#c78a3e7deedf3fc9df0b878d2007c517f95ca613"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -6194,9 +6194,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "20a6af516fea4b20eccceaf166e8aa666ac996208e8a644ce3ef5aa783bc7cd4"
 dependencies = [
  "aws-lc-rs",
  "ring",

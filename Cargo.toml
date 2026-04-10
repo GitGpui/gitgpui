@@ -44,8 +44,8 @@ clap = { version = "4.6.0", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
 gix = { version = "0.81.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-# Load gpui-ce directly from GitHub at commit 36a02847c23f05bf53402a8e5668afb7dca55730.
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "36a02847c23f05bf53402a8e5668afb7dca55730" }
+# Load gpui-ce directly from GitHub at commit c78a3e7deedf3fc9df0b878d2007c517f95ca613.
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "c78a3e7deedf3fc9df0b878d2007c517f95ca613" }
 image = "0.25.10"
 lru = "0.16"
 memchr = "2.8.0"
