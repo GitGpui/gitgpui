@@ -21,11 +21,7 @@ pub(in crate::view) struct SelectedBranch {
 }
 
 pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
-    if theme.is_dark {
-        gpui::rgba(0xffffffff)
-    } else {
-        gpui::rgba(0x000000ff)
-    }
+    theme.colors.emphasis_text
 }
 
 pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {

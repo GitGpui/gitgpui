@@ -2059,16 +2059,54 @@ mod tests {
     }
 
     #[test]
-    fn history_branch_text_highlights_marks_selected_remote_entry_only() {
+    fn history_branch_text_highlights_use_theme_emphasis_text_color() {
         let text: SharedString = "HEAD → main, origin/main".into();
         let selected: SharedString = "origin/main".into();
-        let highlights =
-            history_branch_text_highlights(&text, Some(&selected), AppTheme::gitcomet_dark());
+        let theme = AppTheme::from_json_str(
+            r##"{
+                "name": "Fixture",
+                "themes": [
+                    {
+                        "key": "fixture",
+                        "name": "Fixture",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#0d1016ff",
+                            "surface_bg": "#1f2127ff",
+                            "surface_bg_elevated": "#1f2127ff",
+                            "active_section": "#2d2f34ff",
+                            "border": "#2d2f34ff",
+                            "text": "#bfbdb6ff",
+                            "text_muted": "#8a8986ff",
+                            "accent": "#5ac1feff",
+                            "hover": "#2d2f34ff",
+                            "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                            "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                            "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                            "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                            "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                            "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                            "danger": "#ef7177ff",
+                            "warning": "#feb454ff",
+                            "success": "#aad84cff",
+                            "emphasis_text": "#123456ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
+            }"##,
+        )
+        .expect("theme JSON should parse");
+        let highlights = history_branch_text_highlights(&text, Some(&selected), theme);
 
         assert_eq!(highlights.len(), 1);
         let (range, style) = &highlights[0];
         assert_eq!(&text.as_ref()[range.clone()], "origin/main");
-        assert_eq!(style.color, Some(gpui::rgba(0xffffffff).into()));
+        assert_eq!(style.color, Some(gpui::rgba(0x123456ff).into()));
     }
 
     #[test]
