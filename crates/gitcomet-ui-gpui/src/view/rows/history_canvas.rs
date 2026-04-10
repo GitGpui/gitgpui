@@ -91,12 +91,18 @@ fn shape_truncated_line_with_highlights(
         style.font_family = family.into();
     }
 
-    let mut runs = compute_highlight_runs(text.as_ref(), &style, highlights);
+    let runs = compute_highlight_runs(text.as_ref(), &style, highlights);
     let mut wrapper = window.text_system().line_wrapper(style.font(), font_size);
-    let truncated = wrapper.truncate_line(text.clone(), max_width.max(px(0.0)), "…", &mut runs);
+    let (truncated, runs) = wrapper.truncate_line(
+        text.clone(),
+        max_width.max(px(0.0)),
+        "…",
+        &runs,
+        TruncateFrom::End,
+    );
     window
         .text_system()
-        .shape_line(truncated, font_size, &runs, None)
+        .shape_line(truncated, font_size, runs.as_ref(), None)
 }
 
 fn compute_highlight_runs(
