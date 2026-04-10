@@ -47,7 +47,8 @@ impl GitCometView {
         #[cfg(not(test))]
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                let notice = fetch_update_notice(env!("CARGO_PKG_VERSION"), resolve_update_repo()).await;
+                let notice =
+                    fetch_update_notice(env!("CARGO_PKG_VERSION"), resolve_update_repo()).await;
                 let Some(notice) = notice else {
                     return;
                 };

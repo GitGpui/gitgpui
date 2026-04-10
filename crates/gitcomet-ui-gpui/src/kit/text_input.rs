@@ -3220,7 +3220,9 @@ impl Element for TextElement {
                 visible_bottom,
                 TEXT_INPUT_GUARD_ROWS,
             );
-            let mut lines = (0..line_count).map(|_| WrappedLine::default()).collect::<Vec<_>>();
+            let mut lines = (0..line_count)
+                .map(|_| WrappedLine::default())
+                .collect::<Vec<_>>();
             let mut shaped_mask = vec![false; line_count];
             let job_accepts_interpolation = pending_wrap_job_accepts_interpolated_patch(
                 input.pending_wrap_job.as_ref(),

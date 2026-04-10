@@ -54,19 +54,9 @@ impl LinuxGuiLaunchEnvironment {
         }
     }
 
-    fn should_prefer_x11_in_wsl(self, mode_uses_gpui: bool) -> bool {
-        mode_uses_gpui
-            && self.is_wsl
-            && self.has_wayland_display
-            && self.has_x11_display
-            && !self.skip_x11_relaunch
-            && !self.disable_x11_fallback
-    }
-
     fn should_preflight_wayland(self, mode_uses_gpui: bool) -> bool {
         mode_uses_gpui
             && self.has_wayland_display
-            && !self.should_prefer_x11_in_wsl(mode_uses_gpui)
             && !self.skip_x11_relaunch
             && !self.disable_x11_fallback
     }
@@ -148,13 +138,6 @@ impl std::error::Error for WaylandPreflightError {}
 pub(crate) fn maybe_relaunch_with_linux_x11_fallback(mode: &AppMode) -> Option<i32> {
     let env = LinuxGuiLaunchEnvironment::detect();
     let mode_uses_gpui = app_mode_uses_gpui(mode);
-
-    if env.should_prefer_x11_in_wsl(mode_uses_gpui) {
-        eprintln!(
-            "WSLg detected with both Wayland and X11 transports available. Preferring X11 for GitComet."
-        );
-        return relaunch_under_x11_fallback();
-    }
 
     if !env.should_preflight_wayland(mode_uses_gpui) {
         return None;
@@ -396,23 +379,20 @@ mod tests {
     }
 
     #[test]
-    fn prefers_x11_before_wayland_in_wslg_sessions() {
+    fn wslg_sessions_preflight_wayland_when_available() {
         let env = LinuxGuiLaunchEnvironment::from_sources(true, true, true, false, false);
-        assert!(env.should_prefer_x11_in_wsl(true));
-        assert!(!env.should_preflight_wayland(true));
-    }
-
-    #[test]
-    fn does_not_prefer_x11_outside_wsl() {
-        let env = LinuxGuiLaunchEnvironment::from_sources(false, true, true, false, false);
-        assert!(!env.should_prefer_x11_in_wsl(true));
         assert!(env.should_preflight_wayland(true));
     }
 
     #[test]
-    fn does_not_prefer_x11_without_x11_display_in_wsl() {
+    fn non_wsl_sessions_preflight_wayland_when_available() {
+        let env = LinuxGuiLaunchEnvironment::from_sources(false, true, true, false, false);
+        assert!(env.should_preflight_wayland(true));
+    }
+
+    #[test]
+    fn wsl_sessions_preflight_wayland_without_x11_display() {
         let env = LinuxGuiLaunchEnvironment::from_sources(true, true, false, false, false);
-        assert!(!env.should_prefer_x11_in_wsl(true));
         assert!(env.should_preflight_wayland(true));
     }
 

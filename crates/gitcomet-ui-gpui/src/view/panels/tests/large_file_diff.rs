@@ -1965,11 +1965,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
         "one-sided file-diff cached lower right row",
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
-            file_diff_split_cached_styled(
-                pane,
-                DiffTextRegion::SplitRight,
-                cached_right_line,
-            )
+            file_diff_split_cached_styled(pane, DiffTextRegion::SplitRight, cached_right_line)
                 .is_some()
         },
         |pane| {
@@ -2001,7 +1997,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             file_diff_split_cached_styled(pane, DiffTextRegion::SplitRight, top_right_line)
-                    .is_some()
+                .is_some()
                 && file_diff_split_cached_styled(pane, DiffTextRegion::SplitLeft, comment_line)
                     .is_some()
         },

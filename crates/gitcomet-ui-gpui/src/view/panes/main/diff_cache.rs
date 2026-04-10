@@ -1003,27 +1003,27 @@ impl MainPaneView {
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let prepare_documents = move || FileDiffBackgroundPreparedSyntaxDocuments {
-                        split_left: split_left_source.and_then(|(text, line_starts)| {
-                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                                language,
-                                FULL_DOCUMENT_SYNTAX_MODE,
-                                text,
-                                line_starts,
-                                split_left_background_reparse_seed,
-                                split_left_edit_hint,
-                            )
-                        }),
-                        split_right: split_right_source.and_then(|(text, line_starts)| {
-                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                                language,
-                                FULL_DOCUMENT_SYNTAX_MODE,
-                                text,
-                                line_starts,
-                                split_right_background_reparse_seed,
-                                split_right_edit_hint,
-                            )
-                        }),
-                    };
+                    split_left: split_left_source.and_then(|(text, line_starts)| {
+                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                            language,
+                            FULL_DOCUMENT_SYNTAX_MODE,
+                            text,
+                            line_starts,
+                            split_left_background_reparse_seed,
+                            split_left_edit_hint,
+                        )
+                    }),
+                    split_right: split_right_source.and_then(|(text, line_starts)| {
+                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                            language,
+                            FULL_DOCUMENT_SYNTAX_MODE,
+                            text,
+                            line_starts,
+                            split_right_background_reparse_seed,
+                            split_right_edit_hint,
+                        )
+                    }),
+                };
                 let parsed_documents = if cfg!(test) {
                     prepare_documents()
                 } else {

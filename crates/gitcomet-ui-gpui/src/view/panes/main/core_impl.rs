@@ -2247,7 +2247,10 @@ impl MainPaneView {
         {
             cx.spawn(
                 async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                    smol::Timer::after(Duration::from_millis(CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS)).await;
+                    smol::Timer::after(Duration::from_millis(
+                        CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS,
+                    ))
+                    .await;
                     let request = view.update(cx, |this, cx| {
                         if this.conflict_resolver.resolver_pending_recompute_seq != seq {
                             return None;
@@ -2269,9 +2272,10 @@ impl MainPaneView {
                             let output_snapshot = this
                                 .conflict_resolver_input
                                 .read_with(cx, |input, _| input.text_snapshot());
-                            let syntax_edit = delta.clone().map(diff_syntax_edit_from_outline_delta);
-                            let request =
-                                this.background_resolved_outline_recompute_request(&output_snapshot);
+                            let syntax_edit =
+                                delta.clone().map(diff_syntax_edit_from_outline_delta);
+                            let request = this
+                                .background_resolved_outline_recompute_request(&output_snapshot);
                             let background_delay = Duration::default();
                             this.sync_conflict_resolved_preview_snapshot(
                                 &output_snapshot,
@@ -2316,7 +2320,11 @@ impl MainPaneView {
                             return;
                         }
 
-                        this.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
+                        this.apply_resolved_outline_computation(
+                            path.as_ref(),
+                            trace_started,
+                            computed,
+                        );
                         cx.notify();
                     });
                 },

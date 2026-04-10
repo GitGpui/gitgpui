@@ -13,10 +13,9 @@ fn fixture_repo_root() -> std::path::PathBuf {
 
 fn fixture_git_command(repo_root: &std::path::Path) -> std::process::Command {
     let mut command = std::process::Command::new("git");
-    command.current_dir(repo_root).args([
-        "-c",
-        &format!("safe.directory={}", repo_root.display()),
-    ]);
+    command
+        .current_dir(repo_root)
+        .args(["-c", &format!("safe.directory={}", repo_root.display())]);
     command
 }
 
@@ -34,7 +33,12 @@ fn fixture_git_show(repo_root: &std::path::Path, spec: &str, context: &str) -> S
     String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
 }
 
-fn fixture_git_diff(repo_root: &std::path::Path, old_spec: &str, new_spec: &str, context: &str) -> String {
+fn fixture_git_diff(
+    repo_root: &std::path::Path,
+    old_spec: &str,
+    new_spec: &str,
+    context: &str,
+) -> String {
     let output = fixture_git_command(repo_root)
         .args(["diff", old_spec, new_spec])
         .output()
@@ -333,9 +337,8 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        fixture_git_show(&repo_root, spec, "YAML commit file-diff regression fixture")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "YAML commit file-diff regression fixture");
     let git_diff = || {
         fixture_git_diff(
             &repo_root,
@@ -2609,9 +2612,8 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        fixture_git_show(&repo_root, spec, "YAML commit patch/file parity fixture")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "YAML commit patch/file parity fixture");
     let unified = fixture_git_diff(
         &repo_root,
         "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
@@ -4682,8 +4684,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     ));
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
     let repo_root = fixture_repo_root();
-    let git_show =
-        |spec: &str| fixture_git_show(&repo_root, spec, "YAML diff regression fixture");
+    let git_show = |spec: &str| fixture_git_show(&repo_root, spec, "YAML diff regression fixture");
     let old_text =
         git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
     let new_text =
@@ -5470,9 +5471,8 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     ));
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        fixture_git_show(&repo_root, spec, "YAML fallback prepared baseline fixture")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "YAML fallback prepared baseline fixture");
     let old_text =
         git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
     let new_text =
@@ -6539,9 +6539,8 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     ));
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        fixture_git_show(&repo_root, spec, "build-release prepared-baseline fixture")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "build-release prepared-baseline fixture");
     let old_text = git_show(
         "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
     );

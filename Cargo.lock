@@ -982,7 +982,7 @@ dependencies = [
  "block",
  "cocoa-foundation",
  "core-foundation 0.10.0",
- "core-graphics 0.24.0",
+ "core-graphics",
  "foreign-types",
  "libc",
  "objc",
@@ -1099,15 +1099,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
-name = "convert_case"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
-dependencies = [
- "unicode-segmentation",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1147,19 +1138,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core-graphics"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "064badf302c3194842cf2c5d61f56cc88e54a759313879cdf03abdd27d0c3b97"
-dependencies = [
- "bitflags 2.11.0",
- "core-foundation 0.10.0",
- "core-graphics-types",
- "foreign-types",
- "libc",
-]
-
-[[package]]
 name = "core-graphics-types"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1190,7 +1168,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a593227b66cbd4007b2a050dfdd9e1d1318311409c8d600dc82ba1b15ca9c130"
 dependencies = [
  "core-foundation 0.10.0",
- "core-graphics 0.24.0",
+ "core-graphics",
  "foreign-types",
  "libc",
 ]
@@ -1421,34 +1399,11 @@ version = "0.99.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6edb4b64a43d977b8e99788fe3a04d483834fba1215a7e02caa415b626497f7f"
 dependencies = [
- "convert_case 0.4.0",
+ "convert_case",
  "proc-macro2",
  "quote",
  "rustc_version",
  "syn",
-]
-
-[[package]]
-name = "derive_more"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
-dependencies = [
- "derive_more-impl",
-]
-
-[[package]]
-name = "derive_more-impl"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
-dependencies = [
- "convert_case 0.10.0",
- "proc-macro2",
- "quote",
- "rustc_version",
- "syn",
- "unicode-xid",
 ]
 
 [[package]]
@@ -3310,7 +3265,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.3.3"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=c78a3e7deedf3fc9df0b878d2007c517f95ca613#c78a3e7deedf3fc9df0b878d2007c517f95ca613"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c91b51064714781a7a087dc42edc562a8eb9193b#c91b51064714781a7a087dc42edc562a8eb9193b"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -3330,12 +3285,12 @@ dependencies = [
  "cocoa-foundation",
  "core-foundation 0.10.0",
  "core-foundation-sys",
- "core-graphics 0.25.0",
+ "core-graphics",
  "core-text",
  "core-video",
  "cosmic-text",
  "ctor",
- "derive_more 2.1.1",
+ "derive_more",
  "dispatch2",
  "embed-resource",
  "etagere",
@@ -3415,7 +3370,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce-macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=c78a3e7deedf3fc9df0b878d2007c517f95ca613#c78a3e7deedf3fc9df0b878d2007c517f95ca613"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=c91b51064714781a7a087dc42edc562a8eb9193b#c91b51064714781a7a087dc42edc562a8eb9193b"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3454,7 +3409,7 @@ dependencies = [
  "async-compression",
  "async-fs",
  "bytes",
- "derive_more 0.99.20",
+ "derive_more",
  "futures",
  "gpui_util",
  "http",
@@ -9079,7 +9034,7 @@ dependencies = [
  "bitflags 2.11.0",
  "byteorder",
  "core-foundation 0.10.0",
- "core-graphics 0.24.0",
+ "core-graphics",
  "core-text",
  "dirs 5.0.1",
  "dwrote",

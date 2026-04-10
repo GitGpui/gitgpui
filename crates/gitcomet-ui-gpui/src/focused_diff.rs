@@ -10,8 +10,8 @@ use gitcomet_state::session;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Render, ScrollHandle,
-    SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions,
-    actions, div, point, px, size,
+    SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
+    div, point, px, size,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};

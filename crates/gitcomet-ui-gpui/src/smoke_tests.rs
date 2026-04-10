@@ -1487,7 +1487,8 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
         "gitcomet_ui_test_worktrees_spinner_{}",
         std::process::id()
     ));
-    let repo_ids = restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
 
     store_for_test.dispatch(Msg::RemoveWorktree {
@@ -1525,7 +1526,8 @@ fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext)
         "gitcomet_ui_test_submodules_spinner_{}",
         std::process::id()
     ));
-    let repo_ids = restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
 
     store_for_test.dispatch(Msg::LoadSubmodules { repo_id });
@@ -1560,7 +1562,8 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
         "gitcomet_ui_test_stash_spinner_{}",
         std::process::id()
     ));
-    let repo_ids = restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
 
