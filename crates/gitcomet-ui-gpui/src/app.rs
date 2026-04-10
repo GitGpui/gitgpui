@@ -561,6 +561,7 @@ fn macos_app_menus() -> Vec<Menu> {
         file_items.push(MenuItem::submenu(Menu {
             name: "Recent Repositories".into(),
             items: recent_repo_items,
+            disabled: false,
         }));
     }
 
@@ -585,10 +586,12 @@ fn macos_app_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Quit GitComet", Quit),
             ],
+            disabled: false,
         },
         Menu {
             name: "File".into(),
             items: file_items,
+            disabled: false,
         },
         Menu {
             name: "Edit".into(),
@@ -602,6 +605,7 @@ fn macos_app_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::os_action("Select All", crate::kit::SelectAll, OsAction::SelectAll),
             ],
+            disabled: false,
         },
         Menu {
             name: "Window".into(),
@@ -614,6 +618,7 @@ fn macos_app_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Toggle Full Screen", ToggleFullScreen),
             ],
+            disabled: false,
         },
     ]
 }
