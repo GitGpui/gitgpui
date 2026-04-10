@@ -2023,6 +2023,7 @@ pub(super) enum PopoverKind {
     RepoPicker,
     RecentRepositoryPicker,
     BranchPicker,
+    LargeFilesMenu,
     CreateBranch,
     CreateBranchFromRefPrompt {
         repo_id: RepoId,
@@ -2053,6 +2054,10 @@ pub(super) enum PopoverKind {
     CreateTagPrompt {
         repo_id: RepoId,
         target: String,
+    },
+    LfsPatternPrompt {
+        repo_id: RepoId,
+        kind: LfsPatternPromptKind,
     },
     Repo {
         repo_id: RepoId,
@@ -2168,6 +2173,13 @@ pub(super) enum PopoverKind {
     },
     HistoryColumnSettings,
     ChangeTrackingSettings,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum LfsPatternPromptKind {
+    Track,
+    Untrack,
+    MigrateImport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
