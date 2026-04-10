@@ -48,6 +48,34 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
             }
         }
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
+            ..
+        } => {
+            if let Some(repo) = repo_for_popover(state, popover) {
+                hash_repo_for_popover(repo, popover, &mut hasher);
+            } else {
+                state.active_repo.hash(&mut hasher);
+            }
+            if let Some(prompt) = state.submodule_trust_prompt.as_ref() {
+                prompt.repo_id.hash(&mut hasher);
+                match &prompt.operation {
+                    SubmoduleTrustPromptOperation::Add { url, path } => {
+                        0u8.hash(&mut hasher);
+                        url.hash(&mut hasher);
+                        path.hash(&mut hasher);
+                    }
+                    SubmoduleTrustPromptOperation::Update => {
+                        1u8.hash(&mut hasher);
+                    }
+                }
+                for source in &prompt.sources {
+                    source.submodule_path.hash(&mut hasher);
+                    source.display_source.hash(&mut hasher);
+                    source.local_source_path.hash(&mut hasher);
+                }
+            }
+        }
         _ => {
             if let Some(repo) = repo_for_popover(state, popover) {
                 hash_repo_for_popover(repo, popover, &mut hasher);
@@ -544,6 +572,10 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
             }
             SubmodulePopoverKind::AddPrompt => {
                 24u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubmodulePopoverKind::TrustConfirm => {
+                28u8.hash(hasher);
                 repo_id.hash(hasher);
             }
             SubmodulePopoverKind::OpenPicker => {

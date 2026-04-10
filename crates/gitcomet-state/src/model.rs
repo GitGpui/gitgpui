@@ -5,7 +5,7 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::*;
-use gitcomet_core::services::BlameLine;
+use gitcomet_core::services::{BlameLine, SubmoduleTrustTarget};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -230,6 +230,7 @@ pub struct AppState {
     pub notifications: Vec<AppNotification>,
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
+    pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -273,6 +274,19 @@ pub struct AuthPromptState {
     pub kind: AuthPromptKind,
     pub reason: String,
     pub operation: AuthRetryOperation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SubmoduleTrustPromptOperation {
+    Add { url: String, path: PathBuf },
+    Update,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleTrustPromptState {
+    pub repo_id: RepoId,
+    pub operation: SubmoduleTrustPromptOperation,
+    pub sources: Vec<SubmoduleTrustTarget>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

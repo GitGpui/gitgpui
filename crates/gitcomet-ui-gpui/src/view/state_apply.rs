@@ -9,6 +9,7 @@ impl GitCometView {
         let prev_had_repos = !self.state.repos.is_empty();
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
+        let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let next_banner_error = next.banner_error.clone();
         let mut follow_up_msgs = Vec::new();
 
@@ -152,6 +153,9 @@ impl GitCometView {
         }
         if prev_auth_prompt != self.state.auth_prompt {
             self.auth_prompt_key = None;
+        }
+        if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
+            self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         }
         if prev_had_repos && self.state.repos.is_empty() {
             self.popover_host

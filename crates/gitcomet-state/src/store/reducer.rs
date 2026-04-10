@@ -8,6 +8,7 @@ mod util;
 
 use crate::model::{
     AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
+    SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
@@ -249,8 +250,20 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         },
         RepoCommandKind::RemoveWorktree { path } => Msg::RemoveWorktree { repo_id, path },
         RepoCommandKind::ForceRemoveWorktree { path } => Msg::ForceRemoveWorktree { repo_id, path },
-        RepoCommandKind::AddSubmodule { url, path } => Msg::AddSubmodule { repo_id, url, path },
-        RepoCommandKind::UpdateSubmodules => Msg::UpdateSubmodules { repo_id },
+        RepoCommandKind::AddSubmodule {
+            url,
+            path,
+            approved_sources,
+        } => Msg::AddSubmoduleTrusted {
+            repo_id,
+            url,
+            path,
+            approved_sources,
+        },
+        RepoCommandKind::UpdateSubmodules { approved_sources } => Msg::UpdateSubmodulesTrusted {
+            repo_id,
+            approved_sources,
+        },
         RepoCommandKind::RemoveSubmodule { path } => Msg::RemoveSubmodule { repo_id, path },
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
@@ -652,12 +665,47 @@ pub(super) fn reduce(
             actions_emit_effects::force_remove_worktree(repo_id, normalized_path)
         }
         Msg::AddSubmodule { repo_id, url, path } => {
+            state.submodule_trust_prompt = None;
+            vec![Effect::CheckSubmoduleAddTrust { repo_id, url, path }]
+        }
+        Msg::AddSubmoduleTrusted {
+            repo_id,
+            url,
+            path,
+            approved_sources,
+        } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::add_submodule(repo_id, url, path)
+            actions_emit_effects::add_submodule(repo_id, url, path, approved_sources)
         }
         Msg::UpdateSubmodules { repo_id } => {
+            state.submodule_trust_prompt = None;
+            vec![Effect::CheckSubmoduleUpdateTrust { repo_id }]
+        }
+        Msg::UpdateSubmodulesTrusted {
+            repo_id,
+            approved_sources,
+        } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::update_submodules(repo_id)
+            actions_emit_effects::update_submodules(repo_id, approved_sources)
+        }
+        Msg::ConfirmSubmoduleTrustPrompt => {
+            let Some(prompt) = state.submodule_trust_prompt.take() else {
+                return Vec::new();
+            };
+            match prompt.operation {
+                SubmoduleTrustPromptOperation::Add { url, path } => {
+                    begin_local_action(state, prompt.repo_id);
+                    actions_emit_effects::add_submodule(prompt.repo_id, url, path, prompt.sources)
+                }
+                SubmoduleTrustPromptOperation::Update => {
+                    begin_local_action(state, prompt.repo_id);
+                    actions_emit_effects::update_submodules(prompt.repo_id, prompt.sources)
+                }
+            }
+        }
+        Msg::CancelSubmoduleTrustPrompt => {
+            state.submodule_trust_prompt = None;
+            Vec::new()
         }
         Msg::RemoveSubmodule { repo_id, path } => {
             begin_local_action(state, repo_id);
@@ -999,6 +1047,55 @@ pub(super) fn reduce(
         }
         Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded { repo_id, result }) => {
             effects::submodules_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+            repo_id,
+            url,
+            path,
+            result,
+        }) => match result {
+            Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
+                begin_local_action(state, repo_id);
+                actions_emit_effects::add_submodule(repo_id, url, path, Vec::new())
+            }
+            Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
+                state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
+                    repo_id,
+                    operation: SubmoduleTrustPromptOperation::Add { url, path },
+                    sources,
+                });
+                Vec::new()
+            }
+            Err(error) => {
+                state.banner_error = Some(BannerErrorState {
+                    repo_id: Some(repo_id),
+                    message: util::format_failure_summary("Submodule trust check", &error),
+                });
+                Vec::new()
+            }
+        },
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }) => {
+            match result {
+                Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
+                    begin_local_action(state, repo_id);
+                    actions_emit_effects::update_submodules(repo_id, Vec::new())
+                }
+                Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
+                    state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
+                        repo_id,
+                        operation: SubmoduleTrustPromptOperation::Update,
+                        sources,
+                    });
+                    Vec::new()
+                }
+                Err(error) => {
+                    state.banner_error = Some(BannerErrorState {
+                        repo_id: Some(repo_id),
+                        message: util::format_failure_summary("Submodule trust check", &error),
+                    });
+                    Vec::new()
+                }
+            }
         }
         Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
             repo_id,

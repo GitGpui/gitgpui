@@ -30,6 +30,7 @@ mod search_inputs;
 mod stash_drop_confirm;
 mod stash_prompt;
 mod submodule_add_prompt;
+mod submodule_trust_confirm;
 mod submodule_open_picker;
 mod submodule_remove_confirm;
 mod submodule_remove_picker;
@@ -1041,6 +1042,10 @@ impl PopoverHost {
                     window.focus(&focus);
                 }
                 PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
+                    ..
+                } => {}
+                PopoverKind::Repo {
                     repo_id,
                     kind:
                         RepoPopoverKind::Submodule(
@@ -1348,6 +1353,7 @@ impl PopoverHost {
                 kind:
                     RepoPopoverKind::Submodule(
                         SubmodulePopoverKind::AddPrompt
+                        | SubmodulePopoverKind::TrustConfirm
                         | SubmodulePopoverKind::OpenPicker
                         | SubmodulePopoverKind::RemovePicker
                         | SubmodulePopoverKind::RemoveConfirm { .. },
@@ -1495,6 +1501,9 @@ impl PopoverHost {
                         .max_w(px(320.0)),
                     SubmodulePopoverKind::AddPrompt => {
                         submodule_add_prompt::panel(self, repo_id, cx)
+                    }
+                    SubmodulePopoverKind::TrustConfirm => {
+                        submodule_trust_confirm::panel(self, repo_id, cx)
                     }
                     SubmodulePopoverKind::OpenPicker => {
                         submodule_open_picker::panel(self, repo_id, cx)

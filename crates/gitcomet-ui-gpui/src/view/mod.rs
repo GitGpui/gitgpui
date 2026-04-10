@@ -8,7 +8,7 @@ use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DiagnosticKind,
-    Loadable, RepoId, RepoState,
+    Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{Msg, RepoExternalChange, StoreEvent};
 use gitcomet_state::session;
@@ -745,6 +745,7 @@ impl GitCometView {
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
             pending_force_remove_worktree_prompt: None,
+            pending_submodule_trust_prompt: None,
             pending_worktree_branch_removals: HashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
@@ -1428,6 +1429,17 @@ impl Render for GitCometView {
                     path,
                     branch,
                 },
+                self.last_mouse_pos,
+                window,
+                cx,
+            );
+        }
+
+        if let Some(prompt) = self.pending_submodule_trust_prompt.take()
+            && self.active_repo_id() == Some(prompt.repo_id)
+        {
+            self.open_popover_at(
+                PopoverKind::submodule(prompt.repo_id, SubmodulePopoverKind::TrustConfirm),
                 self.last_mouse_pos,
                 window,
                 cx,

@@ -255,18 +255,38 @@ pub(super) fn schedule_effect(
         Effect::ForceRemoveWorktree { repo_id, path } => {
             repo_commands::schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path);
         }
+        Effect::CheckSubmoduleAddTrust { repo_id, url, path } => {
+            repo_commands::schedule_check_submodule_add_trust(
+                executor, repos, msg_tx, repo_id, url, path,
+            );
+        }
+        Effect::CheckSubmoduleUpdateTrust { repo_id } => {
+            repo_commands::schedule_check_submodule_update_trust(executor, repos, msg_tx, repo_id);
+        }
         Effect::AddSubmodule {
             repo_id,
             url,
             path,
+            approved_sources,
             auth,
         } => {
             repo_commands::schedule_add_submodule(
-                executor, repos, msg_tx, repo_id, url, path, auth,
+                executor, repos, msg_tx, repo_id, url, path, approved_sources, auth,
             );
         }
-        Effect::UpdateSubmodules { repo_id, auth } => {
-            repo_commands::schedule_update_submodules(executor, repos, msg_tx, repo_id, auth);
+        Effect::UpdateSubmodules {
+            repo_id,
+            approved_sources,
+            auth,
+        } => {
+            repo_commands::schedule_update_submodules(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                approved_sources,
+                auth,
+            );
         }
         Effect::RemoveSubmodule { repo_id, path } => {
             repo_commands::schedule_remove_submodule(executor, repos, msg_tx, repo_id, path);

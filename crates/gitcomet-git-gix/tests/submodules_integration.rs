@@ -1,5 +1,5 @@
 use gitcomet_core::domain::SubmoduleStatus;
-use gitcomet_core::services::GitBackend;
+use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -520,14 +520,24 @@ fn submodule_add_update_remove_round_trip() {
 
     init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
     init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
-    run_git(&parent_repo, &["config", "protocol.file.allow", "always"]);
 
     let backend = GixBackend;
     let opened = backend.open(&parent_repo).expect("open parent repository");
 
     let submodule_path = Path::new("mods/sub-one");
+    let approved_sources = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
     let add_output = opened
-        .add_submodule_with_output(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            &approved_sources,
+        )
         .expect("add submodule");
     assert_eq!(add_output.exit_code, Some(0));
 
@@ -551,8 +561,15 @@ fn submodule_add_update_remove_round_trip() {
     );
     assert_eq!(listed[0].head.as_ref().len(), 40);
 
+    assert_eq!(
+        opened
+            .check_submodule_update_trust()
+            .expect("check update trust after approval"),
+        SubmoduleTrustDecision::Proceed
+    );
+
     let update_output = opened
-        .update_submodules_with_output()
+        .update_submodules_with_output(&[])
         .expect("update submodules");
     assert_eq!(update_output.exit_code, Some(0));
 
@@ -587,7 +604,7 @@ fn add_submodule_does_not_restrict_https_or_ssh_transports() {
         ("ssh://git@127.0.0.1:1/repo.git", "ssh"),
     ] {
         let err = opened
-            .add_submodule_with_output(url, Path::new("mods/sub-one"))
+            .add_submodule_with_output(url, Path::new("mods/sub-one"), &[])
             .expect_err("dummy remote should fail without a reachable server");
         let rendered = err.to_string();
         assert!(
@@ -595,4 +612,50 @@ fn add_submodule_does_not_restrict_https_or_ssh_transports() {
             "unexpected protocol allowlist failure for {url}: {rendered}"
         );
     }
+}
+
+#[test]
+fn add_local_submodule_requires_explicit_trust() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+
+    let submodule_path = Path::new("mods/sub");
+    let trust = opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust");
+    let approved_sources = match trust {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
+
+    let err = opened
+        .add_submodule_with_output(sub_repo.to_string_lossy().as_ref(), submodule_path, &[])
+        .expect_err("local submodule should fail without trust");
+    assert!(
+        err.to_string().contains("Explicit trust is required"),
+        "unexpected error: {err}"
+    );
+
+    let add_output = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            &approved_sources,
+        )
+        .expect("add trusted local submodule");
+    assert_eq!(add_output.exit_code, Some(0));
 }

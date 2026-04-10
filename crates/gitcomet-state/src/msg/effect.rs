@@ -1,7 +1,9 @@
 use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
-use gitcomet_core::services::{ConflictSide, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustTarget,
+};
 use std::path::PathBuf;
 
 use super::RepoPathList;
@@ -183,14 +185,24 @@ pub enum Effect {
         repo_id: RepoId,
         path: PathBuf,
     },
+    CheckSubmoduleAddTrust {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+    },
+    CheckSubmoduleUpdateTrust {
+        repo_id: RepoId,
+    },
     AddSubmodule {
         repo_id: RepoId,
         url: String,
         path: PathBuf,
+        approved_sources: Vec<SubmoduleTrustTarget>,
         auth: Option<StagedGitAuth>,
     },
     UpdateSubmodules {
         repo_id: RepoId,
+        approved_sources: Vec<SubmoduleTrustTarget>,
         auth: Option<StagedGitAuth>,
     },
     RemoveSubmodule {

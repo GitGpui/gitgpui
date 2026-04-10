@@ -3,7 +3,10 @@ use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
 use gitcomet_core::services::GitRepository;
-use gitcomet_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustDecision,
+    SubmoduleTrustTarget,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -245,9 +248,21 @@ pub enum Msg {
         url: String,
         path: PathBuf,
     },
+    AddSubmoduleTrusted {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+        approved_sources: Vec<SubmoduleTrustTarget>,
+    },
     UpdateSubmodules {
         repo_id: RepoId,
     },
+    UpdateSubmodulesTrusted {
+        repo_id: RepoId,
+        approved_sources: Vec<SubmoduleTrustTarget>,
+    },
+    ConfirmSubmoduleTrustPrompt,
+    CancelSubmoduleTrustPrompt,
     RemoveSubmodule {
         repo_id: RepoId,
         path: PathBuf,
@@ -574,6 +589,16 @@ pub enum InternalMsg {
     SubmodulesLoaded {
         repo_id: RepoId,
         result: Result<Vec<Submodule>, Error>,
+    },
+    SubmoduleAddTrustChecked {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+        result: Result<SubmoduleTrustDecision, Error>,
+    },
+    SubmoduleUpdateTrustChecked {
+        repo_id: RepoId,
+        result: Result<SubmoduleTrustDecision, Error>,
     },
     CommitDetailsLoaded {
         repo_id: RepoId,

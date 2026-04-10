@@ -705,7 +705,7 @@ fn summarize_command(
             | RepoCommandKind::RemoveWorktree { .. }
             | RepoCommandKind::ForceRemoveWorktree { .. } => "Worktree",
             RepoCommandKind::AddSubmodule { .. }
-            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::UpdateSubmodules { .. }
             | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
             RepoCommandKind::ApplyWorktreePatch { reverse } => {
@@ -897,7 +897,7 @@ fn summarize_command(
         RepoCommandKind::AddSubmodule { path, .. } => {
             format!("Submodule added → {}", path.display())
         }
-        RepoCommandKind::UpdateSubmodules => "Submodules: Updated".to_string(),
+        RepoCommandKind::UpdateSubmodules { .. } => "Submodules: Updated".to_string(),
         RepoCommandKind::RemoveSubmodule { path } => {
             format!("Submodule removed → {}", path.display())
         }
