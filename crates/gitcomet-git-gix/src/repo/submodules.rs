@@ -4,7 +4,7 @@ use crate::util::{
     bytes_to_text_preserving_utf8, git_workdir_cmd_for, run_git_simple, run_git_with_output,
 };
 use gitcomet_core::domain::{CommitId, Submodule, SubmoduleStatus};
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{
     CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 fn allow_file_submodule_transport(cmd: &mut Command) {
     // `git submodule` blocks local-path remotes unless `protocol.file.allow` is enabled.
@@ -76,6 +78,7 @@ impl GixRepo {
     ) -> Result<CommandOutput> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo);
+        let git_dir = repo.git_dir().to_path_buf();
         persist_submodule_trust_approvals(trust_root, approved_sources)?;
 
         let mut cmd = self.git_workdir_cmd();
@@ -85,6 +88,9 @@ impl GixRepo {
             }
             allow_file_submodule_transport(&mut cmd);
         }
+        let logical_name = name
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.to_path_buf());
 
         cmd.arg("submodule").arg("add");
         let mut command = "git submodule add".to_string();
@@ -102,7 +108,16 @@ impl GixRepo {
         }
         cmd.arg(url).arg(path);
         command.push_str(&format!(" {url} {}", path.display()));
-        run_git_with_output(cmd, &command)
+        match run_git_with_output(cmd, &command) {
+            Ok(output) => Ok(output),
+            Err(err) => Err(cleanup_failed_submodule_add_error(
+                trust_root,
+                &git_dir,
+                path,
+                &logical_name,
+                err,
+            )),
+        }
     }
 
     pub(super) fn update_submodules_with_output_impl(
@@ -392,6 +407,84 @@ fn resolve_submodule_logical_name(repo: &gix::Repository, path: &Path) -> Result
     Ok(None)
 }
 
+fn cleanup_failed_submodule_add_error(
+    workdir: &Path,
+    git_dir: &Path,
+    path: &Path,
+    logical_name: &Path,
+    err: Error,
+) -> Error {
+    let clone_only_state = match failed_submodule_add_left_clone_only_state(workdir, path) {
+        Ok(value) => value,
+        Err(probe_err) => {
+            return append_failed_submodule_add_note(
+                err,
+                &format!("GitComet could not inspect failed submodule add state: {probe_err}"),
+            );
+        }
+    };
+
+    if !clone_only_state {
+        return err;
+    }
+
+    match cleanup_failed_submodule_add_leftovers(workdir, git_dir, path, logical_name) {
+        Ok(()) => err,
+        Err(cleanup_err) => append_failed_submodule_add_note(
+            err,
+            &format!("Cleanup after failed submodule add also failed: {cleanup_err}"),
+        ),
+    }
+}
+
+fn failed_submodule_add_left_clone_only_state(workdir: &Path, path: &Path) -> Result<bool> {
+    let repo = gix::open(workdir).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "open repo after failed submodule add {}: {e}",
+            workdir.display()
+        )))
+    })?;
+    Ok(!submodule_path_registered(&repo, path)?)
+}
+
+fn submodule_path_registered(repo: &gix::Repository, path: &Path) -> Result<bool> {
+    if configured_submodule_path_exists(repo, path)? {
+        return Ok(true);
+    }
+    Ok(collect_gitlinks(repo)?.contains_key(path))
+}
+
+fn configured_submodule_path_exists(repo: &gix::Repository, path: &Path) -> Result<bool> {
+    let Some(submodules) = repo
+        .submodules()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    else {
+        return Ok(false);
+    };
+
+    for submodule in submodules {
+        let relative_path = submodule
+            .path()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
+            .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
+        if relative_path == path {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn cleanup_failed_submodule_add_leftovers(
+    workdir: &Path,
+    git_dir: &Path,
+    path: &Path,
+    logical_name: &Path,
+) -> Result<()> {
+    remove_failed_submodule_checkout(workdir, git_dir, path, logical_name)?;
+    cleanup_removed_submodule_metadata(workdir, git_dir, logical_name)
+}
+
 fn cleanup_removed_submodule_metadata(
     workdir: &Path,
     git_dir: &Path,
@@ -400,6 +493,100 @@ fn cleanup_removed_submodule_metadata(
     remove_local_submodule_config_section_if_present(workdir, logical_name)?;
     remove_submodule_git_dir(git_dir, logical_name)?;
     Ok(())
+}
+
+fn remove_failed_submodule_checkout(
+    workdir: &Path,
+    git_dir: &Path,
+    submodule_path: &Path,
+    logical_name: &Path,
+) -> Result<()> {
+    let checkout_path = submodule_worktree_path(workdir, submodule_path)?;
+    if !checkout_path.exists() {
+        return Ok(());
+    }
+
+    let expected_git_dir = canonicalize_or_original(git_dir.join("modules").join(logical_name));
+    let Some(actual_git_dir) = checkout_git_dir_reference(&checkout_path)? else {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "refusing to remove failed submodule checkout {} because it is not linked to {}",
+            checkout_path.display(),
+            expected_git_dir.display()
+        ))));
+    };
+
+    if actual_git_dir != expected_git_dir {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "refusing to remove failed submodule checkout {} because it points to {} instead of {}",
+            checkout_path.display(),
+            actual_git_dir.display(),
+            expected_git_dir.display()
+        ))));
+    }
+
+    fs::remove_dir_all(&checkout_path).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "remove failed submodule checkout {}: {e}",
+            checkout_path.display()
+        )))
+    })
+}
+
+fn submodule_worktree_path(workdir: &Path, submodule_path: &Path) -> Result<PathBuf> {
+    if submodule_path.is_absolute() {
+        if submodule_path.starts_with(workdir) {
+            return Ok(submodule_path.to_path_buf());
+        }
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "refusing to clean failed submodule add outside repository workdir: {}",
+            submodule_path.display()
+        ))));
+    }
+    Ok(workdir.join(submodule_path))
+}
+
+fn checkout_git_dir_reference(checkout_path: &Path) -> Result<Option<PathBuf>> {
+    let dot_git = checkout_path.join(".git");
+    let metadata = match fs::metadata(&dot_git) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(Error::new(ErrorKind::Io(err.kind()))),
+    };
+
+    if metadata.is_dir() {
+        return Ok(Some(canonicalize_or_original(dot_git)));
+    }
+
+    let bytes = fs::read(&dot_git).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let text = bytes_to_text_preserving_utf8(&bytes);
+    let Some(git_dir) = text.strip_prefix("gitdir:") else {
+        return Ok(None);
+    };
+
+    let git_dir = PathBuf::from(git_dir.trim());
+    let resolved = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        checkout_path.join(git_dir)
+    };
+    Ok(Some(canonicalize_or_original(resolved)))
+}
+
+fn append_failed_submodule_add_note(err: Error, note: &str) -> Error {
+    match err.kind() {
+        ErrorKind::Git(failure) => Error::new(ErrorKind::Git(GitFailure::new(
+            failure.command(),
+            failure.id(),
+            failure.exit_code(),
+            failure.stdout().to_vec(),
+            failure.stderr().to_vec(),
+            Some(match failure.detail() {
+                Some(detail) if !detail.is_empty() => format!("{detail}\n\n{note}"),
+                _ => note.to_string(),
+            }),
+        ))),
+        _ => Error::new(ErrorKind::Backend(format!("{err}\n\n{note}"))),
+    }
 }
 
 fn remove_local_submodule_config_section_if_present(
@@ -623,17 +810,57 @@ fn persist_submodule_trust_approvals(
     trust_root: &Path,
     approved_sources: &[SubmoduleTrustTarget],
 ) -> Result<()> {
+    const GIT_CONFIG_LOCK_RETRIES: usize = 6;
+
     for source in approved_sources {
         let key = submodule_file_transport_consent_key(trust_root, &source.local_source_path);
         if git_config_get_bool_global(trust_root, &key)?.unwrap_or(false) {
             continue;
         }
 
-        let mut cmd = git_workdir_cmd_for(trust_root);
-        cmd.arg("config").arg("--global").arg(&key).arg("true");
-        run_git_simple(cmd, &format!("git config --global {key} true"))?;
+        let mut last_err = None;
+        for attempt in 0..GIT_CONFIG_LOCK_RETRIES {
+            let mut cmd = git_workdir_cmd_for(trust_root);
+            cmd.arg("config").arg("--global").arg(&key).arg("true");
+            match run_git_simple(cmd, &format!("git config --global {key} true")) {
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(err) => {
+                    if git_config_get_bool_global(trust_root, &key)?.unwrap_or(false) {
+                        last_err = None;
+                        break;
+                    }
+                    let retryable =
+                        attempt + 1 < GIT_CONFIG_LOCK_RETRIES && is_git_config_lock_error(&err);
+                    last_err = Some(err);
+                    if retryable {
+                        thread::sleep(Duration::from_millis(25));
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        if let Some(err) = last_err {
+            return Err(err);
+        }
     }
     Ok(())
+}
+
+fn is_git_config_lock_error(err: &Error) -> bool {
+    let text = match err.kind() {
+        ErrorKind::Git(failure) => format!(
+            "{}{}{}",
+            failure.detail().unwrap_or_default(),
+            String::from_utf8_lossy(failure.stderr()),
+            String::from_utf8_lossy(failure.stdout())
+        ),
+        _ => err.to_string(),
+    };
+    text.contains("could not lock config file")
 }
 
 fn submodule_source_trusted(trust_root: &Path, source: &SubmoduleTrustTarget) -> Result<bool> {
