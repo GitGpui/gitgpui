@@ -80,7 +80,7 @@ pub(super) fn panel(
                     }),
                 ),
         )
-        .children(sources.iter().cloned().map(|source| {
+        .children(sources.into_iter().map(|source| {
             div()
                 .px_2()
                 .pb_1()
@@ -100,7 +100,7 @@ pub(super) fn panel(
                     div()
                         .text_sm()
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                        .child(source.display_source.clone()),
+                        .child(source.display_source),
                 )
                 .child(
                     div()
@@ -182,7 +182,7 @@ pub(super) fn panel(
                                     });
                                     this.submodule_path_input.update(cx, |input, cx| {
                                         input.set_theme(theme, cx);
-                                        input.set_text(&path.display().to_string(), cx);
+                                        input.set_text(path.display().to_string(), cx);
                                         cx.notify();
                                     });
                                     this.submodule_branch_input.update(cx, move |input, cx| {

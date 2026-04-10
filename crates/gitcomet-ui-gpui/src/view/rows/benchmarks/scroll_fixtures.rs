@@ -872,6 +872,7 @@ impl KeyboardStageUnstageToggleFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             paths,
             toggle_events: toggle_events.max(1),

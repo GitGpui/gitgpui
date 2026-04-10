@@ -79,6 +79,16 @@ fn run_with_git_auth<R>(
     }
 }
 
+pub(super) struct AddSubmoduleRequest {
+    pub(super) url: String,
+    pub(super) path: PathBuf,
+    pub(super) branch: Option<String>,
+    pub(super) name: Option<String>,
+    pub(super) force: bool,
+    pub(super) approved_sources: Vec<SubmoduleTrustTarget>,
+    pub(super) auth: Option<StagedGitAuth>,
+}
+
 pub(super) fn schedule_save_worktree_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -231,14 +241,17 @@ pub(super) fn schedule_add_submodule(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
-    url: String,
-    path: PathBuf,
-    branch: Option<String>,
-    name: Option<String>,
-    force: bool,
-    approved_sources: Vec<SubmoduleTrustTarget>,
-    auth: Option<StagedGitAuth>,
+    request: AddSubmoduleRequest,
 ) {
+    let AddSubmoduleRequest {
+        url,
+        path,
+        branch,
+        name,
+        force,
+        approved_sources,
+        auth,
+    } = request;
     let command_url = url.clone();
     let command_path = path.clone();
     let command_branch = branch.clone();

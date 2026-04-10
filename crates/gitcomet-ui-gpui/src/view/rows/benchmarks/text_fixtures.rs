@@ -53,6 +53,7 @@ impl StagingFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             paths,
             scenario: StagingScenario::StageAll,
@@ -85,6 +86,7 @@ impl StagingFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             paths,
             scenario: StagingScenario::UnstageAll,
@@ -118,6 +120,7 @@ impl StagingFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             paths,
             scenario: StagingScenario::Interleaved,
@@ -425,6 +428,7 @@ fn build_undo_redo_baseline(region_count: usize) -> (AppState, RepoPath) {
         notifications: Vec::new(),
         banner_error: None,
         auth_prompt: None,
+        submodule_trust_prompt: None,
     };
 
     (baseline, conflict_path)

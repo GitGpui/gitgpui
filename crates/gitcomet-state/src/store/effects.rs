@@ -285,13 +285,15 @@ pub(super) fn schedule_effect(
                 repos,
                 msg_tx,
                 repo_id,
-                url,
-                path,
-                branch,
-                name,
-                force,
-                approved_sources,
-                auth,
+                repo_commands::AddSubmoduleRequest {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                    approved_sources,
+                    auth,
+                },
             );
         }
         Effect::UpdateSubmodules {

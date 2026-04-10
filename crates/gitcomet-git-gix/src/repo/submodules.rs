@@ -114,13 +114,7 @@ impl GixRepo {
         persist_submodule_trust_approvals(&trust_root, approved_sources)?;
 
         let mut outputs = Vec::new();
-        update_repo_submodules_recursive(
-            &repo,
-            &trust_root,
-            Path::new(""),
-            approved_sources,
-            &mut outputs,
-        )?;
+        update_repo_submodules_recursive(&repo, &trust_root, Path::new(""), &mut outputs)?;
 
         if outputs.is_empty() {
             Ok(CommandOutput::empty_success(
@@ -266,10 +260,9 @@ fn collect_repo_untrusted_submodule_sources(
         let full_path = prefix.join(&relative_path);
 
         if let Some(target) = trust_target_from_submodule(current_workdir, &full_path, &submodule)?
+            && !submodule_source_trusted(trust_root, &target)?
         {
-            if !submodule_source_trusted(trust_root, &target)? {
-                out.insert(full_path.clone(), target);
-            }
+            out.insert(full_path.clone(), target);
         }
 
         if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
@@ -284,7 +277,6 @@ fn update_repo_submodules_recursive(
     repo: &gix::Repository,
     trust_root: &Path,
     prefix: &Path,
-    approved_sources: &[SubmoduleTrustTarget],
     outputs: &mut Vec<CommandOutput>,
 ) -> Result<()> {
     let Some(submodules) = repo
@@ -323,13 +315,7 @@ fn update_repo_submodules_recursive(
         )?);
 
         if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
-            update_repo_submodules_recursive(
-                &nested_repo,
-                trust_root,
-                &full_path,
-                approved_sources,
-                outputs,
-            )?;
+            update_repo_submodules_recursive(&nested_repo, trust_root, &full_path, outputs)?;
         }
     }
 
@@ -621,11 +607,11 @@ fn resolve_local_file_transport_path(
     url: &gix::Url,
 ) -> Result<PathBuf> {
     let mut path = pathbuf_from_gix_path(url.path.as_ref())?;
-    if let Some(host) = url.host.as_deref() {
-        if !host.eq_ignore_ascii_case("localhost") {
-            let host_path = PathBuf::from(format!("//{host}")).join(&path);
-            path = host_path;
-        }
+    if let Some(host) = url.host.as_deref()
+        && !host.eq_ignore_ascii_case("localhost")
+    {
+        let host_path = PathBuf::from(format!("//{host}")).join(&path);
+        path = host_path;
     }
     if path.is_relative() {
         path = current_repo_workdir.join(path);

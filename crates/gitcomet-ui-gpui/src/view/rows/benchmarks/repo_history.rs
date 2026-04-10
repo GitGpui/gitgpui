@@ -997,6 +997,7 @@ impl RepoSwitchFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             target_repo_id: RepoId(1),
         }
@@ -1038,6 +1039,7 @@ impl RepoSwitchFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             target_repo_id: RepoId(2),
         }
@@ -1079,6 +1081,7 @@ impl RepoSwitchFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             target_repo_id: RepoId(2),
         }
@@ -1122,6 +1125,7 @@ impl RepoSwitchFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             target_repo_id: RepoId(u64::try_from(TAB_COUNT).unwrap_or(u64::MAX)),
         }
@@ -1165,6 +1169,7 @@ impl RepoSwitchFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             target_repo_id: RepoId(u64::try_from(REPO_COUNT).unwrap_or(u64::MAX)),
         }
@@ -1211,6 +1216,7 @@ impl RepoSwitchFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             target_repo_id: RepoId(2),
         }
@@ -1257,6 +1263,7 @@ impl RepoSwitchFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             target_repo_id: RepoId(2),
         }
@@ -1311,6 +1318,7 @@ impl RepoSwitchFixture {
                 notifications: Vec::new(),
                 banner_error: None,
                 auth_prompt: None,
+                submodule_trust_prompt: None,
             },
             target_repo_id: RepoId(2),
         }
