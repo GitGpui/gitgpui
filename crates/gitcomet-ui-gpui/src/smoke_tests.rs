@@ -11,8 +11,7 @@ use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
     ClipboardItem, Decorations, KeyBinding, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
-    Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Tiling, WindowDecorations,
-    div, px,
+    Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Tiling, div, px,
 };
 use std::path::Path;
 use std::path::PathBuf;
@@ -1945,10 +1944,7 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::TestAppContext) {
-    if cfg!(target_os = "macos")
-        || crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform()
-            == WindowDecorations::Server
-    {
+    if cfg!(target_os = "macos") {
         return;
     }
 
@@ -2022,10 +2018,7 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
 
 #[gpui::test]
 fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContext) {
-    if cfg!(target_os = "macos")
-        || crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform()
-            == WindowDecorations::Server
-    {
+    if cfg!(target_os = "macos") {
         // The custom Min/Max/Close controls are only rendered on non-macOS.
         return;
     }

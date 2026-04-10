@@ -5,7 +5,7 @@ const WL_COMPOSITOR_MIN_VERSION: u32 = 3;
 const WL_SHM_MIN_VERSION: u32 = 1;
 const WL_SEAT_MIN_VERSION: u32 = 5;
 const WL_OUTPUT_MIN_VERSION: u32 = 2;
-const XDG_WM_BASE_MIN_VERSION: u32 = 2;
+const XDG_WM_BASE_MIN_VERSION: u32 = 1;
 
 #[cfg(target_os = "linux")]
 const LINUX_X11_RELAUNCH_ENV: &str = "GITCOMET_SKIP_LINUX_X11_RELAUNCH";

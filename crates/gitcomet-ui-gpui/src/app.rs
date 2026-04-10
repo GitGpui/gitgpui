@@ -383,9 +383,7 @@ fn open_gitcomet_window(
                 traffic_light_position: Some(point(px(9.0), px(9.0))),
             }),
             app_id: Some(app_id),
-            window_decorations: Some(
-                crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform(),
-            ),
+            window_decorations: Some(WindowDecorations::Client),
             is_movable: true,
             is_resizable: true,
             ..Default::default()
@@ -1254,20 +1252,6 @@ mod tests {
             window_menu_position(point(px(12.4), px(7.6)), 1.25),
             (16, 10)
         );
-    }
-
-    #[test]
-    fn main_window_prefers_platform_window_decorations() {
-        let expected =
-            crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform();
-        #[cfg(target_os = "linux")]
-        assert_eq!(
-            expected,
-            crate::linux_gui_env::LinuxGuiEnvironment::detect().preferred_window_decorations()
-        );
-
-        #[cfg(not(target_os = "linux"))]
-        assert_eq!(expected, WindowDecorations::Client);
     }
 
     struct KeyBindingProbe {

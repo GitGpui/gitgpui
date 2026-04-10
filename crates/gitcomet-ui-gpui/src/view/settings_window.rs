@@ -169,9 +169,7 @@ fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
         )),
         titlebar: Some(settings_window_titlebar_options()),
         app_id: Some("gitcomet-settings".into()),
-        window_decorations: Some(
-            crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform(),
-        ),
+        window_decorations: Some(WindowDecorations::Client),
         is_movable: true,
         is_resizable: true,
         ..Default::default()
@@ -2475,7 +2473,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_window_options_request_platform_chrome_and_resize_behavior() {
+    fn settings_window_options_request_client_chrome_and_resize_behavior() {
         let bounds = Bounds::new(
             point(px(12.0), px(24.0)),
             size(
@@ -2500,10 +2498,8 @@ mod tests {
         );
         assert_eq!(
             options.window_decorations,
-            Some(
-                crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform(),
-            ),
-            "settings window should request the shared platform decoration policy"
+            Some(WindowDecorations::Client),
+            "settings window should request client-side decorations"
         );
         assert!(
             options.is_movable,
@@ -2821,10 +2817,7 @@ mod tests {
 
     #[gpui::test]
     fn non_macos_settings_window_renders_custom_chrome_controls(cx: &mut gpui::TestAppContext) {
-        if cfg!(target_os = "macos")
-            || crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform()
-                == WindowDecorations::Server
-        {
+        if cfg!(target_os = "macos") {
             return;
         }
 
@@ -2869,10 +2862,7 @@ mod tests {
     fn linux_settings_window_close_button_closes_only_the_settings_window(
         cx: &mut gpui::TestAppContext,
     ) {
-        if !cfg!(any(target_os = "linux", target_os = "freebsd"))
-            || crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform()
-                == WindowDecorations::Server
-        {
+        if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
             return;
         }
 
