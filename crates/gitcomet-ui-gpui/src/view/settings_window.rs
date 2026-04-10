@@ -169,7 +169,9 @@ fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
         )),
         titlebar: Some(settings_window_titlebar_options()),
         app_id: Some("gitcomet-settings".into()),
-        window_decorations: Some(WindowDecorations::Client),
+        window_decorations: Some(
+            crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform(),
+        ),
         is_movable: true,
         is_resizable: true,
         ..Default::default()
@@ -1325,6 +1327,10 @@ impl Render for SettingsWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let decorations = window.window_decorations();
+        let show_custom_window_chrome =
+            crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
+                decorations,
+            );
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (Some(tiling), settings_window_client_inset()),
             Decorations::Server => (None, px(0.0)),
@@ -2149,9 +2155,13 @@ impl Render for SettingsWindowView {
                 weight: gpui::FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_color(theme.colors.text)
-            .child(header)
-            .child(content);
+            .text_color(theme.colors.text);
+
+        let body = if show_custom_window_chrome {
+            body.child(header).child(content)
+        } else {
+            body.child(content)
+        };
 
         let mut root = div()
             .size_full()
@@ -2465,7 +2475,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_window_options_request_client_chrome_and_resize_behavior() {
+    fn settings_window_options_request_platform_chrome_and_resize_behavior() {
         let bounds = Bounds::new(
             point(px(12.0), px(24.0)),
             size(
@@ -2490,8 +2500,10 @@ mod tests {
         );
         assert_eq!(
             options.window_decorations,
-            Some(WindowDecorations::Client),
-            "settings window should request client-side decorations"
+            Some(
+                crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform(),
+            ),
+            "settings window should request the shared platform decoration policy"
         );
         assert!(
             options.is_movable,
@@ -2809,7 +2821,10 @@ mod tests {
 
     #[gpui::test]
     fn non_macos_settings_window_renders_custom_chrome_controls(cx: &mut gpui::TestAppContext) {
-        if cfg!(target_os = "macos") {
+        if cfg!(target_os = "macos")
+            || crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform()
+                == WindowDecorations::Server
+        {
             return;
         }
 
@@ -2854,7 +2869,10 @@ mod tests {
     fn linux_settings_window_close_button_closes_only_the_settings_window(
         cx: &mut gpui::TestAppContext,
     ) {
-        if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        if !cfg!(any(target_os = "linux", target_os = "freebsd"))
+            || crate::linux_gui_env::LinuxGuiEnvironment::preferred_window_decorations_for_current_platform()
+                == WindowDecorations::Server
+        {
             return;
         }
 
@@ -3144,11 +3162,7 @@ mod tests {
                 (
                     absolute_scroll_y(&settings.settings_window_scroll),
                     uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).1,
-                    settings
-                        .settings_window_scroll
-                        .max_offset()
-                        .y
-                        .max(px(0.0)),
+                    settings.settings_window_scroll.max_offset().y.max(px(0.0)),
                     uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).2,
                 )
             })

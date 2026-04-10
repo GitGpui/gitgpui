@@ -1,4 +1,4 @@
-use gpui::Decorations;
+use gpui::{Decorations, WindowDecorations};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct LinuxGuiEnvironment {
@@ -44,8 +44,37 @@ impl LinuxGuiEnvironment {
         self.has_x11 || (self.has_wayland && self.has_xdg_runtime_dir)
     }
 
+    pub(crate) fn prefers_server_window_decorations(&self) -> bool {
+        cfg!(target_os = "linux") && self.is_wsl && self.has_x11 && !self.has_wayland
+    }
+
+    pub(crate) fn preferred_window_decorations(&self) -> WindowDecorations {
+        if self.prefers_server_window_decorations() {
+            WindowDecorations::Server
+        } else {
+            WindowDecorations::Client
+        }
+    }
+
+    pub(crate) fn preferred_window_decorations_for_current_platform() -> WindowDecorations {
+        #[cfg(target_os = "linux")]
+        {
+            return Self::detect().preferred_window_decorations();
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            WindowDecorations::Client
+        }
+    }
+
+    pub(crate) fn should_render_custom_window_chrome(decorations: Decorations) -> bool {
+        !cfg!(any(target_os = "linux", target_os = "freebsd"))
+            || !matches!(decorations, Decorations::Server)
+    }
+
     pub(crate) fn should_suppress_custom_window_frame(decorations: Decorations) -> bool {
-        !cfg!(target_os = "macos") && matches!(decorations, Decorations::Server)
+        !Self::should_render_custom_window_chrome(decorations)
     }
 
     #[cfg(any(target_os = "linux", test))]
@@ -126,10 +155,40 @@ mod tests {
 
     #[test]
     fn suppresses_custom_window_frame_for_server_decorations() {
-        assert!(LinuxGuiEnvironment::should_suppress_custom_window_frame(
-            Decorations::Server
-        ));
+        assert_eq!(
+            LinuxGuiEnvironment::should_suppress_custom_window_frame(Decorations::Server),
+            cfg!(any(target_os = "linux", target_os = "freebsd"))
+        );
         assert!(!LinuxGuiEnvironment::should_suppress_custom_window_frame(
+            Decorations::Client {
+                tiling: Tiling::default(),
+            }
+        ));
+    }
+
+    #[test]
+    fn wsl_x11_only_sessions_prefer_server_window_decorations() {
+        let env = LinuxGuiEnvironment::from_sources(true, true, false, false);
+        let expected = cfg!(target_os = "linux");
+        assert_eq!(env.prefers_server_window_decorations(), expected);
+        assert_eq!(
+            env.preferred_window_decorations(),
+            if expected {
+                WindowDecorations::Server
+            } else {
+                WindowDecorations::Client
+            }
+        );
+    }
+
+    #[test]
+    fn custom_window_chrome_is_hidden_for_server_decorations() {
+        let expected = !cfg!(any(target_os = "linux", target_os = "freebsd"));
+        assert_eq!(
+            LinuxGuiEnvironment::should_render_custom_window_chrome(Decorations::Server),
+            expected
+        );
+        assert!(LinuxGuiEnvironment::should_render_custom_window_chrome(
             Decorations::Client {
                 tiling: Tiling::default(),
             }

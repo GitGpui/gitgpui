@@ -21,8 +21,8 @@ use gpui::{
     Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId,
     IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
     Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling,
-    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill,
-    point, px, relative, size, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill, point, px,
+    relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 #[cfg(test)]
@@ -1505,6 +1505,10 @@ impl Render for GitCometView {
 
         let center_content = self.center_content(window, cx);
         let font_features = crate::font_preferences::current_font_features(cx);
+        let show_custom_window_chrome =
+            crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
+                decorations,
+            );
 
         let mut body = div()
             .flex()
@@ -1520,9 +1524,13 @@ impl Render for GitCometView {
                 weight: gpui::FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_color(theme.colors.text)
-            .child(self.title_bar.clone())
-            .child(center_content);
+            .text_color(theme.colors.text);
+
+        if show_custom_window_chrome {
+            body = body.child(self.title_bar.clone());
+        }
+
+        body = body.child(center_content);
 
         if let Some(report) = self.startup_crash_report.clone()
             && self.view_mode == GitCometViewMode::Normal
