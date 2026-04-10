@@ -11,6 +11,7 @@ use gitcomet_core::services::{
 };
 use gix::bstr::ByteSlice as _;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -131,6 +132,12 @@ impl GixRepo {
     }
 
     pub(super) fn remove_submodule_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
+        let repo = self.reopen_repo()?;
+        let workdir = repo_workdir_for_submodule_trust(&repo).to_path_buf();
+        let git_dir = repo.git_dir().to_path_buf();
+        let logical_name =
+            resolve_submodule_logical_name(&repo, path)?.unwrap_or_else(|| path.to_path_buf());
+
         let mut cmd1 = self.git_workdir_cmd();
         cmd1.arg("submodule")
             .arg("deinit")
@@ -143,6 +150,13 @@ impl GixRepo {
         let mut cmd2 = self.git_workdir_cmd();
         cmd2.arg("rm").arg("-f").arg("--").arg(path);
         let out2 = run_git_with_output(cmd2, &format!("git rm -f {}", path.display()))?;
+
+        cleanup_removed_submodule_metadata(&workdir, &git_dir, &logical_name).map_err(|err| {
+            Error::new(ErrorKind::Backend(format!(
+                "Removed submodule '{}' from the worktree and index, but failed to clean metadata: {err}",
+                path.display()
+            )))
+        })?;
 
         Ok(CommandOutput {
             command: format!("Remove submodule {}", path.display()),
@@ -369,6 +383,122 @@ fn configured_submodule_row(
         },
         Some(nested_repo),
     ))
+}
+
+fn resolve_submodule_logical_name(repo: &gix::Repository, path: &Path) -> Result<Option<PathBuf>> {
+    let Some(submodules) = repo
+        .submodules()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    else {
+        return Ok(None);
+    };
+
+    for submodule in submodules {
+        let relative_path = submodule
+            .path()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
+            .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
+        if relative_path == path {
+            return pathbuf_from_gix_path(submodule.name()).map(Some);
+        }
+    }
+
+    Ok(None)
+}
+
+fn cleanup_removed_submodule_metadata(
+    workdir: &Path,
+    git_dir: &Path,
+    logical_name: &Path,
+) -> Result<()> {
+    remove_local_submodule_config_section_if_present(workdir, logical_name)?;
+    remove_submodule_git_dir(git_dir, logical_name)?;
+    Ok(())
+}
+
+fn remove_local_submodule_config_section_if_present(
+    workdir: &Path,
+    logical_name: &Path,
+) -> Result<()> {
+    let Some(logical_name) = logical_name.to_str() else {
+        return Err(Error::new(ErrorKind::Unsupported(
+            "submodule logical name is not valid UTF-8",
+        )));
+    };
+    let section = format!("submodule.{logical_name}");
+
+    let mut cmd = git_workdir_cmd_for(workdir);
+    cmd.arg("config")
+        .arg("--local")
+        .arg("--remove-section")
+        .arg(&section);
+    let output = cmd
+        .output()
+        .map_err(|err| Error::new(ErrorKind::Io(err.kind())))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = bytes_to_text_preserving_utf8(&output.stderr);
+    if stderr.contains("no such section") {
+        return Ok(());
+    }
+
+    Err(Error::new(ErrorKind::Backend(format!(
+        "git config --local --remove-section {section} failed: {}",
+        stderr.trim()
+    ))))
+}
+
+fn remove_submodule_git_dir(git_dir: &Path, logical_name: &Path) -> Result<()> {
+    let modules_root = git_dir.join("modules");
+    let module_dir = modules_root.join(logical_name);
+    if !module_dir.exists() {
+        return Ok(());
+    }
+
+    fs::remove_dir_all(&module_dir).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "remove submodule git dir {}: {e}",
+            module_dir.display()
+        )))
+    })?;
+    prune_empty_module_parent_dirs(&modules_root, &module_dir)
+}
+
+fn prune_empty_module_parent_dirs(modules_root: &Path, removed_dir: &Path) -> Result<()> {
+    let mut current = removed_dir.parent();
+    while let Some(dir) = current {
+        if dir == modules_root || !dir.starts_with(modules_root) {
+            break;
+        }
+
+        let mut entries = fs::read_dir(dir).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "read module metadata dir {}: {e}",
+                dir.display()
+            )))
+        })?;
+        match entries.next() {
+            None => {
+                fs::remove_dir(dir).map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "remove empty module metadata dir {}: {e}",
+                        dir.display()
+                    )))
+                })?;
+                current = dir.parent();
+            }
+            Some(Ok(_)) => break,
+            Some(Err(e)) => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "read module metadata dir entry {}: {e}",
+                    dir.display()
+                ))));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn collect_gitlinks(repo: &gix::Repository) -> Result<BTreeMap<PathBuf, GitlinkIndexState>> {

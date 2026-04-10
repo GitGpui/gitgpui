@@ -43,6 +43,78 @@ fn git_stdout(repo: &Path, args: &[&str]) -> String {
         .to_string()
 }
 
+fn local_submodule_config_entries(repo: &Path) -> Vec<String> {
+    let output = git_output(repo, &["config", "--list", "--local"]);
+    assert!(output.status.success(), "git config --list --local failed");
+    String::from_utf8(output.stdout)
+        .expect("git stdout is utf-8")
+        .lines()
+        .filter(|line| line.starts_with("submodule."))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn add_submodule_raw(parent_repo: &Path, sub_repo: &Path, path: &Path, name: Option<&str>) {
+    let mut cmd = git_command();
+    cmd.arg("-C")
+        .arg(parent_repo)
+        .arg("-c")
+        .arg("protocol.file.allow=always")
+        .arg("submodule")
+        .arg("add");
+    if let Some(name) = name {
+        cmd.arg("--name").arg(name);
+    }
+    let status = cmd
+        .arg(sub_repo)
+        .arg(path)
+        .status()
+        .expect("git submodule add to run");
+    assert!(status.success(), "git submodule add failed");
+}
+
+fn run_git_with_path(repo: &Path, args: &[&str], path: &Path) {
+    let status = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .arg(path)
+        .status()
+        .expect("git command to run");
+    assert!(status.success(), "git {:?} {:?} failed", args, path);
+}
+
+fn create_stale_submodule_git_dir(
+    parent_repo: &Path,
+    sub_repo: &Path,
+    path: &Path,
+    name: Option<&str>,
+) {
+    add_submodule_raw(parent_repo, sub_repo, path, name);
+    run_git(
+        parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
+    );
+    run_git_with_path(parent_repo, &["submodule", "deinit", "-f", "--"], path);
+    run_git_with_path(parent_repo, &["rm", "-f", "--"], path);
+    run_git(
+        parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "remove submodule",
+        ],
+    );
+}
+
 fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
     run_git(repo, &["init"]);
     run_git(repo, &["config", "user.email", "you@example.com"]);
@@ -587,6 +659,9 @@ fn submodule_add_update_remove_round_trip() {
         .expect("list submodules after remove");
     assert!(listed_after_remove.is_empty());
     assert!(!parent_repo.join("mods/sub-one").exists());
+    assert!(local_submodule_config_entries(&parent_repo).is_empty());
+    assert!(!parent_repo.join(".git/modules/mods/sub-one").exists());
+    assert!(!parent_repo.join(".git/modules/mods").exists());
 }
 
 #[test]
@@ -738,9 +813,15 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
     init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
     init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
 
+    let submodule_path = Path::new("sm");
+    create_stale_submodule_git_dir(&parent_repo, &sub_repo, submodule_path, None);
+    assert!(
+        parent_repo.join(".git/modules/sm").exists(),
+        "expected stale local submodule git dir"
+    );
+
     let backend = GixBackend;
     let opened = backend.open(&parent_repo).expect("open parent repository");
-    let submodule_path = Path::new("sm");
     let approved_sources = match opened
         .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
         .expect("check local submodule trust")
@@ -749,45 +830,6 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
         other => panic!("expected trust prompt for local submodule, got {other:?}"),
     };
 
-    opened
-        .add_submodule_with_output(
-            sub_repo.to_string_lossy().as_ref(),
-            submodule_path,
-            None,
-            None,
-            false,
-            &approved_sources,
-        )
-        .expect("add initial submodule");
-    run_git(
-        &parent_repo,
-        &[
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-m",
-            "add submodule",
-        ],
-    );
-
-    opened
-        .remove_submodule_with_output(submodule_path)
-        .expect("remove submodule");
-    run_git(
-        &parent_repo,
-        &[
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-m",
-            "remove submodule",
-        ],
-    );
-    assert!(
-        parent_repo.join(".git/modules/sm").exists(),
-        "expected stale local submodule git dir"
-    );
-
     let err = opened
         .add_submodule_with_output(
             sub_repo.to_string_lossy().as_ref(),
@@ -795,7 +837,7 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
             None,
             None,
             false,
-            &[],
+            &approved_sources,
         )
         .expect_err("add without custom name or force should fail");
     let rendered = err.to_string();
@@ -813,7 +855,7 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
             None,
             Some("sm-renamed"),
             false,
-            &[],
+            &approved_sources,
         )
         .expect("add submodule with custom logical name");
     assert_eq!(add_output.exit_code, Some(0));
@@ -835,9 +877,15 @@ fn add_submodule_supports_force_for_local_git_dir_collision() {
     init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
     init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
 
+    let submodule_path = Path::new("sm");
+    create_stale_submodule_git_dir(&parent_repo, &sub_repo, submodule_path, None);
+    assert!(
+        parent_repo.join(".git/modules/sm").exists(),
+        "expected stale local submodule git dir"
+    );
+
     let backend = GixBackend;
     let opened = backend.open(&parent_repo).expect("open parent repository");
-    let submodule_path = Path::new("sm");
     let approved_sources = match opened
         .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
         .expect("check local submodule trust")
@@ -846,16 +894,40 @@ fn add_submodule_supports_force_for_local_git_dir_collision() {
         other => panic!("expected trust prompt for local submodule, got {other:?}"),
     };
 
-    opened
+    let add_output = opened
         .add_submodule_with_output(
             sub_repo.to_string_lossy().as_ref(),
             submodule_path,
             None,
             None,
-            false,
+            true,
             &approved_sources,
         )
-        .expect("add initial submodule");
+        .expect("add submodule with force");
+    assert_eq!(add_output.exit_code, Some(0));
+}
+
+#[test]
+fn remove_submodule_cleans_custom_logical_name_metadata() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    add_submodule_raw(
+        &parent_repo,
+        &sub_repo,
+        Path::new("mods/sub"),
+        Some("custom"),
+    );
     run_git(
         &parent_repo,
         &[
@@ -867,33 +939,12 @@ fn add_submodule_supports_force_for_local_git_dir_collision() {
         ],
     );
 
-    opened
-        .remove_submodule_with_output(submodule_path)
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let remove_output = opened
+        .remove_submodule_with_output(Path::new("mods/sub"))
         .expect("remove submodule");
-    run_git(
-        &parent_repo,
-        &[
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-m",
-            "remove submodule",
-        ],
-    );
-    assert!(
-        parent_repo.join(".git/modules/sm").exists(),
-        "expected stale local submodule git dir"
-    );
-
-    let add_output = opened
-        .add_submodule_with_output(
-            sub_repo.to_string_lossy().as_ref(),
-            submodule_path,
-            None,
-            None,
-            true,
-            &[],
-        )
-        .expect("add submodule with force");
-    assert_eq!(add_output.exit_code, Some(0));
+    assert_eq!(remove_output.exit_code, Some(0));
+    assert!(local_submodule_config_entries(&parent_repo).is_empty());
+    assert!(!parent_repo.join(".git/modules/custom").exists());
 }
