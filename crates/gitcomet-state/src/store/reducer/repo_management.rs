@@ -8,7 +8,7 @@ use super::util::{
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
-    CloneProgressStage, DiagnosticKind, Loadable, RepoId, RepoState,
+    CloneProgressStage, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight, RepoState,
 };
 use crate::msg::Effect;
 use crate::session;
@@ -66,6 +66,23 @@ fn persist_session_effect(
     action: &'static str,
 ) -> Effect {
     Effect::PersistSession { repo_id, action }
+}
+
+fn append_repo_switch_worktree_refresh_effect(
+    repo_state: &mut RepoState,
+    effects: &mut SetActiveRepoEffects,
+) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREES)
+    {
+        if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
+            repo_state.set_worktrees(Loadable::Loading);
+        }
+        effects.push(Effect::LoadWorktrees {
+            repo_id: repo_state.id,
+        });
+    }
 }
 
 pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBuf) -> Vec<Effect> {
@@ -262,7 +279,20 @@ pub(super) fn fill_set_active_repo_inline(
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
 
     let repo_state = &mut state.repos[repo_ix];
+
+    // Session-restore placeholders and repos still opening do not have a backend handle yet.
+    // Defer handle-dependent refreshes until RepoOpenedOk installs the handle and schedules the
+    // initial refresh for the active repo.
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        repo_state.last_active_at = Some(now);
+        if let Some(effect) = persist_effect {
+            effects.push(effect);
+        }
+        return;
+    }
+
     let use_full_refresh = changed && !repo_switch_can_use_primary_refresh(repo_state, now);
+    repo_state.last_active_at = Some(now);
 
     // Reload the selected diff when switching repos; steady-state refreshes rely on the
     // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
@@ -286,8 +316,10 @@ pub(super) fn fill_set_active_repo_inline(
     // On focus events the UI can re-send SetActiveRepo for the already-active repo. Avoid
     // re-running the full refresh fan-out in that case: prioritize the minimum set that
     // keeps the UI correct and responsive.
-    let extra_effect_capacity =
-        usize::from(selected_diff_reload.is_some()) + usize::from(persist_effect.is_some());
+    let extra_effect_capacity = usize::from(selected_diff_reload.is_some())
+        + usize::from(persist_effect.is_some())
+        + usize::from(changed)
+        + usize::from(changed && !use_full_refresh);
     let base_effect_capacity = if use_full_refresh {
         refresh_full_effect_capacity()
     } else {
@@ -301,7 +333,17 @@ pub(super) fn fill_set_active_repo_inline(
     } else {
         append_refresh_primary_effects(repo_state, effects);
     }
-    repo_state.last_active_at = Some(now);
+    if changed
+        && !use_full_refresh
+        && repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::BRANCHES)
+    {
+        effects.push(Effect::LoadBranches { repo_id });
+    }
+    if changed {
+        append_repo_switch_worktree_refresh_effect(repo_state, effects);
+    }
 
     if let Some(selected_diff_reload) = selected_diff_reload {
         match selected_diff_reload {
@@ -610,8 +652,18 @@ pub(super) fn repo_opened_ok(
         clear_banner_error_for_repo(state, repo_id);
     }
 
+    let should_refresh_worktrees = state.active_repo == Some(repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        return refresh_full_effects(repo_state);
+        let mut effects = refresh_full_effects(repo_state);
+        if should_refresh_worktrees
+            && repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::WORKTREES)
+        {
+            repo_state.set_worktrees(Loadable::Loading);
+            effects.push(Effect::LoadWorktrees { repo_id });
+        }
+        return effects;
     }
 
     Vec::new()

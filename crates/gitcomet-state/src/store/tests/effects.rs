@@ -3172,6 +3172,72 @@ fn open_repo_effect_emits_repo_opened_err() {
 }
 
 #[test]
+fn worktree_and_submodule_effects_report_missing_repo_handle() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            panic!("open should not be called in this test")
+        }
+    }
+
+    let repo_id = RepoId(77);
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx.clone(),
+        Effect::LoadWorktrees { repo_id },
+    );
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadSubmodules { repo_id },
+    );
+
+    let first = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected WorktreesLoaded");
+    let second = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected SubmodulesLoaded");
+
+    match first {
+        Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+            repo_id: got_repo_id,
+            result: Err(error),
+        }) => {
+            assert_eq!(got_repo_id, repo_id);
+            assert!(
+                matches!(error.kind(), ErrorKind::Backend(message) if message.contains("Repository handle not found"))
+            );
+        }
+        _ => panic!("expected WorktreesLoaded missing-handle error"),
+    }
+
+    match second {
+        Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
+            repo_id: got_repo_id,
+            result: Err(error),
+        }) => {
+            assert_eq!(got_repo_id, repo_id);
+            assert!(
+                matches!(error.kind(), ErrorKind::Backend(message) if message.contains("Repository handle not found"))
+            );
+        }
+        _ => panic!("expected SubmodulesLoaded missing-handle error"),
+    }
+}
+
+#[test]
 fn schedule_effect_dispatches_many_variants_with_repo_present() {
     struct Backend;
     impl GitBackend for Backend {

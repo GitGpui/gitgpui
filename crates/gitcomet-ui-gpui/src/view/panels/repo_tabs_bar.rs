@@ -277,14 +277,7 @@ impl Render for RepoTabsBarView {
                     .as_ref()
                     .is_some_and(|s| s.repo_id == repo_id && s.show_spinner);
             let show_close = self.hovered_repo_tab == Some(repo_id);
-            let label: SharedString = repo
-                .spec
-                .workdir
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| path_display::path_display_string(&repo.spec.workdir))
-                .into();
+            let label = path_display::repo_path_name(&repo.spec.workdir);
             let label_for_drag = label.clone();
 
             let position = if ix == 0 {

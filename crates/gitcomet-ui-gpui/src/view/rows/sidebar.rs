@@ -1,6 +1,8 @@
 use super::*;
 use gitcomet_core::domain::LogScope;
 
+const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+
 fn worktree_paths_by_branch(repo: &RepoState) -> HashMap<String, std::path::PathBuf> {
     let Loadable::Ready(worktrees) = &repo.worktrees else {
         return HashMap::default();
@@ -780,7 +782,7 @@ impl SidebarPaneView {
                         .active(move |s| s.bg(theme.colors.active))
                         .when(top_border, |d| d.child(top_divider(theme.colors.border)))
                         .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot("icons/folder.svg", icon_primary, 14.0))
+                        .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
@@ -942,7 +944,7 @@ impl SidebarPaneView {
                         })
                         .active(move |s| s.bg(theme.colors.active))
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot("icons/folder.svg", icon_primary, 12.0))
+                        .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -1707,6 +1709,8 @@ impl SidebarPaneView {
                             workspace_row_menu_invoker.clone();
                         let workspace_path_for_menu = workspace_badge_path.clone();
                         let workspace_path_for_open = workspace_badge_path.clone();
+                        let workspace_badge_label =
+                            super::super::path_display::repo_path_name(&workspace_badge_path);
                         let worktree_badge_tooltip: SharedString =
                             workspace_badge_path.display().to_string().into();
                         let branch_name_for_click = name.to_string();
@@ -1761,8 +1765,8 @@ impl SidebarPaneView {
                                             .text_color(badge_hover_text)
                                     }
                                 })
-                                .child(svg_icon("icons/folder.svg", badge_text, 9.0))
-                                .child("Worktree")
+                                .child(svg_icon(WORKTREE_ICON_PATH, badge_text, 9.0))
+                                .child(workspace_badge_label.clone())
                                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                                     if !e.standard_click() {
                                         return;

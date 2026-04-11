@@ -160,6 +160,7 @@ pub(super) fn worktrees_loaded(
     repo_id: RepoId,
     result: std::result::Result<Vec<Worktree>, Error>,
 ) -> Vec<Effect> {
+    let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let worktrees = match result {
             Ok(v) => Loadable::Ready(v),
@@ -169,8 +170,14 @@ pub(super) fn worktrees_loaded(
             }
         };
         repo_state.set_worktrees(worktrees);
+        if repo_state
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::WORKTREES)
+        {
+            effects.push(Effect::LoadWorktrees { repo_id });
+        }
     }
-    Vec::new()
+    effects
 }
 
 pub(super) fn submodules_loaded(
@@ -338,14 +345,27 @@ pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
     repo_state.set_worktrees(Loadable::Loading);
-    vec![Effect::LoadWorktrees { repo_id }]
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREES)
+    {
+        vec![Effect::LoadWorktrees { repo_id }]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
     repo_state.set_submodules(Loadable::Loading);
     vec![Effect::LoadSubmodules { repo_id }]
 }
@@ -767,6 +787,10 @@ mod tests {
             .expect("repo not found")
     }
 
+    fn mark_repo_open_ready(state: &mut AppState, repo_id: RepoId) {
+        repo_mut(state, repo_id).set_open(Loadable::Ready(()));
+    }
+
     fn mark_pending(state: &mut AppState, repo_id: RepoId, flag: u32) {
         let repo = repo_mut(state, repo_id);
         assert!(repo.loads_in_flight.request(flag));
@@ -1070,6 +1094,7 @@ mod tests {
         let conflict_path = PathBuf::from("conflict.txt");
         let history_path = PathBuf::from("src/lib.rs");
         let blame_path = PathBuf::from("src/main.rs");
+        mark_repo_open_ready(&mut state, repo_id);
 
         {
             let repo = repo_mut(&mut state, repo_id);
@@ -1158,6 +1183,7 @@ mod tests {
             Effect::LoadWorktrees { repo_id: rid } if rid == repo_id
         ));
         assert!(repo_mut(&mut state, repo_id).worktrees.is_loading());
+        assert!(load_worktrees(&mut state, repo_id).is_empty());
 
         let effects = load_submodules(&mut state, repo_id);
         assert_eq!(effects.len(), 1);
@@ -1199,6 +1225,29 @@ mod tests {
         ));
         assert!(repo_mut(&mut state, repo_id).reflog.is_loading());
         assert!(load_reflog(&mut state, repo_id).is_empty());
+    }
+
+    #[test]
+    fn pre_open_worktree_and_submodule_loads_are_noops() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+
+        assert!(load_worktrees(&mut state, repo_id).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).worktrees,
+            Loadable::NotLoaded
+        ));
+        assert!(
+            !repo_mut(&mut state, repo_id)
+                .loads_in_flight
+                .is_in_flight(RepoLoadsInFlight::WORKTREES)
+        );
+
+        assert!(load_submodules(&mut state, repo_id).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).submodules,
+            Loadable::NotLoaded
+        ));
     }
 
     #[test]
@@ -1304,6 +1353,18 @@ mod tests {
         ));
         assert!(matches!(
             repo_mut(&mut state, repo_id).remote_branches,
+            Loadable::Ready(_)
+        ));
+
+        mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREES);
+        let effects = worktrees_loaded(&mut state, repo_id, Ok(Vec::new()));
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadWorktrees { repo_id: rid } if rid == repo_id
+        ));
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).worktrees,
             Loadable::Ready(_)
         ));
 
