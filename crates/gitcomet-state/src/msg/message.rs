@@ -1,3 +1,4 @@
+use crate::model::GitLogTagFetchMode;
 use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
@@ -90,6 +91,10 @@ pub enum Msg {
     },
     CancelAuthPrompt,
     SetGitRuntimeState(GitRuntimeState),
+    SetGitLogSettings {
+        show_history_tags: bool,
+        tag_fetch_mode: GitLogTagFetchMode,
+    },
     SetActiveRepo {
         repo_id: RepoId,
     },
@@ -162,6 +167,12 @@ pub enum Msg {
         repo_id: RepoId,
     },
     LoadSubmodules {
+        repo_id: RepoId,
+    },
+    LoadTags {
+        repo_id: RepoId,
+    },
+    LoadRemoteTags {
         repo_id: RepoId,
     },
     RefreshBranches {

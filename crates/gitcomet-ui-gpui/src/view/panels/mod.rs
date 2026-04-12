@@ -52,12 +52,6 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
-    SetHistoryColumns {
-        show_author: bool,
-        show_date: bool,
-        show_sha: bool,
-    },
-    ResetHistoryColumnWidths,
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },

@@ -78,6 +78,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
             | Msg::LoadSubmodules { .. }
+            | Msg::LoadTags { .. }
+            | Msg::LoadRemoteTags { .. }
             | Msg::RefreshBranches { .. }
             | Msg::StageHunk { .. }
             | Msg::UnstageHunk { .. }
@@ -552,6 +554,14 @@ pub(super) fn reduce(
             state.git_runtime = runtime;
             Vec::new()
         }
+        Msg::SetGitLogSettings {
+            show_history_tags,
+            tag_fetch_mode,
+        } => {
+            state.git_log_settings.show_history_tags = show_history_tags;
+            state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
+            Vec::new()
+        }
         Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(state, repo_id),
         Msg::ReorderRepoTabs {
             repo_id,
@@ -610,6 +620,8 @@ pub(super) fn reduce(
         Msg::LoadBlame { repo_id, path, rev } => effects::load_blame(state, repo_id, path, rev),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
+        Msg::LoadTags { repo_id } => effects::load_tags(state, repo_id),
+        Msg::LoadRemoteTags { repo_id } => effects::load_remote_tags(state, repo_id),
         Msg::RefreshBranches { repo_id } => effects::refresh_branches(state, repo_id),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);

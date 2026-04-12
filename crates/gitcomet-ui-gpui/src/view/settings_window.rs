@@ -2,6 +2,7 @@ use super::*;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
 };
+use gitcomet_state::model::GitLogTagFetchMode;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::sync::Arc;
 
@@ -68,6 +69,8 @@ enum SettingsSection {
     Timezone,
     ChangeTracking,
     Diff,
+    GitLogColumns,
+    GitLogTagFetch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,6 +144,12 @@ pub(crate) struct SettingsWindowView {
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
     diff_scroll_sync: DiffScrollSync,
+    history_show_graph: bool,
+    history_show_author: bool,
+    history_show_date: bool,
+    history_show_sha: bool,
+    history_show_tags: bool,
+    history_tag_fetch_mode: GitLogTagFetchMode,
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
@@ -334,6 +343,40 @@ fn settings_theme_modes() -> Vec<ThemeMode> {
     modes
 }
 
+fn history_columns_settings_label(
+    show_graph: bool,
+    show_author: bool,
+    show_date: bool,
+    show_sha: bool,
+) -> SharedString {
+    let mut columns = Vec::new();
+    if show_graph {
+        columns.push("Graph");
+    }
+    if show_author {
+        columns.push("Author");
+    }
+    if show_date {
+        columns.push("Commit date");
+    }
+    if show_sha {
+        columns.push("SHA");
+    }
+
+    if columns.is_empty() {
+        "None".into()
+    } else {
+        columns.join(", ").into()
+    }
+}
+
+fn git_log_tag_fetch_mode_label(mode: GitLogTagFetchMode) -> &'static str {
+    match mode {
+        GitLogTagFetchMode::OnRepositoryActivation => "On repository activation",
+        GitLogTagFetchMode::Disabled => "Disabled",
+    }
+}
+
 impl SettingsWindowView {
     fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
         window.set_window_title(SETTINGS_WINDOW_TITLE);
@@ -367,6 +410,12 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(DiffScrollSync::from_key)
             .unwrap_or_default();
+        let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
+        let history_show_author = ui_session.history_show_author.unwrap_or(true);
+        let history_show_date = ui_session.history_show_date.unwrap_or(true);
+        let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
+        let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let theme = theme_mode.resolve_theme(window.appearance());
         let runtime_info = SettingsRuntimeInfo::detect();
         let git_executable_mode =
@@ -447,6 +496,12 @@ impl SettingsWindowView {
             show_timezone,
             change_tracking_view,
             diff_scroll_sync,
+            history_show_graph,
+            history_show_author,
+            history_show_date,
+            history_show_sha,
+            history_show_tags,
+            history_tag_fetch_mode,
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
@@ -488,9 +543,12 @@ impl SettingsWindowView {
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             change_tracking_height: None,
             untracked_height: None,
-            history_show_author: None,
-            history_show_date: None,
-            history_show_sha: None,
+            history_show_graph: Some(self.history_show_graph),
+            history_show_author: Some(self.history_show_author),
+            history_show_date: Some(self.history_show_date),
+            history_show_sha: Some(self.history_show_sha),
+            history_show_tags: Some(self.history_show_tags),
+            history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             git_executable_path: Some(self.selected_git_executable_path()),
         };
 
@@ -777,6 +835,69 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_diff_scroll_sync(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_history_column_preferences(
+        &mut self,
+        show_graph: bool,
+        show_author: bool,
+        show_date: bool,
+        show_sha: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_show_graph == show_graph
+            && self.history_show_author == show_author
+            && self.history_show_date == show_date
+            && self.history_show_sha == show_sha
+        {
+            return;
+        }
+
+        self.history_show_graph = show_graph;
+        self.history_show_author = show_author;
+        self.history_show_date = show_date;
+        self.history_show_sha = show_sha;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_column_preferences(show_graph, show_author, show_date, show_sha, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_history_show_tags(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.history_show_tags == enabled {
+            return;
+        }
+
+        self.history_show_tags = enabled;
+        if !enabled && self.expanded_section == Some(SettingsSection::GitLogTagFetch) {
+            self.expanded_section = None;
+        }
+        let tag_fetch_mode = self.history_tag_fetch_mode;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_tag_preferences(enabled, tag_fetch_mode, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_history_tag_fetch_mode(
+        &mut self,
+        mode: GitLogTagFetchMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_tag_fetch_mode == mode {
+            return;
+        }
+
+        self.history_tag_fetch_mode = mode;
+        self.expanded_section = None;
+        let show_tags = self.history_show_tags;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_tag_preferences(show_tags, mode, cx);
         });
         cx.notify();
     }
@@ -1726,6 +1847,48 @@ impl Render for SettingsWindowView {
                         this.toggle_section(SettingsSection::Diff, cx);
                     }));
 
+                let history_columns_row = self
+                    .summary_row(
+                        "settings_window_git_log_columns",
+                        "History columns",
+                        history_columns_settings_label(
+                            self.history_show_graph,
+                            self.history_show_author,
+                            self.history_show_date,
+                            self.history_show_sha,
+                        ),
+                        self.expanded_section == Some(SettingsSection::GitLogColumns),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.toggle_section(SettingsSection::GitLogColumns, cx);
+                    }));
+
+                let show_history_tags_row = self
+                    .toggle_row(
+                        "settings_window_git_log_show_tags",
+                        "Show tags in history view",
+                        self.history_show_tags,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_history_show_tags(!this.history_show_tags, cx);
+                    }));
+
+                let auto_fetch_tags_row = self
+                    .summary_row(
+                        "settings_window_git_log_tag_fetch_mode",
+                        "Automatically fetch tags",
+                        git_log_tag_fetch_mode_label(self.history_tag_fetch_mode).into(),
+                        self.expanded_section == Some(SettingsSection::GitLogTagFetch),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        if this.history_show_tags {
+                            this.toggle_section(SettingsSection::GitLogTagFetch, cx);
+                        }
+                    }));
+
                 let mut general_card = self
                     .card("settings_window_general", "General", theme)
                     .child(theme_row);
@@ -1992,6 +2155,163 @@ impl Render for SettingsWindowView {
                     ));
                 }
 
+                let mut git_log_card = self
+                    .card("settings_window_git_log_card", "Git log", theme)
+                    .child(history_columns_row);
+
+                if self.expanded_section == Some(SettingsSection::GitLogColumns) {
+                    git_log_card = git_log_card
+                        .child(
+                            self.toggle_row(
+                                "settings_window_git_log_column_graph",
+                                "Graph",
+                                self.history_show_graph,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                |this, _e: &ClickEvent, _window, cx| {
+                                    this.set_history_column_preferences(
+                                        !this.history_show_graph,
+                                        this.history_show_author,
+                                        this.history_show_date,
+                                        this.history_show_sha,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(
+                            self.toggle_row(
+                                "settings_window_git_log_column_author",
+                                "Author",
+                                self.history_show_author,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                |this, _e: &ClickEvent, _window, cx| {
+                                    this.set_history_column_preferences(
+                                        this.history_show_graph,
+                                        !this.history_show_author,
+                                        this.history_show_date,
+                                        this.history_show_sha,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(
+                            self.toggle_row(
+                                "settings_window_git_log_column_date",
+                                "Commit date",
+                                self.history_show_date,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                |this, _e: &ClickEvent, _window, cx| {
+                                    this.set_history_column_preferences(
+                                        this.history_show_graph,
+                                        this.history_show_author,
+                                        !this.history_show_date,
+                                        this.history_show_sha,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(
+                            self.toggle_row(
+                                "settings_window_git_log_column_sha",
+                                "SHA",
+                                self.history_show_sha,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                |this, _e: &ClickEvent, _window, cx| {
+                                    this.set_history_column_preferences(
+                                        this.history_show_graph,
+                                        this.history_show_author,
+                                        this.history_show_date,
+                                        !this.history_show_sha,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Columns may auto-hide in narrow windows."),
+                        )
+                        .child(
+                            self.link_row(
+                                "settings_window_git_log_reset_widths",
+                                "Reset column widths",
+                                "Reset".into(),
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                |this, _e: &ClickEvent, _window, cx| {
+                                    this.update_main_windows(cx, |view, _window, cx| {
+                                        view.reset_history_column_widths(cx);
+                                    });
+                                    cx.notify();
+                                },
+                            )),
+                        );
+                }
+
+                git_log_card = git_log_card.child(show_history_tags_row);
+                if self.history_show_tags {
+                    git_log_card = git_log_card.child(auto_fetch_tags_row);
+
+                    if self.expanded_section == Some(SettingsSection::GitLogTagFetch) {
+                        git_log_card = git_log_card
+                            .child(
+                                self.option_row(
+                                    "settings_window_git_log_tag_fetch_mode_activation",
+                                    "On repository activation",
+                                    Some(
+                                        "Fetch local tags when a repository becomes active.".into(),
+                                    ),
+                                    self.history_tag_fetch_mode
+                                        == GitLogTagFetchMode::OnRepositoryActivation,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_tag_fetch_mode(
+                                            GitLogTagFetchMode::OnRepositoryActivation,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            )
+                            .child(
+                                self.option_row(
+                                    "settings_window_git_log_tag_fetch_mode_disabled",
+                                    "Disabled",
+                                    Some(
+                                        "Skip automatic tag fetching on repository activation."
+                                            .into(),
+                                    ),
+                                    self.history_tag_fetch_mode == GitLogTagFetchMode::Disabled,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_tag_fetch_mode(
+                                            GitLogTagFetchMode::Disabled,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            );
+                    }
+                }
+
                 let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
                 let (git_icon_path, git_icon_color, git_status_text): (
                     &'static str,
@@ -2240,6 +2560,7 @@ impl Render for SettingsWindowView {
                     .child(general_card)
                     .child(change_tracking_card)
                     .child(diff_card)
+                    .child(git_log_card)
                     .child(git_executable_card)
                     .child(environment_card)
                     .child(links_card)

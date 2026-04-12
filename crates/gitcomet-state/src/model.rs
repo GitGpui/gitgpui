@@ -7,6 +7,7 @@ use gitcomet_core::conflict_session::{
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::BlameLine;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,6 +20,43 @@ pub struct SidebarDataRequest {
     pub worktrees: bool,
     pub submodules: bool,
     pub stashes: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitLogTagFetchMode {
+    OnRepositoryActivation,
+    Disabled,
+}
+
+impl Default for GitLogTagFetchMode {
+    fn default() -> Self {
+        Self::OnRepositoryActivation
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GitLogSettings {
+    pub show_history_tags: bool,
+    pub tag_fetch_mode: GitLogTagFetchMode,
+}
+
+impl Default for GitLogSettings {
+    fn default() -> Self {
+        Self {
+            show_history_tags: true,
+            tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
+        }
+    }
+}
+
+impl GitLogSettings {
+    pub fn auto_fetch_tags_on_repo_activation(self) -> bool {
+        matches!(
+            self.tag_fetch_mode,
+            GitLogTagFetchMode::OnRepositoryActivation
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -243,6 +281,7 @@ pub struct AppState {
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
     pub git_runtime: GitRuntimeState,
+    pub git_log_settings: GitLogSettings,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

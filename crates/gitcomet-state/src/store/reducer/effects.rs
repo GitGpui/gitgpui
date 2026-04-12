@@ -322,6 +322,39 @@ pub(super) fn refresh_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
     }
 }
 
+pub(super) fn load_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    repo_state.set_tags(Loadable::Loading);
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+        vec![Effect::LoadTags { repo_id }]
+    } else {
+        Vec::new()
+    }
+}
+
+pub(super) fn load_remote_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    repo_state.set_remote_tags(Loadable::Loading);
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REMOTE_TAGS)
+    {
+        vec![Effect::LoadRemoteTags { repo_id }]
+    } else {
+        Vec::new()
+    }
+}
+
 pub(super) fn load_conflict_file(
     state: &mut AppState,
     repo_id: RepoId,

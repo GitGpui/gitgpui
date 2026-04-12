@@ -11,7 +11,6 @@ mod conflict_resolver_output;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
-mod history_column_settings;
 mod pull;
 mod push;
 mod remote;
@@ -329,7 +328,6 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(*repo_id))
             }
-            PopoverKind::HistoryColumnSettings => Some(history_column_settings::model(self, cx)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             _ => None,
         }
@@ -341,7 +339,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let mut close_after_action = true;
+        let close_after_action = true;
         match action {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
@@ -469,31 +467,6 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
-            }
-            ContextMenuAction::SetHistoryColumns {
-                show_author,
-                show_date,
-                show_sha,
-            } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.history_view.update(cx, |view, cx| {
-                        view.history_show_author = show_author;
-                        view.history_show_date = show_date;
-                        view.history_show_sha = show_sha;
-                        cx.notify();
-                    });
-                });
-                self.schedule_ui_settings_persist(cx);
-                close_after_action = false;
-            }
-            ContextMenuAction::ResetHistoryColumnWidths => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.history_view.update(cx, |view, cx| {
-                        view.reset_history_column_widths();
-                        cx.notify();
-                    });
-                });
-                close_after_action = false;
             }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;

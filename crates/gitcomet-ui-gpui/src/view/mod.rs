@@ -487,9 +487,16 @@ impl GitCometView {
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
 
+        let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
+        let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
+        store.dispatch(Msg::SetGitLogSettings {
+            show_history_tags: history_show_tags,
+            tag_fetch_mode: history_tag_fetch_mode,
+        });
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;
@@ -610,9 +617,15 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 diff_scroll_sync,
+                history_show_graph,
                 history_show_author,
                 history_show_date,
                 history_show_sha,
+                history_show_tags,
+                matches!(
+                    history_tag_fetch_mode,
+                    gitcomet_state::model::GitLogTagFetchMode::OnRepositoryActivation
+                ),
                 view_mode,
                 focused_mergetool_labels,
                 focused_mergetool_exit_code.clone(),
@@ -944,6 +957,52 @@ impl GitCometView {
         self.diff_scroll_sync = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_history_column_preferences(
+        &mut self,
+        show_graph: bool,
+        show_author: bool,
+        show_date: bool,
+        show_sha: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_history_column_preferences(show_graph, show_author, show_date, show_sha, cx);
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn reset_history_column_widths(&mut self, cx: &mut gpui::Context<Self>) {
+        self.main_pane
+            .update(cx, |pane, cx| pane.reset_history_column_widths(cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_history_tag_preferences(
+        &mut self,
+        show_tags: bool,
+        tag_fetch_mode: gitcomet_state::model::GitLogTagFetchMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let auto_fetch_tags_on_repo_activation = matches!(
+            tag_fetch_mode,
+            gitcomet_state::model::GitLogTagFetchMode::OnRepositoryActivation
+        );
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_history_tag_preferences(show_tags, auto_fetch_tags_on_repo_activation, cx);
+        });
+        self.store.dispatch(Msg::SetGitLogSettings {
+            show_history_tags: show_tags,
+            tag_fetch_mode,
+        });
+        if show_tags
+            && let Some(repo) = self.main_pane.read(cx).active_repo()
+            && matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_))
+        {
+            self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
+        }
         self.schedule_ui_settings_persist(cx);
     }
 

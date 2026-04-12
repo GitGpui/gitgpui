@@ -1,4 +1,4 @@
-use crate::model::{AppState, RepoId};
+use crate::model::{AppState, GitLogTagFetchMode, RepoId};
 use gitcomet_core::domain::LogScope;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -32,9 +32,12 @@ pub struct UiSession {
     pub diff_scroll_sync: Option<String>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
+    pub history_show_graph: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub history_show_tags: Option<bool>,
+    pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub git_executable_path: Option<PathBuf>,
 }
 
@@ -92,9 +95,12 @@ struct UiSessionFileV2 {
     diff_scroll_sync: Option<String>,
     change_tracking_height: Option<u32>,
     untracked_height: Option<u32>,
+    history_show_graph: Option<bool>,
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    history_show_tags: Option<bool>,
+    history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     git_executable_path: Option<String>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
@@ -149,9 +155,12 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_scroll_sync: file.diff_scroll_sync,
         change_tracking_height: file.change_tracking_height,
         untracked_height: file.untracked_height,
+        history_show_graph: file.history_show_graph,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
+        history_show_tags: file.history_show_tags,
+        history_tag_fetch_mode: file.history_tag_fetch_mode,
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -356,9 +365,12 @@ pub struct UiSettings {
     pub diff_scroll_sync: Option<String>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
+    pub history_show_graph: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub history_show_tags: Option<bool>,
+    pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub git_executable_path: Option<Option<PathBuf>>,
 }
 
@@ -419,6 +431,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     if let Some(value) = settings.untracked_height {
         file.untracked_height = Some(value);
     }
+    if let Some(value) = settings.history_show_graph {
+        file.history_show_graph = Some(value);
+    }
     if let Some(value) = settings.history_show_author {
         file.history_show_author = Some(value);
     }
@@ -427,6 +442,12 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.history_show_sha {
         file.history_show_sha = Some(value);
+    }
+    if let Some(value) = settings.history_show_tags {
+        file.history_show_tags = Some(value);
+    }
+    if let Some(value) = settings.history_tag_fetch_mode {
+        file.history_tag_fetch_mode = Some(value);
     }
     if let Some(path) = settings.git_executable_path {
         file.git_executable_path = path.map(|path| path_storage_key(&path));
@@ -1556,6 +1577,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1614,6 +1636,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1669,6 +1692,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1724,6 +1748,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1779,6 +1804,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1837,6 +1863,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1892,6 +1919,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1948,6 +1976,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -2003,6 +2032,7 @@ mod tests {
                 history_show_date: None,
                 history_show_sha: None,
                 git_executable_path: Some(Some(PathBuf::new())),
+                ..UiSettings::default()
             },
             &path,
         )

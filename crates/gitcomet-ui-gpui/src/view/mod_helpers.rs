@@ -2326,7 +2326,6 @@ pub(super) enum PopoverKind {
     HistoryBranchFilter {
         repo_id: RepoId,
     },
-    HistoryColumnSettings,
     ChangeTrackingSettings,
 }
 
