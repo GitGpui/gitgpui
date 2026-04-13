@@ -292,6 +292,101 @@ pub fn lock_git_runtime_test() -> std::sync::MutexGuard<'static, ()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
+
+    struct GitRuntimePreferenceResetGuard {
+        original: GitExecutablePreference,
+    }
+
+    impl GitRuntimePreferenceResetGuard {
+        fn install(preference: GitExecutablePreference) -> Self {
+            let original = current_git_executable_preference();
+            let _ = install_git_executable_preference(preference);
+            Self { original }
+        }
+    }
+
+    impl Drop for GitRuntimePreferenceResetGuard {
+        fn drop(&mut self) {
+            let _ = install_git_executable_preference(self.original.clone());
+        }
+    }
+
+    fn git_runtime_probe_count(probe_log: &Path) -> usize {
+        fs::read_to_string(probe_log)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    }
+
+    fn create_git_probe_script(
+        stdout: &str,
+        stderr: &str,
+        exit_code: i32,
+        probe_log: Option<&Path>,
+    ) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        #[cfg(unix)]
+        let script = dir.path().join("git");
+        #[cfg(windows)]
+        let script = dir.path().join("git.cmd");
+
+        write_git_probe_script(&script, stdout, stderr, exit_code, probe_log);
+        (dir, script)
+    }
+
+    #[cfg(unix)]
+    fn write_git_probe_script(
+        script_path: &Path,
+        stdout: &str,
+        stderr: &str,
+        exit_code: i32,
+        probe_log: Option<&Path>,
+    ) {
+        let mut script = String::from("#!/bin/sh\n");
+        if let Some(probe_log) = probe_log {
+            script.push_str(&format!("printf 'probe\\n' >> '{}'\n", probe_log.display()));
+        }
+        if !stdout.is_empty() {
+            script.push_str(&format!("printf '%s\\n' '{stdout}'\n"));
+        }
+        if !stderr.is_empty() {
+            script.push_str(&format!("printf '%s\\n' '{stderr}' >&2\n"));
+        }
+        script.push_str(&format!("exit {exit_code}\n"));
+
+        fs::write(script_path, script).expect("write git probe script");
+        let mut permissions = fs::metadata(script_path)
+            .expect("git probe metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(script_path, permissions).expect("set git probe permissions");
+    }
+
+    #[cfg(windows)]
+    fn write_git_probe_script(
+        script_path: &Path,
+        stdout: &str,
+        stderr: &str,
+        exit_code: i32,
+        probe_log: Option<&Path>,
+    ) {
+        let mut script = String::from("@echo off\r\n");
+        if let Some(probe_log) = probe_log {
+            script.push_str(&format!(">>\"{}\" echo probe\r\n", probe_log.display()));
+        }
+        if !stdout.is_empty() {
+            script.push_str(&format!("echo {stdout}\r\n"));
+        }
+        if !stderr.is_empty() {
+            script.push_str(&format!("1>&2 echo {stderr}\r\n"));
+        }
+        script.push_str(&format!("exit /b {exit_code}\r\n"));
+        fs::write(script_path, script).expect("write git probe script");
+    }
 
     #[test]
     fn normalize_git_executable_path_makes_relative_paths_absolute() {
@@ -304,11 +399,49 @@ mod tests {
     }
 
     #[test]
+    fn git_executable_preference_from_optional_path_covers_all_variants() {
+        let relative = PathBuf::from("test-git");
+
+        assert_eq!(
+            GitExecutablePreference::from_optional_path(None),
+            GitExecutablePreference::SystemPath
+        );
+        assert_eq!(
+            GitExecutablePreference::from_optional_path(Some(PathBuf::new())),
+            GitExecutablePreference::Custom(PathBuf::new())
+        );
+        assert_eq!(
+            GitExecutablePreference::from_optional_path(Some(relative.clone())),
+            GitExecutablePreference::Custom(normalize_git_executable_path(relative))
+        );
+    }
+
+    #[test]
+    fn git_executable_preference_custom_path_and_display_label_cover_variants() {
+        let custom = GitExecutablePreference::Custom(PathBuf::from("/opt/git/bin/git"));
+        let empty_custom = GitExecutablePreference::Custom(PathBuf::new());
+
+        assert_eq!(GitExecutablePreference::SystemPath.custom_path(), None);
+        assert_eq!(custom.custom_path(), Some(Path::new("/opt/git/bin/git")));
+        assert_eq!(empty_custom.custom_path(), Some(Path::new("")));
+
+        assert_eq!(
+            GitExecutablePreference::SystemPath.display_label(),
+            "System PATH"
+        );
+        assert_eq!(
+            empty_custom.display_label(),
+            "Custom executable (not selected)"
+        );
+        assert_eq!(custom.display_label(), "/opt/git/bin/git");
+    }
+
+    #[test]
     fn install_git_executable_preference_reports_missing_custom_path() {
         let _lock = lock_git_runtime_test();
-        let original = current_git_executable_preference();
-
         let missing = std::env::temp_dir().join("gitcomet-missing-git-executable");
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+
         let state =
             install_git_executable_preference(GitExecutablePreference::Custom(missing.clone()));
 
@@ -323,49 +456,96 @@ mod tests {
                 .expect("expected unavailable detail")
                 .contains(&missing.display().to_string())
         );
-
-        let _ = install_git_executable_preference(original);
     }
 
     #[test]
-    fn install_git_executable_preference_uses_custom_executable() {
+    fn install_git_executable_preference_uses_custom_executable_stdout() {
         let _lock = lock_git_runtime_test();
-        let original = current_git_executable_preference();
-
-        let dir = tempfile::tempdir().expect("create temp dir");
-        #[cfg(unix)]
-        let script = dir.path().join("git");
-        #[cfg(windows)]
-        let script = dir.path().join("git.cmd");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            fs::write(&script, "#!/bin/sh\necho 'git version 9.9.9-test'\n").expect("write script");
-            let mut permissions = fs::metadata(&script).expect("metadata").permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&script, permissions).expect("set permissions");
-        }
-
-        #[cfg(windows)]
-        {
-            fs::write(&script, "@echo off\r\necho git version 9.9.9-test\r\n")
-                .expect("write script");
-        }
+        let (_dir, script) = create_git_probe_script("git version 9.9.9-test", "", 0, None);
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
 
         let state =
             install_git_executable_preference(GitExecutablePreference::Custom(script.clone()));
         assert!(state.is_available());
         assert_eq!(state.version_output(), Some("git version 9.9.9-test"));
+    }
 
-        let _ = install_git_executable_preference(original);
+    #[test]
+    fn install_git_executable_preference_uses_stderr_when_stdout_is_empty() {
+        let _lock = lock_git_runtime_test();
+        let (_dir, script) = create_git_probe_script("", "git version 8.8.8-test", 0, None);
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+
+        let state =
+            install_git_executable_preference(GitExecutablePreference::Custom(script.clone()));
+
+        assert!(state.is_available());
+        assert_eq!(state.version_output(), Some("git version 8.8.8-test"));
+    }
+
+    #[test]
+    fn install_git_executable_preference_reports_empty_version_output() {
+        let _lock = lock_git_runtime_test();
+        let (_dir, script) = create_git_probe_script("", "", 0, None);
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+
+        let state =
+            install_git_executable_preference(GitExecutablePreference::Custom(script.clone()));
+
+        assert!(!state.is_available());
+        assert_eq!(
+            state.unavailable_detail(),
+            Some(
+                &format!(
+                    "Git executable at {} returned no version text.",
+                    script.display()
+                )[..]
+            )
+        );
+    }
+
+    #[test]
+    fn install_git_executable_preference_reports_process_failure_with_stderr() {
+        let _lock = lock_git_runtime_test();
+        let (_dir, script) = create_git_probe_script("", "fatal: not a git executable", 7, None);
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+
+        let state =
+            install_git_executable_preference(GitExecutablePreference::Custom(script.clone()));
+
+        assert!(!state.is_available());
+        assert_eq!(
+            state.unavailable_detail(),
+            Some(
+                &format!(
+                    "Git executable at {} failed: fatal: not a git executable",
+                    script.display()
+                )[..]
+            )
+        );
+    }
+
+    #[test]
+    fn install_git_executable_preference_reports_process_failure_without_stderr() {
+        let _lock = lock_git_runtime_test();
+        let (_dir, script) = create_git_probe_script("", "", 7, None);
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
+
+        let state =
+            install_git_executable_preference(GitExecutablePreference::Custom(script.clone()));
+
+        assert!(!state.is_available());
+        let detail = state
+            .unavailable_detail()
+            .expect("expected unavailable detail");
+        assert!(detail.contains(&script.display().to_string()));
+        assert!(detail.contains("exited with"));
     }
 
     #[test]
     fn install_git_executable_preference_reports_missing_custom_selection() {
         let _lock = lock_git_runtime_test();
-        let original = current_git_executable_preference();
+        let _restore = GitRuntimePreferenceResetGuard::install(current_git_executable_preference());
 
         let state =
             install_git_executable_preference(GitExecutablePreference::Custom(PathBuf::new()));
@@ -381,7 +561,89 @@ mod tests {
                 "Custom Git executable is not configured. Choose an executable or switch back to System PATH."
             )
         );
+    }
 
-        let _ = install_git_executable_preference(original);
+    #[test]
+    fn git_command_uses_installed_preference() {
+        let _lock = lock_git_runtime_test();
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let probe_log = temp.path().join("git-probes.log");
+        let (_dir, script) =
+            create_git_probe_script("git version 7.7.7-test", "", 0, Some(&probe_log));
+        let _restore =
+            GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(script));
+
+        assert_eq!(
+            git_runtime_probe_count(&probe_log),
+            1,
+            "installing a custom executable should probe exactly once"
+        );
+
+        let output = git_command()
+            .arg("--version")
+            .output()
+            .expect("run configured git command");
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "git version 7.7.7-test"
+        );
+        assert_eq!(
+            git_runtime_probe_count(&probe_log),
+            2,
+            "running the returned command should invoke the configured executable"
+        );
+    }
+
+    #[test]
+    fn refresh_git_runtime_reprobes_current_preference() {
+        let _lock = lock_git_runtime_test();
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let probe_log = temp.path().join("git-probes.log");
+        let (_dir, script) =
+            create_git_probe_script("git version 6.6.6-test", "", 0, Some(&probe_log));
+        let _restore =
+            GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(script));
+
+        assert_eq!(git_runtime_probe_count(&probe_log), 1);
+        let refreshed = refresh_git_runtime();
+
+        assert!(refreshed.is_available());
+        assert_eq!(refreshed.version_output(), Some("git version 6.6.6-test"));
+        assert_eq!(
+            git_runtime_probe_count(&probe_log),
+            2,
+            "refresh should re-run the current runtime probe"
+        );
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_preserves_valid_utf8() {
+        assert_eq!(
+            bytes_to_text_preserving_utf8("cafe 日本語".as_bytes()),
+            "cafe 日本語"
+        );
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_escapes_invalid_bytes_without_losing_valid_segments() {
+        let input = b"ok\xffstill-valid\xc3\xa9\x80done";
+        assert_eq!(
+            bytes_to_text_preserving_utf8(input),
+            "ok\\xffstill-validé\\x80done"
+        );
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_escapes_truncated_multibyte_tail() {
+        assert_eq!(
+            bytes_to_text_preserving_utf8(b"snowman \xe2\x98"),
+            "snowman \\xe2\\x98"
+        );
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_handles_empty_input() {
+        assert_eq!(bytes_to_text_preserving_utf8(b""), "");
     }
 }
