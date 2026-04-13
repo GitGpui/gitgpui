@@ -598,8 +598,37 @@ fn sanitize_fixture_component(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::{
+        GitExecutablePreference, current_git_executable_preference,
+        install_git_executable_preference, lock_git_runtime_test,
+    };
     #[cfg(windows)]
     use std::sync::OnceLock;
+
+    // Keep merge-extraction tests isolated from process::tests, which mutate
+    // the shared git executable preference under this same mutex.
+    struct SystemGitRuntimeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        original: GitExecutablePreference,
+    }
+
+    impl SystemGitRuntimeGuard {
+        fn new() -> Self {
+            let lock = lock_git_runtime_test();
+            let original = current_git_executable_preference();
+            let _ = install_git_executable_preference(GitExecutablePreference::SystemPath);
+            Self {
+                _lock: lock,
+                original,
+            }
+        }
+    }
+
+    impl Drop for SystemGitRuntimeGuard {
+        fn drop(&mut self) {
+            let _ = install_git_executable_preference(self.original.clone());
+        }
+    }
 
     #[cfg(windows)]
     fn is_git_shell_startup_failure(text: &str) -> bool {
@@ -761,6 +790,7 @@ mod tests {
 
     #[test]
     fn discovers_merge_commits_with_two_parents() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_conflicting_merge_repo();
         let merges = discover_merge_commits(repo.path(), 10).expect("discover merges");
         assert_eq!(merges.len(), 1, "expected one merge commit");
@@ -773,6 +803,7 @@ mod tests {
 
     #[test]
     fn discovers_merge_commits_from_repo_subdirectory() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_conflicting_merge_repo();
         let subdir = repo.path().join("nested").join("dir");
         std::fs::create_dir_all(&subdir).expect("create nested subdirectory");
@@ -787,6 +818,7 @@ mod tests {
 
     #[test]
     fn discover_merge_commits_zero_max_merges_errors() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_conflicting_merge_repo();
         let error =
             discover_merge_commits(repo.path(), 0).expect_err("expected invalid argument error");
@@ -802,6 +834,7 @@ mod tests {
 
     #[test]
     fn discover_merge_commits_reports_not_git_repository_stderr() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let tmp = tempfile::tempdir().expect("create temp dir");
         let repo = tmp.path();
         let error =
@@ -821,6 +854,7 @@ mod tests {
 
     #[test]
     fn discovers_merge_commits_after_recent_octopus_merges() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         if !require_git_shell_for_octopus_merge_tests() {
             return;
         }
@@ -912,6 +946,7 @@ mod tests {
 
     #[test]
     fn extracts_sorted_text_cases_and_skips_binary() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_conflicting_merge_repo();
         let merges = discover_merge_commits(repo.path(), 10).expect("discover merges");
         let cases = extract_merge_cases(repo.path(), &merges[0], 10).expect("extract cases");
@@ -934,6 +969,7 @@ mod tests {
     #[test]
     #[cfg(not(windows))]
     fn changed_files_handles_paths_with_newlines() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let tmp = tempfile::tempdir().expect("create temp dir");
         let repo = tmp.path();
 
@@ -966,6 +1002,7 @@ mod tests {
 
     #[test]
     fn extracts_cases_with_missing_base_or_parent_as_empty_text() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_missing_side_conflict_merge_repo();
         let merges = discover_merge_commits(repo.path(), 10).expect("discover merges");
         assert_eq!(merges.len(), 1, "expected one merge commit");
@@ -1024,6 +1061,7 @@ mod tests {
 
     #[test]
     fn git_show_missing_path_is_treated_as_absent_side() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_conflicting_merge_repo();
         let missing = read_blob_bytes_optional(repo.path(), "HEAD", "this-file-does-not-exist")
             .expect("missing path should not error");
@@ -1035,6 +1073,7 @@ mod tests {
 
     #[test]
     fn git_show_non_missing_errors_are_propagated() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_conflicting_merge_repo();
         let err = read_blob_bytes_optional(repo.path(), "definitely-not-a-ref", "a.txt")
             .expect_err("invalid ref should surface as git command failure");
@@ -1056,6 +1095,7 @@ mod tests {
 
     #[test]
     fn read_blob_bytes_optional_reads_existing_blob_content() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_conflicting_merge_repo();
         let content =
             read_blob_bytes_optional(repo.path(), "HEAD", "a.txt").expect("read existing path");
@@ -1066,6 +1106,7 @@ mod tests {
 
     #[test]
     fn extracts_merge_cases_from_repo_subdirectory() {
+        let _git_runtime = SystemGitRuntimeGuard::new();
         let repo = create_conflicting_merge_repo();
         let subdir = repo.path().join("nested").join("dir");
         std::fs::create_dir_all(&subdir).expect("create nested subdirectory");
