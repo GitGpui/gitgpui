@@ -1,5 +1,7 @@
 use super::*;
-use crate::model::{RepoLoadsInFlight, SidebarDataRequest};
+use crate::model::{
+    RepoLoadsInFlight, SidebarDataRequest, SubtreeExtractOpStatus, SubtreeExtractProgressStage,
+};
 
 fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
     repo.branches = Loadable::Ready(Arc::new(Vec::new()));
@@ -107,6 +109,166 @@ fn open_repo_ready(
     let repo_id = state.active_repo.expect("open repo should become active");
     mark_repo_open_ready(repos, state, repo_id);
     repo_id
+}
+
+#[test]
+fn add_subtree_sets_running_state_and_emits_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/source-repo");
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AddSubtree {
+            repo_id,
+            repository: "https://example.com/lib.git".to_string(),
+            reference: "main".to_string(),
+            path: PathBuf::from("vendor/lib"),
+            squash: true,
+        },
+    );
+
+    let repo = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .expect("repo to exist");
+    assert_eq!(repo.local_actions_in_flight, 1);
+
+    let op = state
+        .add_subtree
+        .as_ref()
+        .expect("add subtree state to be set");
+    assert_eq!(op.repo_id, repo_id);
+    assert_eq!(op.path.as_ref(), &PathBuf::from("vendor/lib"));
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::AddSubtree {
+            repo_id: effect_repo_id,
+            repository,
+            reference,
+            path,
+            squash,
+            auth: None,
+        }] if *effect_repo_id == repo_id
+            && repository == "https://example.com/lib.git"
+            && reference == "main"
+            && path == &PathBuf::from("vendor/lib")
+            && *squash
+    ));
+}
+
+#[test]
+fn extract_subtree_sets_running_state_and_emits_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/source-repo");
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ExtractSubtree {
+            repo_id,
+            path: PathBuf::from("vendor/lib"),
+            options: gitcomet_core::domain::SubtreeExtractOptions {
+                destination_repository: Some(PathBuf::from("/tmp/extracted-lib")),
+                destination_branch: Some("main".to_string()),
+                remote_repository: Some("https://example.com/lib.git".to_string()),
+                ..Default::default()
+            },
+        },
+    );
+
+    let repo = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .expect("repo to exist");
+    assert_eq!(repo.local_actions_in_flight, 1);
+
+    let op = state
+        .extract_subtree
+        .as_ref()
+        .expect("extract subtree state to be set");
+    let expected_destination = PathBuf::from("/tmp/extracted-lib");
+    assert_eq!(op.repo_id, repo_id);
+    assert_eq!(op.path.as_ref(), &PathBuf::from("vendor/lib"));
+    assert_eq!(op.destination_repo.as_deref(), Some(&expected_destination));
+    assert!(matches!(op.status, SubtreeExtractOpStatus::Running));
+    assert_eq!(op.progress.stage, SubtreeExtractProgressStage::Splitting);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ExtractSubtree {
+            repo_id: effect_repo_id,
+            path,
+            options,
+            auth: None,
+        }] if *effect_repo_id == repo_id
+            && path == &PathBuf::from("vendor/lib")
+            && options.destination_repository == Some(PathBuf::from("/tmp/extracted-lib"))
+            && options.destination_branch.as_deref() == Some("main")
+            && options.remote_repository.as_deref() == Some("https://example.com/lib.git")
+    ));
+}
+
+#[test]
+fn extract_subtree_finished_marks_success_and_refreshes_subtrees() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/source-repo");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ExtractSubtree {
+            repo_id,
+            path: PathBuf::from("vendor/lib"),
+            options: gitcomet_core::domain::SubtreeExtractOptions {
+                destination_repository: Some(PathBuf::from("/tmp/extracted-lib")),
+                ..Default::default()
+            },
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::ExtractSubtreeFinished {
+            repo_id,
+            path: PathBuf::from("vendor/lib"),
+            destination_repo: Some(PathBuf::from("/tmp/extracted-lib")),
+            result: Ok(()),
+        }),
+    );
+
+    let repo = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .expect("repo to exist");
+    assert_eq!(repo.local_actions_in_flight, 0);
+    assert!(repo.last_error.is_none());
+    assert!(state.banner_error.is_none());
+    assert!(matches!(
+        state.extract_subtree.as_ref().map(|op| &op.status),
+        Some(SubtreeExtractOpStatus::FinishedOk)
+    ));
+    assert!(has_subtree_load_effect(&effects, repo_id));
+    assert!(has_effect_for_repo(
+        &effects,
+        repo_id,
+        |effect, repo_id| matches!(effect, Effect::LoadStatus { repo_id: candidate } if *candidate == repo_id)
+    ));
 }
 
 #[test]
@@ -1304,6 +1466,56 @@ fn ensure_sidebar_data_retries_requested_sections_after_repo_opened() {
     assert!(state.repos[0].submodules.is_loading());
     assert!(state.repos[0].subtrees.is_loading());
     assert!(state.repos[0].stashes.is_loading());
+}
+
+#[test]
+fn repo_opened_ok_resets_stale_subtrees_before_replaying_sidebar_request() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let repo_id = RepoId(1);
+    {
+        let repo = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo_id)
+            .expect("repo exists");
+        repo.set_sidebar_data_request(SidebarDataRequest {
+            worktrees: true,
+            submodules: false,
+            subtrees: true,
+            stashes: false,
+        });
+        repo.set_subtrees(Loadable::Ready(vec![gitcomet_core::domain::Subtree {
+            path: PathBuf::from("libs/stale"),
+            source: None,
+        }]));
+    }
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    assert!(has_worktree_refresh_effect(&effects, repo_id));
+    assert!(has_subtree_load_effect(&effects, repo_id));
+    assert!(state.repos[0].subtrees.is_loading());
 }
 
 #[test]

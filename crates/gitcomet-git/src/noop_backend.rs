@@ -311,7 +311,23 @@ mod tests {
             "main",
             path,
         ));
-        assert_unsupported(repo.split_subtree_with_output(path, Some("subtree-split")));
+        assert_unsupported(repo.split_subtree_with_output(
+            path,
+            &gitcomet_core::domain::SubtreeSplitOptions {
+                branch: Some("subtree-split".to_string()),
+                ..Default::default()
+            },
+        ));
+        assert_unsupported(repo.store_subtree_source_config(
+            path,
+            &gitcomet_core::domain::SubtreeSourceConfig {
+                local_repository: Some("/tmp/local".to_string()),
+                repository: "https://example.com/repo.git".to_string(),
+                reference: "main".to_string(),
+                push_refspec: Some("refs/heads/main".to_string()),
+                squash: true,
+            },
+        ));
         assert_unsupported(repo.remove_subtree_with_output(path));
     }
 }

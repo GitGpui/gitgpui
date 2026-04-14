@@ -24,6 +24,32 @@ impl std::fmt::Debug for InternalMsg {
                 .field("dest", dest)
                 .field("ok", &result.is_ok())
                 .finish(),
+            InternalMsg::ExtractSubtreeProgress {
+                repo_id,
+                path,
+                destination_repo,
+                progress,
+                line,
+            } => f
+                .debug_struct("ExtractSubtreeProgress")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("destination_repo", destination_repo)
+                .field("progress", progress)
+                .field("line", line)
+                .finish(),
+            InternalMsg::ExtractSubtreeFinished {
+                repo_id,
+                path,
+                destination_repo,
+                result,
+            } => f
+                .debug_struct("ExtractSubtreeFinished")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("destination_repo", destination_repo)
+                .field("ok", &result.is_ok())
+                .finish(),
             InternalMsg::RepoOpenedOk { repo_id, spec, .. } => f
                 .debug_struct("RepoOpenedOk")
                 .field("repo_id", repo_id)

@@ -41,7 +41,6 @@ mod subtree_push_picker;
 mod subtree_push_prompt;
 mod subtree_remove_confirm;
 mod subtree_remove_picker;
-mod subtree_reveal_picker;
 mod subtree_split_picker;
 mod subtree_split_prompt;
 mod worktree_add_prompt;
@@ -113,7 +112,17 @@ pub(in super::super) struct PopoverHost {
     subtree_path_input: Entity<components::TextInput>,
     subtree_push_refspec_input: Entity<components::TextInput>,
     subtree_split_branch_input: Entity<components::TextInput>,
+    subtree_split_through_revision_input: Entity<components::TextInput>,
+    subtree_split_annotate_input: Entity<components::TextInput>,
+    subtree_split_onto_input: Entity<components::TextInput>,
+    subtree_split_destination_repo_input: Entity<components::TextInput>,
+    subtree_split_destination_branch_input: Entity<components::TextInput>,
+    subtree_split_remote_repository_input: Entity<components::TextInput>,
     subtree_squash_enabled: bool,
+    subtree_split_advanced_enabled: bool,
+    subtree_split_rejoin_enabled: bool,
+    subtree_split_ignore_joins_enabled: bool,
+    subtree_split_remote_enabled: bool,
 }
 
 impl PopoverHost {
@@ -538,7 +547,91 @@ impl PopoverHost {
         let subtree_split_branch_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "Optional branch name".into(),
+                    placeholder: "Optional source split branch".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_split_through_revision_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "HEAD~5".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_split_annotate_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "[split] ".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_split_onto_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Optional onto revision".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_split_destination_repo_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/extracted/repo".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_split_destination_branch_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Defaults to split branch or main".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_split_remote_repository_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "https://example.com/org/repo.git".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -606,7 +699,17 @@ impl PopoverHost {
             subtree_path_input,
             subtree_push_refspec_input,
             subtree_split_branch_input,
+            subtree_split_through_revision_input,
+            subtree_split_annotate_input,
+            subtree_split_onto_input,
+            subtree_split_destination_repo_input,
+            subtree_split_destination_branch_input,
+            subtree_split_remote_repository_input,
             subtree_squash_enabled: true,
+            subtree_split_advanced_enabled: false,
+            subtree_split_rejoin_enabled: false,
+            subtree_split_ignore_joins_enabled: false,
+            subtree_split_remote_enabled: false,
         }
     }
 
@@ -650,6 +753,18 @@ impl PopoverHost {
         self.subtree_push_refspec_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.subtree_split_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_split_through_revision_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_split_annotate_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_split_onto_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_split_destination_repo_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_split_destination_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_split_remote_repository_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
 
         if let Some(input) = &self.repo_picker_search_input {
@@ -1196,7 +1311,6 @@ impl PopoverHost {
                     kind:
                         RepoPopoverKind::Subtree(
                             SubtreePopoverKind::OpenPicker
-                            | SubtreePopoverKind::RevealPicker
                             | SubtreePopoverKind::PullPicker
                             | SubtreePopoverKind::PushPicker
                             | SubtreePopoverKind::SplitPicker
@@ -1293,17 +1407,74 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
-                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt { .. }),
-                    ..
+                    repo_id,
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt { path }),
                 } => {
                     let theme = self.theme;
+                    let source = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == *repo_id)
+                        .and_then(|repo| match &repo.subtrees {
+                            Loadable::Ready(subtrees) => subtrees
+                                .iter()
+                                .find(|subtree| subtree.path == *path)
+                                .and_then(|subtree| subtree.source.clone()),
+                            _ => None,
+                        });
+                    let remote_repository = source
+                        .as_ref()
+                        .and_then(|source| match source.local_repository.as_deref() {
+                            Some(local) if local == source.repository => None,
+                            _ => Some(source.repository.clone()),
+                        })
+                        .unwrap_or_default();
                     self.subtree_split_branch_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
                     });
+                    self.subtree_split_through_revision_input
+                        .update(cx, |input, cx| {
+                            input.set_theme(theme, cx);
+                            input.set_text("", cx);
+                            cx.notify();
+                        });
+                    self.subtree_split_annotate_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.subtree_split_onto_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.subtree_split_destination_repo_input
+                        .update(cx, |input, cx| {
+                            input.set_theme(theme, cx);
+                            input.set_text("", cx);
+                            cx.notify();
+                        });
+                    self.subtree_split_destination_branch_input
+                        .update(cx, |input, cx| {
+                            input.set_theme(theme, cx);
+                            input.set_text("", cx);
+                            cx.notify();
+                        });
+                    self.subtree_split_remote_repository_input
+                        .update(cx, |input, cx| {
+                            input.set_theme(theme, cx);
+                            input.set_text(remote_repository, cx);
+                            cx.notify();
+                        });
+                    self.subtree_split_advanced_enabled = false;
+                    self.subtree_split_rejoin_enabled = false;
+                    self.subtree_split_ignore_joins_enabled = false;
+                    self.subtree_split_remote_enabled = false;
                     let focus = self
-                        .subtree_split_branch_input
+                        .subtree_split_destination_repo_input
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
@@ -1615,7 +1786,6 @@ impl PopoverHost {
                     RepoPopoverKind::Subtree(
                         SubtreePopoverKind::AddPrompt
                         | SubtreePopoverKind::OpenPicker
-                        | SubtreePopoverKind::RevealPicker
                         | SubtreePopoverKind::PullPicker
                         | SubtreePopoverKind::PullPrompt { .. }
                         | SubtreePopoverKind::PushPicker
@@ -1796,9 +1966,6 @@ impl PopoverHost {
                         .max_w(px(360.0)),
                     SubtreePopoverKind::AddPrompt => subtree_add_prompt::panel(self, repo_id, cx),
                     SubtreePopoverKind::OpenPicker => subtree_open_picker::panel(self, repo_id, cx),
-                    SubtreePopoverKind::RevealPicker => {
-                        subtree_reveal_picker::panel(self, repo_id, cx)
-                    }
                     SubtreePopoverKind::PullPicker => subtree_pull_picker::panel(self, repo_id, cx),
                     SubtreePopoverKind::PullPrompt { path } => {
                         subtree_pull_prompt::panel(self, repo_id, path, cx)

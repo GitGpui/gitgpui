@@ -1175,6 +1175,146 @@ impl GitRepository for SlowSubmoduleRepo {
     }
 }
 
+struct SlowSubtreeBackend;
+
+impl GitBackend for SlowSubtreeBackend {
+    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        std::thread::sleep(Duration::from_millis(250));
+        Ok(Arc::new(SlowSubtreeRepo {
+            spec: RepoSpec {
+                workdir: workdir.to_path_buf(),
+            },
+        }))
+    }
+}
+
+struct SlowSubtreeRepo {
+    spec: RepoSpec,
+}
+
+impl SlowSubtreeRepo {
+    fn unsupported<T>() -> Result<T> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "Slow subtree test repo does not implement this operation",
+        )))
+    }
+}
+
+impl GitRepository for SlowSubtreeRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        Self::unsupported()
+    }
+
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        Self::unsupported()
+    }
+
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        Self::unsupported()
+    }
+
+    fn current_branch(&self) -> Result<String> {
+        Self::unsupported()
+    }
+
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        Self::unsupported()
+    }
+
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        Self::unsupported()
+    }
+
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        Self::unsupported()
+    }
+
+    fn status(&self) -> Result<RepoStatus> {
+        Self::unsupported()
+    }
+
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        Self::unsupported()
+    }
+
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        Self::unsupported()
+    }
+
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn commit(&self, _message: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn fetch_all(&self) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn push(&self) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn list_subtrees(&self) -> Result<Vec<Subtree>> {
+        std::thread::sleep(Duration::from_millis(250));
+        Ok(Vec::new())
+    }
+}
+
 struct SlowStashBackend;
 
 impl GitBackend for SlowStashBackend {
@@ -1320,6 +1460,10 @@ fn worktrees_spinner_selector(repo_id: RepoId) -> &'static str {
 
 fn submodules_spinner_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("submodules_spinner_{}", repo_id.0).into_boxed_str())
+}
+
+fn subtrees_spinner_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("subtrees_spinner_{}", repo_id.0).into_boxed_str())
 }
 
 fn stash_spinner_selector(repo_id: RepoId) -> &'static str {
@@ -1763,6 +1907,56 @@ fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext)
 
         if Instant::now() >= deadline {
             panic!("timed out waiting for submodules spinner to render");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
+#[gpui::test]
+fn subtrees_section_expanded_while_repo_is_opening_retries_request_and_shows_spinner(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubtreeBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_subtrees_spinner_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    cx.update(|_window, app| {
+        crate::view::test_support::expand_active_repo_subtrees_section(&_view, app);
+    });
+
+    wait_for_repo_open(&store_for_test, repo_id);
+
+    let selector = subtrees_spinner_selector(repo_id);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        sync_view_for_tests(cx, &_view);
+
+        let repo_requested = store_for_test
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.sidebar_data_request.subtrees && matches!(repo.subtrees, Loadable::Loading)
+            });
+
+        if repo_requested && cx.debug_bounds(selector).is_some() {
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for subtrees spinner to render");
         }
 
         cx.run_until_parked();

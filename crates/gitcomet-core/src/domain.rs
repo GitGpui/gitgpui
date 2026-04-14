@@ -158,6 +158,7 @@ pub struct Submodule {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubtreeSourceConfig {
+    pub local_repository: Option<String>,
     pub repository: String,
     pub reference: String,
     pub push_refspec: Option<String>,
@@ -168,6 +169,24 @@ pub struct SubtreeSourceConfig {
 pub struct Subtree {
     pub path: PathBuf,
     pub source: Option<SubtreeSourceConfig>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SubtreeSplitOptions {
+    pub branch: Option<String>,
+    pub through_revision: Option<String>,
+    pub annotate: Option<String>,
+    pub onto: Option<String>,
+    pub rejoin: bool,
+    pub ignore_joins: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SubtreeExtractOptions {
+    pub split: SubtreeSplitOptions,
+    pub destination_repository: Option<PathBuf>,
+    pub destination_branch: Option<String>,
+    pub remote_repository: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -53,6 +53,7 @@ pub(in crate::view) struct SidebarPresentationCache {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) struct SidebarRequestFingerprint {
     active_repo_id: Option<RepoId>,
+    active_repo_open_ready: bool,
     request: Option<SidebarDataRequest>,
 }
 
@@ -90,12 +91,17 @@ pub(in crate::view) fn sidebar_request_fingerprint(
     state: &AppState,
     collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
 ) -> SidebarRequestFingerprint {
+    let active_repo_open_ready = state
+        .active_repo
+        .and_then(|repo_id| state.repos.iter().find(|repo| repo.id == repo_id))
+        .is_some_and(|repo| matches!(repo.open, Loadable::Ready(())));
     let (active_repo_id, request) = active_sidebar_data_request(state, collapsed_items_by_repo)
         .map_or((state.active_repo, None), |(repo_id, request)| {
             (Some(repo_id), Some(request))
         });
     SidebarRequestFingerprint {
         active_repo_id,
+        active_repo_open_ready,
         request,
     }
 }
@@ -238,6 +244,25 @@ mod tests {
         assert!(request.submodules);
         assert!(request.subtrees);
         assert!(request.stashes);
+    }
+
+    #[test]
+    fn sidebar_request_fingerprint_changes_when_active_repo_becomes_ready() {
+        let state = AppState {
+            active_repo: Some(RepoId(1)),
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            ..Default::default()
+        };
+        let before = sidebar_request_fingerprint(&state, &BTreeMap::new());
+
+        let mut ready_state = state.clone();
+        ready_state.repos[0].open = Loadable::Ready(());
+        let after = sidebar_request_fingerprint(&ready_state, &BTreeMap::new());
+
+        assert_ne!(
+            before, after,
+            "open-ready transitions should invalidate the sidebar request fingerprint"
+        );
     }
 
     #[test]

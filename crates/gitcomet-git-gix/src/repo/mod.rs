@@ -3,7 +3,8 @@ use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
     FileDiffText, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, Subtree, Tag, UpstreamDivergence, Worktree,
+    RepoStatus, StashEntry, Submodule, Subtree, SubtreeSourceConfig, SubtreeSplitOptions, Tag,
+    UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -568,9 +569,13 @@ impl GitRepository for GixRepo {
     fn split_subtree_with_output(
         &self,
         path: &Path,
-        branch: Option<&str>,
+        options: &SubtreeSplitOptions,
     ) -> Result<CommandOutput> {
-        self.split_subtree_with_output_impl(path, branch)
+        self.split_subtree_with_output_impl(path, options)
+    }
+
+    fn store_subtree_source_config(&self, path: &Path, source: &SubtreeSourceConfig) -> Result<()> {
+        self.write_stored_subtree_source_config(path, source)
     }
 
     fn remove_subtree_with_output(&self, path: &Path) -> Result<CommandOutput> {

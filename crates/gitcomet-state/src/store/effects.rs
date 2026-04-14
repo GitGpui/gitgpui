@@ -3,6 +3,7 @@ mod open_repo;
 mod repo_actions;
 mod repo_commands;
 mod repo_load;
+mod subtree_extract;
 mod util;
 
 use crate::model::AppState;
@@ -248,6 +249,14 @@ pub(super) fn schedule_effect(
         Effect::CloneRepo { url, dest, auth } => {
             clone::schedule_clone_repo(executor, msg_tx, url, dest, auth)
         }
+        Effect::ExtractSubtree {
+            repo_id,
+            path,
+            options,
+            auth,
+        } => subtree_extract::schedule_extract_subtree(
+            executor, repos, msg_tx, repo_id, path, options, auth,
+        ),
         Effect::AbortCloneRepo { dest } => clone::schedule_abort_clone_repo(msg_tx, dest),
         Effect::ExportPatch {
             repo_id,

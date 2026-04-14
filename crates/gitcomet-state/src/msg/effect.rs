@@ -171,6 +171,12 @@ pub enum Effect {
         dest: PathBuf,
         auth: Option<StagedGitAuth>,
     },
+    ExtractSubtree {
+        repo_id: RepoId,
+        path: PathBuf,
+        options: SubtreeExtractOptions,
+        auth: Option<StagedGitAuth>,
+    },
     AbortCloneRepo {
         dest: PathBuf,
     },

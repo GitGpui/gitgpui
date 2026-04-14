@@ -2219,7 +2219,6 @@ pub(super) enum SubtreePopoverKind {
     Menu { path: std::path::PathBuf },
     AddPrompt,
     OpenPicker,
-    RevealPicker,
     PullPicker,
     PullPrompt { path: std::path::PathBuf },
     PushPicker,
@@ -2465,12 +2464,15 @@ pub(super) fn local_subtree_source_repo_path(
         return None;
     };
 
-    let repository = subtrees
+    let source = subtrees
         .iter()
         .find(|subtree| subtree.path == subtree_path)
-        .and_then(|subtree| subtree.source.as_ref())
-        .map(|source| source.repository.as_str())?;
-    local_repository_source_path(&repo.spec.workdir, repository)
+        .and_then(|subtree| subtree.source.as_ref())?;
+    source
+        .local_repository
+        .as_deref()
+        .or(Some(source.repository.as_str()))
+        .and_then(|repository| local_repository_source_path(&repo.spec.workdir, repository))
 }
 
 pub(super) fn focused_mergetool_bootstrap_action(
@@ -2679,6 +2681,7 @@ mod tests {
         repo.subtrees = Loadable::Ready(std::sync::Arc::new(vec![Subtree {
             path: PathBuf::from("vendor/lib"),
             source: Some(SubtreeSourceConfig {
+                local_repository: None,
                 repository: "../source".to_string(),
                 reference: "main".to_string(),
                 push_refspec: None,
@@ -2690,6 +2693,37 @@ mod tests {
             .expect("subtree source should resolve");
 
         assert_eq!(resolved, canonicalize_or_original(source));
+    }
+
+    #[test]
+    fn local_subtree_source_repo_path_prefers_local_repository_when_present() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let workdir = dir.path().join("parent");
+        let local = dir.path().join("local-source");
+        std::fs::create_dir_all(&workdir).expect("create repo workdir");
+        std::fs::create_dir_all(&local).expect("create local repo");
+
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: workdir.clone(),
+            },
+        );
+        repo.subtrees = Loadable::Ready(std::sync::Arc::new(vec![Subtree {
+            path: PathBuf::from("vendor/lib"),
+            source: Some(SubtreeSourceConfig {
+                local_repository: Some("../local-source".to_string()),
+                repository: "https://example.com/repo.git".to_string(),
+                reference: "main".to_string(),
+                push_refspec: None,
+                squash: true,
+            }),
+        }]));
+
+        let resolved = local_subtree_source_repo_path(&repo, std::path::Path::new("vendor/lib"))
+            .expect("subtree local repository should resolve");
+
+        assert_eq!(resolved, canonicalize_or_original(local));
     }
 }
 

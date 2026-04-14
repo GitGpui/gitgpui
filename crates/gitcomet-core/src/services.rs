@@ -597,10 +597,20 @@ pub trait GitRepository: Send + Sync {
     fn split_subtree_with_output(
         &self,
         _path: &Path,
-        _branch: Option<&str>,
+        _options: &SubtreeSplitOptions,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "subtree split is not implemented for this backend",
+        )))
+    }
+
+    fn store_subtree_source_config(
+        &self,
+        _path: &Path,
+        _source: &SubtreeSourceConfig,
+    ) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "subtree source metadata storage is not implemented for this backend",
         )))
     }
 

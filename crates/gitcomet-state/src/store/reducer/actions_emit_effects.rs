@@ -137,23 +137,6 @@ pub(super) fn remove_submodule(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::RemoveSubmodule { repo_id, path }]
 }
 
-pub(super) fn add_subtree(
-    repo_id: RepoId,
-    repository: String,
-    reference: String,
-    path: PathBuf,
-    squash: bool,
-) -> Vec<Effect> {
-    vec![Effect::AddSubtree {
-        repo_id,
-        repository,
-        reference,
-        path,
-        squash,
-        auth: None,
-    }]
-}
-
 pub(super) fn pull_subtree(
     repo_id: RepoId,
     repository: String,
@@ -703,6 +686,10 @@ pub(super) fn repo_command_finished(
     command: RepoCommandKind,
     result: std::result::Result<CommandOutput, Error>,
 ) -> Vec<Effect> {
+    let finished_add_subtree_path = match &command {
+        RepoCommandKind::AddSubtree { path, .. } => Some(path.clone()),
+        _ => None,
+    };
     let refresh_worktrees = matches!(
         &command,
         RepoCommandKind::AddWorktree { .. }
@@ -842,6 +829,14 @@ pub(super) fn repo_command_finished(
     }
     let mut effects = refresh_full_effects(repo_state);
     effects.extend(extra_effects);
+    if let Some(path) = finished_add_subtree_path
+        && state
+            .add_subtree
+            .as_ref()
+            .is_some_and(|op| op.repo_id == repo_id && op.path.as_ref() == &path)
+    {
+        state.add_subtree = None;
+    }
     if clear_banner {
         clear_banner_error_for_repo(state, repo_id);
     }

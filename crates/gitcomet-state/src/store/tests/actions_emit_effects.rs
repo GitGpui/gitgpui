@@ -722,6 +722,10 @@ fn subtree_commands_reload_subtrees_on_success() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
+    state.add_subtree = Some(crate::model::AddSubtreeOpState {
+        repo_id,
+        path: Arc::new(PathBuf::from("vendor/lib")),
+    });
     state.repos[0].set_subtrees(Loadable::Ready(Vec::new()));
 
     let effects = reduce(
@@ -741,6 +745,7 @@ fn subtree_commands_reload_subtrees_on_success() {
     );
 
     assert!(state.repos[0].subtrees.is_loading());
+    assert!(state.add_subtree.is_none());
     assert!(
         effects
             .iter()

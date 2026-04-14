@@ -236,6 +236,8 @@ pub struct AppState {
     pub repos: Vec<RepoState>,
     pub active_repo: Option<RepoId>,
     pub clone: Option<CloneOpState>,
+    pub add_subtree: Option<AddSubtreeOpState>,
+    pub extract_subtree: Option<SubtreeExtractOpState>,
     pub notifications: Vec<AppNotification>,
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
@@ -274,6 +276,11 @@ pub enum AuthRetryOperation {
     Clone {
         url: String,
         dest: PathBuf,
+    },
+    ExtractSubtree {
+        repo_id: RepoId,
+        path: PathBuf,
+        options: SubtreeExtractOptions,
     },
 }
 
@@ -336,6 +343,56 @@ pub enum CloneOpStatus {
     Cancelling,
     FinishedOk,
     Cancelled,
+    FinishedErr(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AddSubtreeOpState {
+    pub repo_id: RepoId,
+    pub path: Arc<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubtreeExtractOpState {
+    pub repo_id: RepoId,
+    pub path: Arc<PathBuf>,
+    pub options: SubtreeExtractOptions,
+    pub split_branch: Option<Arc<str>>,
+    pub destination_repo: Option<Arc<PathBuf>>,
+    pub destination_branch: Option<Arc<str>>,
+    pub remote_repository: Option<Arc<str>>,
+    pub status: SubtreeExtractOpStatus,
+    pub progress: SubtreeExtractProgressMeter,
+    pub seq: u64,
+    pub output_tail: VecDeque<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubtreeExtractProgressStage {
+    Splitting,
+    PreparingDestination,
+    PublishingDestination,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubtreeExtractProgressMeter {
+    pub stage: SubtreeExtractProgressStage,
+    pub percent: u8,
+}
+
+impl Default for SubtreeExtractProgressMeter {
+    fn default() -> Self {
+        Self {
+            stage: SubtreeExtractProgressStage::Splitting,
+            percent: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SubtreeExtractOpStatus {
+    Running,
+    FinishedOk,
     FinishedErr(String),
 }
 

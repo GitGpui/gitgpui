@@ -196,7 +196,13 @@ fn subtree_commands_round_trip_and_persist_source_metadata() {
     );
 
     opened
-        .split_subtree_with_output(subtree_path, Some("subtree-split"))
+        .split_subtree_with_output(
+            subtree_path,
+            &gitcomet_core::domain::SubtreeSplitOptions {
+                branch: Some("subtree-split".to_string()),
+                ..Default::default()
+            },
+        )
         .expect("split subtree");
     assert!(
         !git_stdout(&parent_repo, &["rev-parse", "subtree-split"]).is_empty(),

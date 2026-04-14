@@ -25,3 +25,4 @@ mod recent_repo_picker;
 mod refs;
 mod stash;
 mod status;
+mod subtree;

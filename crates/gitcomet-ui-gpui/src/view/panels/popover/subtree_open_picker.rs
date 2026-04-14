@@ -90,6 +90,7 @@ mod tests {
             Subtree {
                 path: std::path::PathBuf::from("vendor/local"),
                 source: Some(SubtreeSourceConfig {
+                    local_repository: None,
                     repository: "../source".to_string(),
                     reference: "main".to_string(),
                     push_refspec: None,
@@ -99,6 +100,7 @@ mod tests {
             Subtree {
                 path: std::path::PathBuf::from("vendor/remote"),
                 source: Some(SubtreeSourceConfig {
+                    local_repository: None,
                     repository: "https://example.com/repo.git".to_string(),
                     reference: "main".to_string(),
                     push_refspec: None,

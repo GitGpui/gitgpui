@@ -3,7 +3,7 @@ use crate::util::{
     bytes_to_text_preserving_utf8, git_command_failed_error, run_git_raw_output,
     run_git_with_output,
 };
-use gitcomet_core::domain::{Subtree, SubtreeSourceConfig};
+use gitcomet_core::domain::{Subtree, SubtreeSourceConfig, SubtreeSplitOptions};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 const SUBTREE_CONFIG_KEY_PREFIX: &str = "gitcomet.subtree.";
 const SUBTREE_PATH_FIELD: &str = "path";
+const SUBTREE_LOCAL_REPOSITORY_FIELD: &str = "localrepository";
 const SUBTREE_REPOSITORY_FIELD: &str = "repository";
 const SUBTREE_REFERENCE_FIELD: &str = "ref";
 const SUBTREE_PUSH_REFSPEC_FIELD: &str = "pushrefspec";
@@ -19,6 +20,7 @@ const SUBTREE_SQUASH_FIELD: &str = "squash";
 #[derive(Clone, Debug, Default)]
 struct StoredSubtreeConfigRow {
     path: Option<PathBuf>,
+    local_repository: Option<String>,
     repository: Option<String>,
     reference: Option<String>,
     push_refspec: Option<String>,
@@ -64,6 +66,9 @@ impl GixRepo {
 
         let existing = self.read_stored_subtree_source_configs()?;
         let source = SubtreeSourceConfig {
+            local_repository: existing
+                .get(path)
+                .and_then(|cfg| cfg.local_repository.clone()),
             repository: repository.to_string(),
             reference: reference.to_string(),
             push_refspec: existing.get(path).and_then(|cfg| cfg.push_refspec.clone()),
@@ -99,6 +104,9 @@ impl GixRepo {
 
         let existing = self.read_stored_subtree_source_configs()?;
         let source = SubtreeSourceConfig {
+            local_repository: existing
+                .get(path)
+                .and_then(|cfg| cfg.local_repository.clone()),
             repository: repository.to_string(),
             reference: reference.to_string(),
             push_refspec: existing.get(path).and_then(|cfg| cfg.push_refspec.clone()),
@@ -132,6 +140,7 @@ impl GixRepo {
         let existing = self.read_stored_subtree_source_configs()?;
         let existing_source = existing.get(path);
         let source = SubtreeSourceConfig {
+            local_repository: existing_source.and_then(|cfg| cfg.local_repository.clone()),
             repository: existing_source
                 .map(|cfg| cfg.repository.clone())
                 .unwrap_or_else(|| repository.to_string()),
@@ -148,7 +157,7 @@ impl GixRepo {
     pub(super) fn split_subtree_with_output_impl(
         &self,
         path: &Path,
-        branch: Option<&str>,
+        options: &SubtreeSplitOptions,
     ) -> Result<CommandOutput> {
         let path_text = path_to_config_value(path)?;
         let mut cmd = self.git_workdir_cmd();
@@ -156,8 +165,23 @@ impl GixRepo {
             .arg("split")
             .arg("--prefix")
             .arg(&path_text);
-        if let Some(branch) = branch {
+        if let Some(branch) = options.branch.as_deref() {
             cmd.arg("--branch").arg(branch);
+        }
+        if let Some(annotate) = options.annotate.as_deref() {
+            cmd.arg("--annotate").arg(annotate);
+        }
+        if let Some(onto) = options.onto.as_deref() {
+            cmd.arg("--onto").arg(onto);
+        }
+        if options.rejoin {
+            cmd.arg("--rejoin");
+        }
+        if options.ignore_joins {
+            cmd.arg("--ignore-joins");
+        }
+        if let Some(through_revision) = options.through_revision.as_deref() {
+            cmd.arg(through_revision);
         }
         map_subtree_command_error(run_git_with_output(
             cmd,
@@ -252,6 +276,7 @@ impl GixRepo {
                 Some((
                     path,
                     SubtreeSourceConfig {
+                        local_repository: row.local_repository,
                         repository,
                         reference,
                         push_refspec: row.push_refspec,
@@ -301,6 +326,12 @@ impl GixRepo {
                         row.path = Some(PathBuf::from(value));
                     }
                 }
+                SUBTREE_LOCAL_REPOSITORY_FIELD => {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        row.local_repository = Some(value.to_string());
+                    }
+                }
                 SUBTREE_REPOSITORY_FIELD => {
                     let value = value.trim();
                     if !value.is_empty() {
@@ -328,7 +359,7 @@ impl GixRepo {
         Ok(rows)
     }
 
-    fn write_stored_subtree_source_config(
+    pub(super) fn write_stored_subtree_source_config(
         &self,
         path: &Path,
         source: &SubtreeSourceConfig,
@@ -338,6 +369,16 @@ impl GixRepo {
             subtree_config_key(&config_id, SUBTREE_PATH_FIELD),
             path_to_config_value(path)?,
         )?;
+        match &source.local_repository {
+            Some(local_repository) => self.set_local_config_value(
+                subtree_config_key(&config_id, SUBTREE_LOCAL_REPOSITORY_FIELD),
+                local_repository.clone(),
+            )?,
+            None => self.unset_local_config_key(&subtree_config_key(
+                &config_id,
+                SUBTREE_LOCAL_REPOSITORY_FIELD,
+            ))?,
+        }
         self.set_local_config_value(
             subtree_config_key(&config_id, SUBTREE_REPOSITORY_FIELD),
             source.repository.clone(),
@@ -380,6 +421,7 @@ impl GixRepo {
     fn delete_stored_subtree_config_record(&self, config_id: &str) -> Result<()> {
         for field in [
             SUBTREE_PATH_FIELD,
+            SUBTREE_LOCAL_REPOSITORY_FIELD,
             SUBTREE_REPOSITORY_FIELD,
             SUBTREE_REFERENCE_FIELD,
             SUBTREE_PUSH_REFSPEC_FIELD,

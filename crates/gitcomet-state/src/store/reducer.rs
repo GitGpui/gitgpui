@@ -11,6 +11,7 @@ use crate::model::{
 };
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
+use gitcomet_core::domain::SubtreeExtractOptions;
 use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
@@ -130,6 +131,24 @@ fn auth_prompt_for_clone(
     })
 }
 
+fn auth_prompt_for_extract_subtree(
+    repo_id: RepoId,
+    path: &std::path::Path,
+    options: &SubtreeExtractOptions,
+    error: &gitcomet_core::error::Error,
+) -> Option<AuthPromptState> {
+    let kind = util::detect_auth_prompt_kind(error)?;
+    Some(AuthPromptState {
+        kind,
+        reason: util::format_error_for_user(error),
+        operation: AuthRetryOperation::ExtractSubtree {
+            repo_id,
+            path: path.to_path_buf(),
+            options: options.clone(),
+        },
+    })
+}
+
 fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
     match operation {
         AuthRetryOperation::RepoCommand { repo_id, command } => {
@@ -145,6 +164,15 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
             Msg::Commit { repo_id, message }
         }),
         AuthRetryOperation::Clone { url, dest } => Some(Msg::CloneRepo { url, dest }),
+        AuthRetryOperation::ExtractSubtree {
+            repo_id,
+            path,
+            options,
+        } => Some(Msg::ExtractSubtree {
+            repo_id,
+            path,
+            options,
+        }),
     }
 }
 
@@ -155,6 +183,9 @@ fn clear_banner_error_for_auth_operation(state: &mut AppState, operation: &AuthR
             util::clear_banner_error_for_repo(state, *repo_id);
         }
         AuthRetryOperation::Clone { .. } => {}
+        AuthRetryOperation::ExtractSubtree { repo_id, .. } => {
+            util::clear_banner_error_for_repo(state, *repo_id);
+        }
     }
 }
 
@@ -307,6 +338,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
 
     match first {
         Effect::CloneRepo { auth: slot, .. }
+        | Effect::ExtractSubtree { auth: slot, .. }
         | Effect::AddSubmodule { auth: slot, .. }
         | Effect::UpdateSubmodules { auth: slot, .. }
         | Effect::AddSubtree { auth: slot, .. }
@@ -655,6 +687,62 @@ pub(super) fn reduce(
             }
             effects
         }
+        Msg::ExtractSubtree {
+            repo_id,
+            path,
+            mut options,
+        } => {
+            if let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id)
+                && let Some(dest) = options.destination_repository.take()
+            {
+                options.destination_repository =
+                    Some(normalize_repo_relative_path(&repo_state.spec.workdir, dest));
+            }
+            repo_management::extract_subtree(state, repo_id, path, options)
+        }
+        Msg::Internal(crate::msg::InternalMsg::ExtractSubtreeProgress {
+            repo_id,
+            path,
+            destination_repo,
+            progress,
+            line,
+        }) => repo_management::extract_subtree_progress(
+            state,
+            repo_id,
+            path,
+            destination_repo,
+            progress,
+            line,
+        ),
+        Msg::Internal(crate::msg::InternalMsg::ExtractSubtreeFinished {
+            repo_id,
+            path,
+            destination_repo,
+            result,
+        }) => {
+            let options = state
+                .extract_subtree
+                .as_ref()
+                .filter(|op| op.repo_id == repo_id && op.path.as_ref() == &path)
+                .map(|op| op.options.clone())
+                .unwrap_or_default();
+            let auth_prompt = result
+                .as_ref()
+                .err()
+                .and_then(|error| auth_prompt_for_extract_subtree(repo_id, &path, &options, error));
+            let effects = repo_management::extract_subtree_finished(
+                state,
+                repo_id,
+                path,
+                destination_repo,
+                result,
+            );
+            if let Some(prompt) = auth_prompt {
+                util::clear_staged_git_auth_env();
+                state.auth_prompt = Some(prompt);
+            }
+            effects
+        }
         Msg::ExportPatch {
             repo_id,
             commit_id,
@@ -717,10 +805,7 @@ pub(super) fn reduce(
             reference,
             path,
             squash,
-        } => {
-            begin_local_action(state, repo_id);
-            actions_emit_effects::add_subtree(repo_id, repository, reference, path, squash)
-        }
+        } => repo_management::add_subtree(state, repo_id, repository, reference, path, squash),
         Msg::PullSubtree {
             repo_id,
             repository,

@@ -9,10 +9,26 @@ pub(super) struct ToastHost {
     clone_progress: Option<CloneOpState>,
     clone_progress_last_seq: u64,
     clone_progress_dest: Option<std::sync::Arc<std::path::PathBuf>>,
+    add_subtree_progress: Option<gitcomet_state::model::AddSubtreeOpState>,
+    add_subtree_progress_path: Option<std::sync::Arc<std::path::PathBuf>>,
+    subtree_extract_progress: Option<gitcomet_state::model::SubtreeExtractOpState>,
+    subtree_extract_progress_last_seq: u64,
+    subtree_extract_progress_path: Option<std::sync::Arc<std::path::PathBuf>>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 struct CloneProgressSyncAction {
+    progress_changed: bool,
+    notice: Option<(components::ToastKind, String)>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct AddSubtreeProgressSyncAction {
+    progress_changed: bool,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SubtreeExtractProgressSyncAction {
     progress_changed: bool,
     notice: Option<(components::ToastKind, String)>,
 }
@@ -137,6 +153,124 @@ fn apply_clone_progress_sync(
     }
 }
 
+fn apply_subtree_extract_progress_sync(
+    subtree_extract_progress: &mut Option<gitcomet_state::model::SubtreeExtractOpState>,
+    subtree_extract_progress_last_seq: &mut u64,
+    subtree_extract_progress_path: &mut Option<std::sync::Arc<std::path::PathBuf>>,
+    next_extract: Option<&gitcomet_state::model::SubtreeExtractOpState>,
+) -> SubtreeExtractProgressSyncAction {
+    use gitcomet_state::model::SubtreeExtractOpStatus;
+
+    match next_extract {
+        Some(op) => match &op.status {
+            SubtreeExtractOpStatus::Running => {
+                let needs_reset = subtree_extract_progress.is_none()
+                    || !matches!(
+                        subtree_extract_progress_path.as_ref(),
+                        Some(path) if std::sync::Arc::ptr_eq(path, &op.path)
+                    );
+                if needs_reset {
+                    *subtree_extract_progress_last_seq = 0;
+                    *subtree_extract_progress_path = Some(op.path.clone());
+                }
+
+                if needs_reset || *subtree_extract_progress_last_seq != op.seq {
+                    *subtree_extract_progress_last_seq = op.seq;
+                    *subtree_extract_progress = Some(op.clone());
+                    SubtreeExtractProgressSyncAction {
+                        progress_changed: true,
+                        notice: None,
+                    }
+                } else {
+                    SubtreeExtractProgressSyncAction {
+                        progress_changed: false,
+                        notice: None,
+                    }
+                }
+            }
+            SubtreeExtractOpStatus::FinishedOk => {
+                if *subtree_extract_progress_last_seq != op.seq {
+                    let had_progress = subtree_extract_progress.take().is_some();
+                    *subtree_extract_progress_path = None;
+                    *subtree_extract_progress_last_seq = op.seq;
+                    let message = op
+                        .destination_repo
+                        .as_ref()
+                        .map(|dest| format!("Subtree extracted: {}", dest.display()))
+                        .unwrap_or_else(|| format!("Subtree split: {}", op.path.display()));
+                    SubtreeExtractProgressSyncAction {
+                        progress_changed: had_progress,
+                        notice: Some((components::ToastKind::Success, message)),
+                    }
+                } else {
+                    SubtreeExtractProgressSyncAction {
+                        progress_changed: false,
+                        notice: None,
+                    }
+                }
+            }
+            SubtreeExtractOpStatus::FinishedErr(err) => {
+                if *subtree_extract_progress_last_seq != op.seq {
+                    let had_progress = subtree_extract_progress.take().is_some();
+                    *subtree_extract_progress_path = None;
+                    *subtree_extract_progress_last_seq = op.seq;
+                    SubtreeExtractProgressSyncAction {
+                        progress_changed: had_progress,
+                        notice: Some((components::ToastKind::Error, err.clone())),
+                    }
+                } else {
+                    SubtreeExtractProgressSyncAction {
+                        progress_changed: false,
+                        notice: None,
+                    }
+                }
+            }
+        },
+        None => {
+            let had_progress = subtree_extract_progress.take().is_some();
+            *subtree_extract_progress_last_seq = 0;
+            *subtree_extract_progress_path = None;
+            SubtreeExtractProgressSyncAction {
+                progress_changed: had_progress,
+                notice: None,
+            }
+        }
+    }
+}
+
+fn apply_add_subtree_progress_sync(
+    add_subtree_progress: &mut Option<gitcomet_state::model::AddSubtreeOpState>,
+    add_subtree_progress_path: &mut Option<std::sync::Arc<std::path::PathBuf>>,
+    next_add_subtree: Option<&gitcomet_state::model::AddSubtreeOpState>,
+) -> AddSubtreeProgressSyncAction {
+    match next_add_subtree {
+        Some(op) => {
+            let changed = add_subtree_progress.is_none()
+                || !matches!(
+                    add_subtree_progress_path.as_ref(),
+                    Some(path) if std::sync::Arc::ptr_eq(path, &op.path)
+                )
+                || add_subtree_progress
+                    .as_ref()
+                    .is_some_and(|current| current.repo_id != op.repo_id);
+            if changed {
+                *add_subtree_progress = Some(op.clone());
+                *add_subtree_progress_path = Some(op.path.clone());
+            }
+            AddSubtreeProgressSyncAction {
+                progress_changed: changed,
+            }
+        }
+        None => {
+            let had_progress = add_subtree_progress.take().is_some();
+            *add_subtree_progress_path = None;
+            AddSubtreeProgressSyncAction {
+                progress_changed: had_progress,
+            }
+        }
+    }
+}
+
 impl ToastHost {
     pub(super) fn new(
         theme: AppTheme,
@@ -151,6 +285,11 @@ impl ToastHost {
             clone_progress: None,
             clone_progress_last_seq: 0,
             clone_progress_dest: None,
+            add_subtree_progress: None,
+            add_subtree_progress_path: None,
+            subtree_extract_progress: None,
+            subtree_extract_progress_last_seq: 0,
+            subtree_extract_progress_path: None,
         }
     }
 
@@ -311,6 +450,40 @@ impl ToastHost {
         }
     }
 
+    pub(super) fn sync_add_subtree_progress(
+        &mut self,
+        next_add_subtree: Option<&gitcomet_state::model::AddSubtreeOpState>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let action = apply_add_subtree_progress_sync(
+            &mut self.add_subtree_progress,
+            &mut self.add_subtree_progress_path,
+            next_add_subtree,
+        );
+        if action.progress_changed {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn sync_subtree_extract_progress(
+        &mut self,
+        next_extract: Option<&gitcomet_state::model::SubtreeExtractOpState>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let action = apply_subtree_extract_progress_sync(
+            &mut self.subtree_extract_progress,
+            &mut self.subtree_extract_progress_last_seq,
+            &mut self.subtree_extract_progress_path,
+            next_extract,
+        );
+        if action.progress_changed {
+            cx.notify();
+        }
+        if let Some((kind, message)) = action.notice {
+            self.push_toast(kind, message, cx);
+        }
+    }
+
     fn render_clone_progress_toast(
         &self,
         op: CloneOpState,
@@ -450,6 +623,199 @@ impl ToastHost {
             .into_any_element()
     }
 
+    fn render_subtree_extract_progress_toast(
+        &self,
+        op: gitcomet_state::model::SubtreeExtractOpState,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let spinner_color =
+            crate::view::subtree_extract_progress::subtree_extract_progress_color(theme, &op);
+        let shell_bg = with_alpha(
+            theme.colors.surface_bg_elevated,
+            if theme.is_dark { 0.96 } else { 0.98 },
+        );
+        let shell_border = clone_progress_shell_border_color(theme);
+        let shell_accent = clone_progress_shell_accent_color(theme);
+        let percent = op.progress.percent.min(100);
+        let bar_track = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.22 } else { 0.12 },
+        );
+        let bar_fill =
+            crate::view::subtree_extract_progress::subtree_extract_progress_fill_ratio(percent);
+
+        let content = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(svg_spinner(
+                        "subtree_extract_progress_spinner",
+                        spinner_color,
+                        px(16.0),
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex_col()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(
+                                        crate::view::subtree_extract_progress::subtree_extract_progress_title(&op),
+                                    ),
+                            )
+                            .child(div().text_sm().text_color(theme.colors.text_muted).child(
+                                crate::view::subtree_extract_progress::subtree_extract_progress_target_label(&op),
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .text_sm()
+                    .child(
+                        div().text_color(spinner_color).child(
+                            crate::view::subtree_extract_progress::subtree_extract_progress_phase_label(&op),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("{percent}%")),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(px(6.0))
+                    .rounded(px(999.0))
+                    .overflow_hidden()
+                    .bg(bar_track)
+                    .child(
+                        div()
+                            .w(relative(bar_fill))
+                            .h_full()
+                            .rounded(px(999.0))
+                            .bg(spinner_color),
+                    ),
+            );
+
+        div()
+            .min_w(px(360.0))
+            .max_w(px(900.0))
+            .flex()
+            .gap(px(12.0))
+            .bg(shell_bg)
+            .border_1()
+            .border_color(shell_border)
+            .rounded(px(theme.radii.panel))
+            .overflow_hidden()
+            .shadow_sm()
+            .text_lg()
+            .text_color(theme.colors.text)
+            .child(div().w(px(5.0)).bg(shell_accent).flex_shrink_0())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .pl(px(16.0))
+                    .pr(px(16.0))
+                    .py(px(12.0))
+                    .child(content),
+            )
+            .into_any_element()
+    }
+
+    fn render_add_subtree_progress_toast(
+        &self,
+        op: gitcomet_state::model::AddSubtreeOpState,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let spinner_color = with_alpha(theme.colors.text, if theme.is_dark { 0.62 } else { 0.48 });
+        let shell_bg = with_alpha(
+            theme.colors.surface_bg_elevated,
+            if theme.is_dark { 0.96 } else { 0.98 },
+        );
+        let shell_border = clone_progress_shell_border_color(theme);
+        let shell_accent = clone_progress_shell_accent_color(theme);
+
+        let content = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(svg_spinner(
+                        "add_subtree_progress_spinner",
+                        spinner_color,
+                        px(16.0),
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().font_weight(FontWeight::BOLD).child("Adding subtree…"))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(op.path.display().to_string()),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .text_sm()
+                    .text_color(spinner_color)
+                    .child("Fetching and merging history"),
+            );
+
+        div()
+            .min_w(px(360.0))
+            .max_w(px(900.0))
+            .flex()
+            .gap(px(12.0))
+            .bg(shell_bg)
+            .border_1()
+            .border_color(shell_border)
+            .rounded(px(theme.radii.panel))
+            .overflow_hidden()
+            .shadow_sm()
+            .text_lg()
+            .text_color(theme.colors.text)
+            .child(div().w(px(5.0)).bg(shell_accent).flex_shrink_0())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .pl(px(16.0))
+                    .pr(px(16.0))
+                    .py(px(12.0))
+                    .child(content),
+            )
+            .into_any_element()
+    }
+
     fn set_tooltip_text_if_changed(
         &mut self,
         next: Option<SharedString>,
@@ -476,17 +842,30 @@ impl ToastHost {
 
 impl Render for ToastHost {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        if self.toasts.is_empty() && self.clone_progress.is_none() {
+        if self.toasts.is_empty()
+            && self.clone_progress.is_none()
+            && self.add_subtree_progress.is_none()
+            && self.subtree_extract_progress.is_none()
+        {
             return div().into_any_element();
         }
         let theme = self.theme;
 
-        let has_progress = self.clone_progress.is_some();
+        let progress_count = usize::from(self.clone_progress.is_some())
+            + usize::from(self.add_subtree_progress.is_some())
+            + usize::from(self.subtree_extract_progress.is_some());
+        let has_progress = progress_count > 0;
         let max_other = if has_progress { 2 } else { 3 };
-        let progress_toast = self
-            .clone_progress
-            .clone()
-            .map(|progress| self.render_clone_progress_toast(progress, cx));
+        let mut progress_toasts = Vec::new();
+        if let Some(progress) = self.clone_progress.clone() {
+            progress_toasts.push(self.render_clone_progress_toast(progress, cx));
+        }
+        if let Some(progress) = self.add_subtree_progress.clone() {
+            progress_toasts.push(self.render_add_subtree_progress_toast(progress));
+        }
+        if let Some(progress) = self.subtree_extract_progress.clone() {
+            progress_toasts.push(self.render_subtree_extract_progress_toast(progress));
+        }
         let mut displayed = self
             .toasts
             .iter()
@@ -604,9 +983,7 @@ impl Render for ToastHost {
                     .into_any_element()
             })
             .collect::<Vec<_>>();
-        if let Some(progress_toast) = progress_toast {
-            children.push(progress_toast);
-        }
+        children.extend(progress_toasts);
 
         div()
             .id("toast_layer")
@@ -629,7 +1006,7 @@ impl Render for ToastHost {
 mod tests {
     use super::*;
     use crate::theme::with_alpha;
-    use gitcomet_state::model::{CloneProgressMeter, CloneProgressStage};
+    use gitcomet_state::model::{AddSubtreeOpState, CloneProgressMeter, CloneProgressStage};
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -649,6 +1026,10 @@ mod tests {
             seq,
             output_tail: VecDeque::new(),
         }
+    }
+
+    fn add_subtree_op(repo_id: RepoId, path: Arc<PathBuf>) -> AddSubtreeOpState {
+        AddSubtreeOpState { repo_id, path }
     }
 
     #[test]
@@ -897,6 +1278,50 @@ mod tests {
         assert!(progress.is_none());
         assert_eq!(last_seq, 0);
         assert!(tracked_dest.is_none());
+    }
+
+    #[test]
+    fn apply_add_subtree_progress_sync_tracks_running_operation_and_deduplicates_same_path() {
+        let path = Arc::new(PathBuf::from("vendor/lib"));
+        let op = add_subtree_op(RepoId(7), Arc::clone(&path));
+        let mut progress = None;
+        let mut tracked_path = None;
+
+        let first = apply_add_subtree_progress_sync(&mut progress, &mut tracked_path, Some(&op));
+        assert_eq!(
+            first,
+            AddSubtreeProgressSyncAction {
+                progress_changed: true,
+            }
+        );
+        assert_eq!(progress.as_ref(), Some(&op));
+        assert_eq!(tracked_path.as_ref(), Some(&path));
+
+        let second = apply_add_subtree_progress_sync(&mut progress, &mut tracked_path, Some(&op));
+        assert_eq!(
+            second,
+            AddSubtreeProgressSyncAction {
+                progress_changed: false,
+            }
+        );
+        assert_eq!(progress.as_ref(), Some(&op));
+    }
+
+    #[test]
+    fn apply_add_subtree_progress_sync_clears_when_operation_disappears() {
+        let path = Arc::new(PathBuf::from("vendor/lib"));
+        let mut progress = Some(add_subtree_op(RepoId(7), Arc::clone(&path)));
+        let mut tracked_path = Some(path);
+
+        let action = apply_add_subtree_progress_sync(&mut progress, &mut tracked_path, None);
+        assert_eq!(
+            action,
+            AddSubtreeProgressSyncAction {
+                progress_changed: true,
+            }
+        );
+        assert!(progress.is_none());
+        assert!(tracked_path.is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
+use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest, SubtreeExtractProgressMeter};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
@@ -287,6 +287,11 @@ pub enum Msg {
         path: PathBuf,
         branch: Option<String>,
     },
+    ExtractSubtree {
+        repo_id: RepoId,
+        path: PathBuf,
+        options: SubtreeExtractOptions,
+    },
     RemoveSubtree {
         repo_id: RepoId,
         path: PathBuf,
@@ -524,6 +529,19 @@ pub enum InternalMsg {
         url: String,
         dest: PathBuf,
         result: Result<CommandOutput, Error>,
+    },
+    ExtractSubtreeProgress {
+        repo_id: RepoId,
+        path: Arc<PathBuf>,
+        destination_repo: Option<Arc<PathBuf>>,
+        progress: SubtreeExtractProgressMeter,
+        line: Option<String>,
+    },
+    ExtractSubtreeFinished {
+        repo_id: RepoId,
+        path: PathBuf,
+        destination_repo: Option<PathBuf>,
+        result: Result<(), Error>,
     },
     RepoOpenedOk {
         repo_id: RepoId,

@@ -3,17 +3,19 @@ use super::util::{
     SelectedConflictTarget, append_refresh_full_effects, append_refresh_primary_effects,
     append_start_conflict_target_reload, append_start_current_conflict_target_reload,
     clear_banner_error_for_repo, dedup_paths_in_order, format_failure_summary,
-    handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
-    refresh_full_effect_capacity, refresh_full_effects, refresh_primary_effect_capacity,
-    selected_conflict_target, selected_diff_load_plan,
+    handle_session_persist_result, normalize_repo_path, push_action_log, push_diagnostic,
+    push_notification, refresh_full_effect_capacity, refresh_full_effects,
+    refresh_primary_effect_capacity, refresh_primary_effects, selected_conflict_target,
+    selected_diff_load_plan,
 };
 use crate::model::{
-    AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
-    CloneProgressStage, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight, RepoState,
+    AddSubtreeOpState, AppNotificationKind, AppState, CloneOpState, CloneOpStatus,
+    CloneProgressMeter, CloneProgressStage, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight,
+    RepoState, SubtreeExtractOpState, SubtreeExtractOpStatus, SubtreeExtractProgressMeter,
 };
 use crate::msg::Effect;
 use crate::session;
-use gitcomet_core::domain::RepoSpec;
+use gitcomet_core::domain::{RepoSpec, SubtreeExtractOptions};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, GitRepository};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -603,6 +605,223 @@ pub(super) fn clone_repo_finished(
     Vec::new()
 }
 
+pub(super) fn add_subtree(
+    state: &mut AppState,
+    repo_id: RepoId,
+    repository: String,
+    reference: String,
+    path: PathBuf,
+    squash: bool,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
+        repo_state.bump_ops_rev();
+    }
+
+    state.add_subtree = Some(AddSubtreeOpState {
+        repo_id,
+        path: Arc::new(path.clone()),
+    });
+
+    vec![Effect::AddSubtree {
+        repo_id,
+        repository,
+        reference,
+        path,
+        squash,
+        auth: None,
+    }]
+}
+
+pub(super) fn extract_subtree(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+    options: SubtreeExtractOptions,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
+        repo_state.bump_ops_rev();
+    }
+
+    state.extract_subtree = Some(SubtreeExtractOpState {
+        repo_id,
+        path: Arc::new(path.clone()),
+        options: options.clone(),
+        split_branch: options.split.branch.as_deref().map(Arc::<str>::from),
+        destination_repo: options
+            .destination_repository
+            .as_ref()
+            .map(|p| Arc::new(p.clone())),
+        destination_branch: options.destination_branch.as_deref().map(Arc::<str>::from),
+        remote_repository: options.remote_repository.as_deref().map(Arc::<str>::from),
+        status: SubtreeExtractOpStatus::Running,
+        progress: SubtreeExtractProgressMeter::default(),
+        seq: 0,
+        output_tail: VecDeque::new(),
+    });
+
+    vec![Effect::ExtractSubtree {
+        repo_id,
+        path,
+        options,
+        auth: None,
+    }]
+}
+
+pub(super) fn extract_subtree_progress(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: Arc<PathBuf>,
+    destination_repo: Option<Arc<PathBuf>>,
+    progress: SubtreeExtractProgressMeter,
+    line: Option<String>,
+) -> Vec<Effect> {
+    const MAX_LINES: usize = 80;
+
+    if let Some(op) = state.extract_subtree.as_mut()
+        && op.repo_id == repo_id
+        && op.path.as_ref() == path.as_ref()
+        && op.destination_repo.as_ref().map(|p| p.as_ref())
+            == destination_repo.as_ref().map(|p| p.as_ref())
+        && matches!(op.status, SubtreeExtractOpStatus::Running)
+    {
+        op.seq = op.seq.wrapping_add(1);
+        op.progress = progress;
+        if let Some(line) = line
+            && !line.trim().is_empty()
+        {
+            if op.output_tail.capacity() < MAX_LINES {
+                op.output_tail
+                    .reserve(MAX_LINES.saturating_sub(op.output_tail.capacity()));
+            }
+            if op.output_tail.len() == MAX_LINES {
+                op.output_tail.pop_front();
+            }
+            op.output_tail.push_back(line);
+        }
+    }
+    Vec::new()
+}
+
+fn extract_subtree_success_summary(op: &SubtreeExtractOpState) -> String {
+    match (
+        &op.destination_repo,
+        &op.remote_repository,
+        &op.destination_branch,
+    ) {
+        (Some(dest), Some(remote), Some(branch)) => format!(
+            "Subtree extracted → {} → {} ({branch}, published to {remote})",
+            op.path.display(),
+            dest.display()
+        ),
+        (Some(dest), Some(remote), None) => format!(
+            "Subtree extracted → {} → {} (published to {remote})",
+            op.path.display(),
+            dest.display()
+        ),
+        (Some(dest), None, Some(branch)) => format!(
+            "Subtree extracted → {} → {} ({branch})",
+            op.path.display(),
+            dest.display()
+        ),
+        (Some(dest), None, None) => {
+            format!(
+                "Subtree extracted → {} → {}",
+                op.path.display(),
+                dest.display()
+            )
+        }
+        (None, _, _) => match &op.split_branch {
+            Some(branch) => format!("Subtree split → {} ({branch})", op.path.display()),
+            None => format!("Subtree split → {}", op.path.display()),
+        },
+    }
+}
+
+pub(super) fn extract_subtree_finished(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+    destination_repo: Option<PathBuf>,
+    result: std::result::Result<(), Error>,
+) -> Vec<Effect> {
+    let mut should_refresh_subtrees = false;
+    let mut clear_banner = false;
+    let mut success_summary: Option<String> = None;
+
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
+        repo_state.bump_ops_rev();
+    }
+
+    let matches_current = state
+        .extract_subtree
+        .as_ref()
+        .is_some_and(|op| op.repo_id == repo_id && op.path.as_ref() == &path);
+
+    if matches_current {
+        if let Some(op) = state.extract_subtree.as_mut() {
+            if let Some(dest) = destination_repo.as_ref() {
+                op.destination_repo = Some(Arc::new(dest.clone()));
+            }
+            op.status = match result {
+                Ok(()) => {
+                    clear_banner = true;
+                    should_refresh_subtrees = op.destination_repo.is_some();
+                    success_summary = Some(extract_subtree_success_summary(op));
+                    SubtreeExtractOpStatus::FinishedOk
+                }
+                Err(ref error) => SubtreeExtractOpStatus::FinishedErr(format_failure_summary(
+                    "Subtree extract",
+                    error,
+                )),
+            };
+            op.seq = op.seq.wrapping_add(1);
+        }
+    } else if result.is_ok() {
+        clear_banner = true;
+    }
+
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    match result {
+        Ok(()) => {
+            repo_state.last_error = None;
+            push_action_log(
+                repo_state,
+                true,
+                "Subtree extract".to_string(),
+                success_summary.unwrap_or_else(|| format!("Subtree split → {}", path.display())),
+                None,
+            );
+        }
+        Err(error) => {
+            let summary = format_failure_summary("Subtree extract", &error);
+            repo_state.last_error = Some(summary.clone());
+            push_action_log(
+                repo_state,
+                false,
+                "Subtree extract".to_string(),
+                summary,
+                Some(&error),
+            );
+        }
+    }
+
+    let mut effects = refresh_primary_effects(repo_state);
+    if should_refresh_subtrees {
+        repo_state.set_subtrees(Loadable::Loading);
+        effects.push(Effect::LoadSubtrees { repo_id });
+    }
+    if clear_banner {
+        clear_banner_error_for_repo(state, repo_id);
+    }
+    effects
+}
+
 pub(super) fn repo_opened_ok(
     repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
@@ -642,6 +861,7 @@ pub(super) fn repo_opened_ok(
         repo_state.history_state.blame = Loadable::NotLoaded;
         repo_state.set_worktrees(Loadable::NotLoaded);
         repo_state.set_submodules(Loadable::NotLoaded);
+        repo_state.set_subtrees(Loadable::NotLoaded);
         repo_state.set_selected_commit(None);
         repo_state.set_commit_details(Loadable::NotLoaded);
         repo_state.diff_state.diff_target = None;

@@ -102,6 +102,7 @@ mod tests {
         std::fs::create_dir_all(&workdir).expect("create workdir");
 
         let source = source_repository.map(|source_repository| SubtreeSourceConfig {
+            local_repository: None,
             repository: source_repository.to_string(),
             reference: "main".to_string(),
             push_refspec: None,
@@ -138,6 +139,7 @@ mod tests {
         repo.subtrees = Loadable::Ready(std::sync::Arc::new(vec![Subtree {
             path: std::path::PathBuf::from("vendor/lib"),
             source: Some(SubtreeSourceConfig {
+                local_repository: None,
                 repository: "../source".to_string(),
                 reference: "main".to_string(),
                 push_refspec: None,

@@ -68,6 +68,7 @@ mod settings_window;
 mod sidebar_presentation;
 mod splash;
 mod state_apply;
+pub(crate) mod subtree_extract_progress;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod toast_host;

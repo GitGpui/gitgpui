@@ -130,6 +130,12 @@ impl GitCometView {
         self.toast_host.update(cx, |host, cx| {
             host.sync_clone_progress(next.clone.as_ref(), cx)
         });
+        self.toast_host.update(cx, |host, cx| {
+            host.sync_add_subtree_progress(next.add_subtree.as_ref(), cx)
+        });
+        self.toast_host.update(cx, |host, cx| {
+            host.sync_subtree_extract_progress(next.extract_subtree.as_ref(), cx)
+        });
 
         #[cfg(target_os = "macos")]
         if self.view_mode == GitCometViewMode::Normal {

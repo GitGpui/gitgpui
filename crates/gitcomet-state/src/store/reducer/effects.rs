@@ -453,6 +453,9 @@ pub(super) fn load_subtrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effect
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
     repo_state.set_subtrees(Loadable::Loading);
     vec![Effect::LoadSubtrees { repo_id }]
 }
@@ -1315,7 +1318,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_open_worktree_and_submodule_loads_are_noops() {
+    fn pre_open_worktree_submodule_and_subtree_loads_are_noops() {
         let repo_id = RepoId(1);
         let mut state = new_state_with_repo(repo_id);
 
@@ -1333,6 +1336,12 @@ mod tests {
         assert!(load_submodules(&mut state, repo_id).is_empty());
         assert!(matches!(
             repo_mut(&mut state, repo_id).submodules,
+            Loadable::NotLoaded
+        ));
+
+        assert!(load_subtrees(&mut state, repo_id).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).subtrees,
             Loadable::NotLoaded
         ));
     }

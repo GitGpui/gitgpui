@@ -593,10 +593,6 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 31u8.hash(hasher);
                 repo_id.hash(hasher);
             }
-            SubtreePopoverKind::RevealPicker => {
-                32u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
             SubtreePopoverKind::PullPicker => {
                 33u8.hash(hasher);
                 repo_id.hash(hasher);

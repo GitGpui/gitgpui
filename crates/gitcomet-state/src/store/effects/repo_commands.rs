@@ -391,6 +391,10 @@ pub(super) fn schedule_split_subtree(
 ) {
     let command_path = path.clone();
     let command_branch = branch.clone();
+    let options = gitcomet_core::domain::SubtreeSplitOptions {
+        branch,
+        ..Default::default()
+    };
     schedule_repo_command(
         executor,
         repos,
@@ -400,7 +404,7 @@ pub(super) fn schedule_split_subtree(
             path: command_path,
             branch: command_branch,
         },
-        move |repo| repo.split_subtree_with_output(&path, branch.as_deref()),
+        move |repo| repo.split_subtree_with_output(&path, &options),
     );
 }
 
