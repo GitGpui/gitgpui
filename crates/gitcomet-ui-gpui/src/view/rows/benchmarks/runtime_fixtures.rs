@@ -716,26 +716,6 @@ fn idle_sample_steps(window: Duration, interval: Duration) -> usize {
 
 #[cfg(target_os = "linux")]
 #[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn parse_first_u64_ascii_token(bytes: &[u8]) -> Option<u64> {
-    std::str::from_utf8(bytes)
-        .ok()?
-        .split_ascii_whitespace()
-        .next()?
-        .parse::<u64>()
-        .ok()
-}
-
-#[cfg(target_os = "linux")]
-#[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn parse_vmrss_kib(bytes: &[u8]) -> Option<u64> {
-    std::str::from_utf8(bytes).ok()?.lines().find_map(|line| {
-        let value = line.strip_prefix("VmRSS:")?.split_whitespace().next()?;
-        value.parse::<u64>().ok()
-    })
-}
-
-#[cfg(target_os = "linux")]
-#[cfg(any(test, feature = "benchmarks"))]
 fn current_cpu_runtime_ns() -> Option<u64> {
     let schedstat = fs::read("/proc/self/schedstat").ok()?;
     parse_first_u64_ascii_token(&schedstat)
