@@ -645,7 +645,7 @@ fn register_macos_open_request_handler(
             }
 
             let backend = Arc::clone(&backend);
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 open_repositories_in_existing_or_new_window(cx, backend, paths);
             });
         }
@@ -1044,7 +1044,7 @@ fn prompt_apply_patch(cx: &mut App) {
             return;
         };
 
-        let _ = cx.update(move |cx| {
+        cx.update(move |cx| {
             let Some(window) = find_normal_gitcomet_window(cx) else {
                 return;
             };
