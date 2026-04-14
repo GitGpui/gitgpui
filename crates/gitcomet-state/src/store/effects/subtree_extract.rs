@@ -180,9 +180,7 @@ fn parse_split_commit(output: &CommandOutput) -> Result<String, Error> {
     if let Some(revision) = output
         .stdout
         .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .next_back()
+        .map(str::trim).rfind(|line| !line.is_empty())
     {
         return Ok(revision.to_string());
     }
@@ -190,9 +188,7 @@ fn parse_split_commit(output: &CommandOutput) -> Result<String, Error> {
     let combined = output.combined();
     combined
         .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .next_back()
+        .map(str::trim).rfind(|line| !line.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
             Error::new(ErrorKind::Backend(
@@ -605,11 +601,8 @@ pub(super) fn schedule_extract_subtree(
                 result,
             }),
         );
-        if destination_repo_path.is_some() && succeeded {
-            send_or_log(
-                &msg_tx,
-                Msg::OpenRepo(destination_repo_path.expect("checked is_some")),
-            );
+        if succeeded && let Some(destination_repo_path) = destination_repo_path {
+            send_or_log(&msg_tx, Msg::OpenRepo(destination_repo_path));
         }
     });
 }
