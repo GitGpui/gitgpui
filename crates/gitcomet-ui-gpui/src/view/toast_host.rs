@@ -499,43 +499,42 @@ impl ToastHost {
     ) -> AnyElement {
         let theme = self.theme;
         let spinner_color = crate::view::clone_progress::clone_progress_loading_color(theme);
-        let content = div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .items_start()
-                    .gap_2()
-                    .child(svg_spinner(
-                        ("submodule_add_progress_spinner", ix),
-                        spinner_color,
-                        px(16.0),
-                    ))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex_col()
-                            .gap_0p5()
-                            .child(div().font_weight(FontWeight::BOLD).child("Adding submodule…"))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(progress.path.display().to_string()),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(progress.url.clone()),
-                            ),
-                    ),
-            );
+        let content = div().w_full().flex().flex_col().gap_2().child(
+            div()
+                .w_full()
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(svg_spinner(
+                    ("submodule_add_progress_spinner", ix),
+                    spinner_color,
+                    px(16.0),
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .child("Adding submodule…"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(progress.path.display().to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.colors.text_muted)
+                                .child(progress.url.clone()),
+                        ),
+                ),
+        );
         self.render_progress_shell(content)
     }
 
@@ -581,7 +580,9 @@ impl Render for ToastHost {
             self.submodule_add_progress
                 .iter()
                 .enumerate()
-                .map(|(ix, progress)| self.render_submodule_add_progress_toast(ix as u64, progress)),
+                .map(|(ix, progress)| {
+                    self.render_submodule_add_progress_toast(ix as u64, progress)
+                }),
         );
         let has_progress = !progress_toasts.is_empty();
         let max_other = if has_progress { 2 } else { 3 };
@@ -1027,7 +1028,10 @@ mod tests {
         ));
         assert_eq!(
             progress,
-            vec![submodule_add_progress("https://example.com/sub.git", "mods/sub")]
+            vec![submodule_add_progress(
+                "https://example.com/sub.git",
+                "mods/sub"
+            )]
         );
     }
 

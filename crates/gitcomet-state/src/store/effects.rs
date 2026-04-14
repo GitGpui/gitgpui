@@ -210,15 +210,17 @@ fn send_unavailable_git_effect_result(
             branch,
             name,
             force,
-        } => send(Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
-            repo_id,
-            url,
-            path,
-            branch,
-            name,
-            force,
-            result: Err(git_unavailable_error(runtime)),
-        })),
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+                repo_id,
+                url,
+                path,
+                branch,
+                name,
+                force,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::CheckSubmoduleUpdateTrust { repo_id } => send(Msg::Internal(
             crate::msg::InternalMsg::SubmoduleUpdateTrustChecked {
                 repo_id,
