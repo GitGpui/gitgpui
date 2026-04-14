@@ -1077,6 +1077,7 @@ fn run_git_with_input(repo: &Path, args: &[&str], input: &str) {
 // (`unable to access 'NUL': Invalid argument`).  Use a process-lifetime
 // empty file instead, which works identically on every platform.
 fn git_ops_empty_config() -> &'static Path {
+    use std::path::PathBuf;
     use std::sync::OnceLock;
     static EMPTY_CONFIG: OnceLock<PathBuf> = OnceLock::new();
     EMPTY_CONFIG.get_or_init(|| {
