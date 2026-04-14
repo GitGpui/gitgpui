@@ -642,6 +642,10 @@ fn submodule_commands_reload_submodules_on_success() {
         },
     ));
     state.repos[0].set_submodules(Loadable::Ready(Vec::new()));
+    state.repos[0].submodule_add_in_flight = Some(crate::model::SubmoduleAddProgressState {
+        url: "https://example.com/sub.git".to_string(),
+        path: PathBuf::from("submodule"),
+    });
 
     let effects = reduce(
         &mut repos,
@@ -662,6 +666,7 @@ fn submodule_commands_reload_submodules_on_success() {
     );
 
     assert!(state.repos[0].submodules.is_loading());
+    assert!(state.repos[0].submodule_add_in_flight.is_none());
     assert!(
         effects
             .iter()
@@ -2624,6 +2629,109 @@ fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
             && branch.as_deref() == Some("feature")
             && approved_sources == &vec![source]
     ));
+    assert_eq!(
+        state.repos[0].submodule_add_in_flight,
+        Some(crate::model::SubmoduleAddProgressState {
+            url: "../local-sub".to_string(),
+            path: PathBuf::from("mods/sub"),
+        })
+    );
+}
+
+#[test]
+fn submodule_add_progress_starts_when_trust_check_proceeds() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+            repo_id,
+            url: "https://example.com/sub.git".to_string(),
+            path: PathBuf::from("mods/sub"),
+            branch: None,
+            name: Some("deps/sub".to_string()),
+            force: true,
+            result: Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed),
+        }),
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::AddSubmodule {
+            repo_id: RepoId(1),
+            url,
+            path,
+            name,
+            force,
+            ..
+        }] if url == "https://example.com/sub.git"
+            && path == &PathBuf::from("mods/sub")
+            && name.as_deref() == Some("deps/sub")
+            && *force
+    ));
+    assert_eq!(
+        state.repos[0].submodule_add_in_flight,
+        Some(crate::model::SubmoduleAddProgressState {
+            url: "https://example.com/sub.git".to_string(),
+            path: PathBuf::from("mods/sub"),
+        })
+    );
+}
+
+#[test]
+fn submodule_add_progress_clears_on_failed_add_command() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].submodule_add_in_flight = Some(crate::model::SubmoduleAddProgressState {
+        url: "https://example.com/sub.git".to_string(),
+        path: PathBuf::from("mods/sub"),
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::AddSubmodule {
+                url: "https://example.com/sub.git".to_string(),
+                path: PathBuf::from("mods/sub"),
+                branch: None,
+                name: None,
+                force: false,
+                approved_sources: Vec::new(),
+            },
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("submodule add failed".to_string()),
+            )),
+        }),
+    );
+
+    assert!(state.repos[0].submodule_add_in_flight.is_none());
+    assert!(
+        !effects.iter().any(
+            |effect| matches!(effect, Effect::LoadSubmodules { repo_id: id } if *id == repo_id)
+        )
+    );
 }
 
 #[test]

@@ -367,6 +367,12 @@ pub struct CloneOpState {
     pub output_tail: VecDeque<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleAddProgressState {
+    pub url: String,
+    pub path: PathBuf,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloneProgressStage {
     Loading,
@@ -580,6 +586,7 @@ pub struct RepoState {
     pub worktrees_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    pub submodule_add_in_flight: Option<SubmoduleAddProgressState>,
     pub sidebar_data_request: SidebarDataRequest,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
@@ -650,6 +657,7 @@ impl RepoState {
             worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            submodule_add_in_flight: None,
             sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
             diff_state: DiffState::default(),

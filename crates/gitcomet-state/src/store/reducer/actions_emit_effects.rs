@@ -704,6 +704,10 @@ pub(super) fn repo_command_finished(
         _ => {}
     }
 
+    if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
+        repo_state.submodule_add_in_flight = None;
+    }
+
     match result {
         Ok(output) => {
             repo_state.last_error = None;

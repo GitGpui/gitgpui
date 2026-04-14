@@ -130,8 +130,14 @@ impl GitCometView {
             }
         }
 
+        let next_submodule_add_progress = next
+            .repos
+            .iter()
+            .filter_map(|repo| repo.submodule_add_in_flight.clone())
+            .collect::<Vec<_>>();
         self.toast_host.update(cx, |host, cx| {
-            host.sync_clone_progress(next.clone.as_ref(), cx)
+            host.sync_clone_progress(next.clone.as_ref(), cx);
+            host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
         });
 
         #[cfg(target_os = "macos")]

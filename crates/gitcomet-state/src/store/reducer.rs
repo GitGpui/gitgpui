@@ -8,7 +8,7 @@ mod util;
 
 use crate::model::{
     AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
-    SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
+    SubmoduleAddProgressState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
@@ -57,6 +57,20 @@ fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
         repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_add(1);
         repo_state.bump_ops_rev();
+    }
+}
+
+fn start_submodule_add_progress(
+    state: &mut AppState,
+    repo_id: RepoId,
+    url: &str,
+    path: &std::path::Path,
+) {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.submodule_add_in_flight = Some(SubmoduleAddProgressState {
+            url: url.to_string(),
+            path: path.to_path_buf(),
+        });
     }
 }
 
@@ -808,6 +822,7 @@ pub(super) fn reduce(
             approved_sources,
         } => {
             begin_local_action(state, repo_id);
+            start_submodule_add_progress(state, repo_id, &url, &path);
             actions_emit_effects::add_submodule(
                 repo_id,
                 url,
@@ -842,6 +857,7 @@ pub(super) fn reduce(
                     force,
                 } => {
                     begin_local_action(state, prompt.repo_id);
+                    start_submodule_add_progress(state, prompt.repo_id, &url, &path);
                     actions_emit_effects::add_submodule(
                         prompt.repo_id,
                         url,
@@ -1220,6 +1236,7 @@ pub(super) fn reduce(
         }) => match result {
             Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
                 begin_local_action(state, repo_id);
+                start_submodule_add_progress(state, repo_id, &url, &path);
                 actions_emit_effects::add_submodule(
                     repo_id,
                     url,
