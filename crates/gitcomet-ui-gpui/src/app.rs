@@ -245,17 +245,42 @@ pub(crate) struct WindowSystemMenuRequest {
 }
 
 #[cfg(target_os = "windows")]
-fn restore_maximized_window(window: &Window) -> bool {
+fn window_hwnd(window: &Window) -> Option<isize> {
     let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
-        return false;
+        return None;
     };
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return None;
+    };
+
+    Some(handle.hwnd.get())
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn begin_window_move(window: &Window) {
+    if let Some(hwnd) = window_hwnd(window)
+        && gitcomet_win32_window_utils::begin_window_move(hwnd)
+    {
+        return;
+    }
+
+    window.start_window_move();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn begin_window_move(window: &Window) {
+    window.start_window_move();
+}
+
+#[cfg(target_os = "windows")]
+fn restore_maximized_window(window: &Window) -> bool {
+    let Some(hwnd) = window_hwnd(window) else {
         return false;
     };
 
     // GPUI's Windows zoom path currently maps directly to SW_MAXIMIZE, so
     // restore must go through the native Win32 API until upstream toggles.
-    gitcomet_win32_window_utils::restore_window(handle.hwnd.get())
+    gitcomet_win32_window_utils::restore_window(hwnd)
 }
 
 #[cfg(target_os = "windows")]
@@ -273,19 +298,9 @@ pub(crate) fn window_system_menu_request(
     window: &Window,
     position: Point<Pixels>,
 ) -> Option<WindowSystemMenuRequest> {
-    let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
-        return None;
-    };
-    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return None;
-    };
-
     let (x, y) = window_menu_position(position, window.scale_factor());
-    Some(WindowSystemMenuRequest {
-        hwnd: handle.hwnd.get(),
-        x,
-        y,
-    })
+    let hwnd = window_hwnd(window)?;
+    Some(WindowSystemMenuRequest { hwnd, x, y })
 }
 
 fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
