@@ -101,6 +101,9 @@ pub(in crate::view) enum ContextMenuAction {
     LoadWorktrees {
         repo_id: RepoId,
     },
+    LoadSubtrees {
+        repo_id: RepoId,
+    },
     Pull {
         repo_id: RepoId,
         mode: PullMode,

@@ -629,6 +629,9 @@ impl PopoverHost {
             ContextMenuAction::LoadWorktrees { repo_id } => {
                 self.store.dispatch(Msg::LoadWorktrees { repo_id });
             }
+            ContextMenuAction::LoadSubtrees { repo_id } => {
+                self.store.dispatch(Msg::LoadSubtrees { repo_id });
+            }
             ContextMenuAction::Pull { repo_id, mode } => {
                 self.store.dispatch(Msg::Pull { repo_id, mode });
             }

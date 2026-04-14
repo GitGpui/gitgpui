@@ -1399,7 +1399,7 @@ impl SidebarPaneView {
                         )
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                             let text: SharedString =
-                                "Subtrees (Add / Pull / Push / Split / Open / Reveal / Remove)"
+                                "Subtrees (Add / Refresh / Pull / Push / Split / Open / Remove)"
                                     .into();
                             let mut changed = false;
                             if *hovering {

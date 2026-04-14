@@ -8,7 +8,6 @@ pub(super) fn model(repo: Option<&RepoState>, repo_id: RepoId, path: &Path) -> C
 
     let open_path = repo.and_then(|repo| local_subtree_source_repo_path(repo, path));
     let open_disabled = open_path.is_none();
-    let reveal_disabled = repo.is_none();
     items.push(ContextMenuItem::Entry {
         label: "Open source repo in new tab".into(),
         icon: Some("icons/open_external.svg".into()),
@@ -18,21 +17,11 @@ pub(super) fn model(repo: Option<&RepoState>, repo_id: RepoId, path: &Path) -> C
             path: open_path.unwrap_or_default(),
         }),
     });
-    items.push(ContextMenuItem::Entry {
-        label: "Reveal location".into(),
-        icon: Some("icons/folder.svg".into()),
-        shortcut: None,
-        disabled: reveal_disabled,
-        action: Box::new(ContextMenuAction::OpenFileLocation {
-            repo_id,
-            path: path.to_path_buf(),
-        }),
-    });
 
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Pull…".into(),
-        icon: Some("icons/pull.svg".into()),
+        icon: Some("icons/arrow_down.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
@@ -46,7 +35,7 @@ pub(super) fn model(repo: Option<&RepoState>, repo_id: RepoId, path: &Path) -> C
     });
     items.push(ContextMenuItem::Entry {
         label: "Push…".into(),
-        icon: Some("icons/push.svg".into()),
+        icon: Some("icons/arrow_up.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
@@ -60,7 +49,7 @@ pub(super) fn model(repo: Option<&RepoState>, repo_id: RepoId, path: &Path) -> C
     });
     items.push(ContextMenuItem::Entry {
         label: "Split…".into(),
-        icon: Some("icons/branch.svg".into()),
+        icon: Some("icons/git_branch.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
@@ -214,5 +203,60 @@ mod tests {
                 ))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn model_uses_registered_subtree_action_icons() {
+        let repo = repo_with_subtree_source(Some("https://example.com/repo.git"));
+        let model = model(
+            Some(&repo),
+            RepoId(1),
+            &std::path::PathBuf::from("vendor/lib"),
+        );
+
+        let icons = model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { label, icon, .. } => Some((
+                    label.as_ref().to_string(),
+                    icon.as_ref().map(|icon| icon.as_ref()),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            icons
+                .iter()
+                .any(|(label, icon)| label == "Pull…" && *icon == Some("icons/arrow_down.svg"))
+        );
+        assert!(
+            icons
+                .iter()
+                .any(|(label, icon)| label == "Push…" && *icon == Some("icons/arrow_up.svg"))
+        );
+        assert!(
+            icons
+                .iter()
+                .any(|(label, icon)| label == "Split…" && *icon == Some("icons/git_branch.svg"))
+        );
+    }
+
+    #[test]
+    fn model_does_not_include_reveal_location_entry() {
+        let repo = repo_with_subtree_source(Some("https://example.com/repo.git"));
+        let model = model(
+            Some(&repo),
+            RepoId(1),
+            &std::path::PathBuf::from("vendor/lib"),
+        );
+
+        assert!(model.items.iter().all(|item| {
+            !matches!(
+                item,
+                ContextMenuItem::Entry { label, .. } if label.as_ref() == "Reveal location"
+            )
+        }));
     }
 }
