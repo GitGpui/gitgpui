@@ -1,6 +1,6 @@
 app-id: dev.gitcomet.GitComet
 runtime: org.freedesktop.Platform
-runtime-version: "24.08"
+runtime-version: "25.08"
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -47,4 +47,6 @@ modules:
           url: https://api.github.com/repos/Auto-Explore/GitComet/releases/latest
           version-query: .tag_name | sub("^v"; "")
           url-query: '"https://github.com/Auto-Explore/GitComet/releases/download/" + .tag_name + "/gitcomet-v" + (.tag_name | sub("^v"; "")) + "-source.tar.gz"'
-      - cargo-sources.json
+      - type: archive
+        url: @CARGO_VENDOR_URL@
+        sha256: @CARGO_VENDOR_SHA256@

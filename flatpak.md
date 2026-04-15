@@ -41,7 +41,7 @@ If you already installed an older GitComet Flatpak locally, remove it first:
 
 ```bash
 flatpak uninstall --user -y dev.gitcomet.GitComet || true
-rm -rf builddir repo dist/dev.gitcomet.GitComet.flatpak
+rm -rf builddir repo dist/dev.gitcomet.GitComet.flatpak flatpak/cargo
 ```
 
 ## 4. Build the local Flatpak from this repo
@@ -49,6 +49,8 @@ rm -rf builddir repo dist/dev.gitcomet.GitComet.flatpak
 From the repository root:
 
 ```bash
+bash scripts/prepare-flatpak-local-cargo.sh
+
 flatpak-builder \
   --force-clean \
   --user \
@@ -61,6 +63,7 @@ flatpak-builder \
 
 What this does:
 
+- vendors the current Cargo dependency graph, including git dependencies, into `flatpak/cargo`
 - builds the Flatpak from `flatpak/dev.gitcomet.GitComet.local.yaml`
 - exports the result to a local OSTree repo at `./repo`
 - installs the Flatpak into your user Flatpak installation
@@ -176,11 +179,11 @@ Do not submit until these are clean or you explicitly know which exception you n
 
 For the first Flathub submission, you need public release assets that Flathub can fetch.
 
-The minimum assets needed for the Flathub PR are:
+The minimum public release assets needed for Flathub are:
 
 - `gitcomet-v<VERSION>-source.tar.gz`
+- `gitcomet-v<VERSION>-cargo-vendor.tar.gz`
 - `dev.gitcomet.GitComet.yaml`
-- `cargo-sources.json`
 - `flathub.json`
 
 ### Recommended first-release path
@@ -207,8 +210,8 @@ After that workflow finishes, the GitHub release should contain:
 
 - the Linux Flatpak bundle
 - the source tarball
+- the vendored Cargo tarball
 - the rendered Flathub manifest
-- `cargo-sources.json`
 - `flathub.json`
 
 Note:
@@ -221,7 +224,6 @@ Note:
 Download these release assets locally:
 
 - `dev.gitcomet.GitComet.yaml`
-- `cargo-sources.json`
 - `flathub.json`
 
 You will put those into the Flathub submission PR.
@@ -262,13 +264,12 @@ git checkout -b gitcomet-submission
 Copy these into the root of the cloned `flathub` repo:
 
 - `dev.gitcomet.GitComet.yaml`
-- `cargo-sources.json`
 - `flathub.json`
 
 Then commit and push:
 
 ```bash
-git add dev.gitcomet.GitComet.yaml cargo-sources.json flathub.json
+git add dev.gitcomet.GitComet.yaml flathub.json
 git commit -m "Add dev.gitcomet.GitComet"
 git push origin gitcomet-submission
 ```
@@ -376,7 +377,7 @@ Before first submission:
 - linter checks pass
 - public GitHub release exists
 - release contains `dev.gitcomet.GitComet.yaml`
-- release contains `cargo-sources.json`
+- release contains `gitcomet-v<VERSION>-cargo-vendor.tar.gz`
 - release contains `flathub.json`
 - submission PR targets `flathub/flathub:new-pr`
 

@@ -14,6 +14,7 @@ on:
       - "assets/linux/dev.gitcomet.GitComet.desktop"
       - "flatpak/**"
       - "scripts/generate-flatpak-cargo-sources.py"
+      - "scripts/package-flatpak-cargo-vendor.sh"
       - "scripts/render-flathub-manifest.sh"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
@@ -36,6 +37,7 @@ on:
       - "assets/linux/dev.gitcomet.GitComet.desktop"
       - "flatpak/**"
       - "scripts/generate-flatpak-cargo-sources.py"
+      - "scripts/package-flatpak-cargo-vendor.sh"
       - "scripts/render-flathub-manifest.sh"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
@@ -71,6 +73,7 @@ jobs:
           bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
+          bash -n scripts/package-flatpak-cargo-vendor.sh
           bash -n scripts/render-flathub-manifest.sh
 
       - name: Validate Windows PowerShell helper syntax
@@ -501,16 +504,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
     steps:
       - uses: actions/checkout@v6
 
-      - name: Verify generated cargo sources stay in sync
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Prepare vendored Cargo sources
         run: |
           set -euo pipefail
-          python3 scripts/generate-flatpak-cargo-sources.py --output /tmp/cargo-sources.json
-          cmp /tmp/cargo-sources.json flatpak/cargo-sources.json
+          bash scripts/prepare-flatpak-local-cargo.sh
+          test -f flatpak/cargo/config.toml
+          test -d flatpak/cargo/vendor
 
       - name: Render release manifest
         run: |
@@ -518,6 +525,8 @@ jobs:
           scripts/render-flathub-manifest.sh \
             --source-url "https://example.invalid/gitcomet-v0.0.0-ci-source.tar.gz" \
             --source-sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+            --cargo-vendor-url "https://example.invalid/gitcomet-v0.0.0-ci-cargo-vendor.tar.gz" \
+            --cargo-vendor-sha256 "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" \
             --output /tmp/dev.gitcomet.GitComet.yaml
           test -s /tmp/dev.gitcomet.GitComet.yaml
 

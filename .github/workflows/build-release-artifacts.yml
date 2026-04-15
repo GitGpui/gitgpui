@@ -531,7 +531,7 @@ jobs:
     timeout-minutes: 120
     needs: prepare
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
@@ -541,6 +541,14 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Prepare vendored Cargo sources
+        run: |
+          set -euo pipefail
+          bash scripts/prepare-flatpak-local-cargo.sh
 
       - name: Build Flatpak bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
@@ -754,6 +762,9 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+
       - uses: actions/download-artifact@v8
         with:
           pattern: windows-release-artifacts-*
@@ -801,17 +812,27 @@ jobs:
             "$TAG" \
             -o "dist/release/gitcomet-v${VERSION}-source.tar.gz"
 
+      - name: Generate Flatpak cargo vendor tarball
+        run: |
+          set -euo pipefail
+          scripts/package-flatpak-cargo-vendor.sh \
+            --output "dist/release/gitcomet-v${VERSION}-cargo-vendor.tar.gz"
+
       - name: Render Flathub manifest assets
         run: |
           set -euo pipefail
           source_tar="dist/release/gitcomet-v${VERSION}-source.tar.gz"
           source_sha256="$(sha256sum "$source_tar" | awk '{print $1}')"
           source_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/gitcomet-v${VERSION}-source.tar.gz"
+          cargo_vendor_tar="dist/release/gitcomet-v${VERSION}-cargo-vendor.tar.gz"
+          cargo_vendor_sha256="$(sha256sum "$cargo_vendor_tar" | awk '{print $1}')"
+          cargo_vendor_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/gitcomet-v${VERSION}-cargo-vendor.tar.gz"
           scripts/render-flathub-manifest.sh \
             --source-url "$source_url" \
             --source-sha256 "$source_sha256" \
+            --cargo-vendor-url "$cargo_vendor_url" \
+            --cargo-vendor-sha256 "$cargo_vendor_sha256" \
             --output "dist/release/dev.gitcomet.GitComet.yaml"
-          cp flatpak/cargo-sources.json dist/release/cargo-sources.json
           cp flatpak/flathub.json dist/release/flathub.json
 
       - name: Generate Homebrew cask and formula

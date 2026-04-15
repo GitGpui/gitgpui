@@ -86,7 +86,7 @@ The release workflow `.github/workflows/build-release-artifacts.yml` builds and 
 - Windows: portable ZIP + MSI
 - Linux: tar.gz + AppImage + .deb + Flatpak bundle
 - macOS: DMG + tar.gz for `arm64` and `x86_64`
-- Flathub assets: `gitcomet-v<VERSION>-source.tar.gz`, `dev.gitcomet.GitComet.yaml`, `cargo-sources.json`, and `flathub.json`
+- Flathub assets: `gitcomet-v<VERSION>-source.tar.gz`, `gitcomet-v<VERSION>-cargo-vendor.tar.gz`, `dev.gitcomet.GitComet.yaml`, and `flathub.json`
 - Homebrew cask asset: `gitcomet.rb` (generated from macOS DMG artifacts and their SHA256 values)
 - Homebrew CLI formula asset: `gitcomet-cli.rb` (generated from macOS + Linux x86_64 tarballs and their SHA256 values)
 
@@ -138,7 +138,7 @@ You can also run `.github/workflows/deploy-aur.yml` manually for backfills or dr
 
 The app ID used for Flatpak/Flathub packaging is `dev.gitcomet.GitComet`.
 
-To push `dev.gitcomet.GitComet.yaml`, `cargo-sources.json`, and `flathub.json` into the Flathub packaging repo automatically on release:
+To push `dev.gitcomet.GitComet.yaml` and `flathub.json` into the Flathub packaging repo automatically on release:
 
 1. Complete the one-time Flathub onboarding so the app has a packaging repo, typically `flathub/dev.gitcomet.GitComet`.
 2. In this repo, configure:

@@ -47,8 +47,9 @@ GitHub releases also publish:
 
 - a Linux Flatpak bundle: `gitcomet-v<VERSION>-linux-x86_64.flatpak`
 - a source tarball for Flathub: `gitcomet-v<VERSION>-source.tar.gz`
+- a vendored Cargo tarball for Flathub: `gitcomet-v<VERSION>-cargo-vendor.tar.gz`
 - the rendered Flathub manifest: `dev.gitcomet.GitComet.yaml`
-- the pinned Cargo source list: `cargo-sources.json`
+- the Flathub control file: `flathub.json`
 
 #### AUR (Arch Linux)
 

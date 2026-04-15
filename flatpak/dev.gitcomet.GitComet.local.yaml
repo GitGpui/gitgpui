@@ -1,6 +1,6 @@
 app-id: dev.gitcomet.GitComet
 runtime: org.freedesktop.Platform
-runtime-version: "24.08"
+runtime-version: "25.08"
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -40,4 +40,6 @@ modules:
     sources:
       - type: dir
         path: ..
-      - cargo-sources.json
+      - type: dir
+        path: cargo
+        dest: cargo
