@@ -5,12 +5,12 @@
 
 use crate::assets::GitCometAssets;
 use crate::launch_guard::run_with_panic_guard;
-use crate::theme::{AppTheme, with_alpha};
+use crate::theme::AppTheme;
 use gitcomet_core::platform::APP_ID;
 use gitcomet_state::session;
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Render, ScrollHandle,
+    App, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Render, ScrollHandle,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
     div, point, px, size,
 };
@@ -45,6 +45,7 @@ struct FocusedDiffView {
     theme: AppTheme,
     ui_font_family: String,
     editor_font_family: String,
+    use_font_ligatures: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +93,7 @@ impl FocusedDiffView {
             editor_font_family: crate::font_preferences::applied_editor_font_family(
                 &font_preferences.editor_font_family,
             ),
+            use_font_ligatures: font_preferences.use_font_ligatures,
         }
     }
 
@@ -146,7 +148,13 @@ impl Render for FocusedDiffView {
             .size_full()
             .bg(theme.colors.window_bg)
             .text_color(theme.colors.text)
-            .font_family(self.ui_font_family.clone())
+            .font(gpui::Font {
+                family: self.ui_font_family.clone().into(),
+                features: crate::font_preferences::applied_font_features(self.use_font_ligatures),
+                fallbacks: None,
+                weight: FontWeight::default(),
+                style: gpui::FontStyle::default(),
+            })
             .text_size(px(13.0))
             .flex()
             .flex_col()
@@ -182,7 +190,7 @@ impl Render for FocusedDiffView {
                             .px(px(10.0))
                             .py(px(4.0))
                             .bg(theme.colors.accent)
-                            .text_color(gpui::rgba(0xffffffff))
+                            .text_color(theme.colors.accent_text)
                             .rounded(px(2.0))
                             .cursor_pointer()
                             .font_weight(FontWeight::BOLD)
@@ -216,13 +224,10 @@ fn render_diff_line(index: usize, line: &DiffLine, theme: &AppTheme) -> impl Int
     let (text_color, bg) = match line.kind {
         DiffLineKind::Header => (theme.colors.text_muted, None),
         DiffLineKind::HunkHeader => (theme.colors.accent, None),
-        DiffLineKind::Add => (
-            theme.colors.success,
-            Some(with_alpha(theme.colors.success, 0.08)),
-        ),
+        DiffLineKind::Add => (theme.colors.diff_add_text, Some(theme.colors.diff_add_bg)),
         DiffLineKind::Remove => (
-            theme.colors.danger,
-            Some(with_alpha(theme.colors.danger, 0.08)),
+            theme.colors.diff_remove_text,
+            Some(theme.colors.diff_remove_bg),
         ),
         DiffLineKind::Context => (theme.colors.text, None),
     };
@@ -270,22 +275,16 @@ fn bind_focused_diff_keys(cx: &mut App) {
 ///
 /// Returns process exit code (0 on success, 2 when the window fails to launch).
 pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
-    #[cfg(target_os = "macos")]
-    {
-        let count = metal::Device::all().len();
-        if count == 0 {
-            eprintln!(
-                "Failed to launch focused diff window: no compatible Metal graphics device is available in this macOS session."
-            );
-            return FOCUSED_DIFF_EXIT_ERROR;
-        }
+    if let Err(err) = crate::app::ensure_graphics_device_available("focused diff GPUI launch") {
+        eprintln!("Failed to launch focused diff window: {err}");
+        return FOCUSED_DIFF_EXIT_ERROR;
     }
 
     let exit_code = Arc::new(AtomicI32::new(0));
     let exit_code_for_app = exit_code.clone();
 
     if let Err(err) = run_with_panic_guard("focused diff GPUI launch", move || {
-        Application::new()
+        crate::app::application()
             .with_assets(GitCometAssets)
             .run(move |cx: &mut App| {
                 if let Err(err) = crate::bundled_fonts::register(cx) {
@@ -432,7 +431,7 @@ index 1234567..abcdef0 100644
             app.clear_key_bindings();
             bind_focused_diff_keys(app);
             let focus = view.update(app, |view, _cx| view.focus_handle());
-            window.focus(&focus);
+            window.focus(&focus, app);
             let _ = window.draw(app);
         });
 

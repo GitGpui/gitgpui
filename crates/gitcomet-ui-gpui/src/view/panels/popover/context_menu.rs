@@ -11,7 +11,6 @@ mod conflict_resolver_output;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
-mod history_column_settings;
 mod pull;
 mod push;
 mod remote;
@@ -133,87 +132,6 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
     })
 }
 
-fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
-    let selected = host.theme_mode;
-    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
-
-    ContextMenuModel::new(vec![
-        ContextMenuItem::Header("Theme".into()),
-        ContextMenuItem::Separator,
-        ContextMenuItem::Entry {
-            label: ThemeMode::Automatic.label().into(),
-            icon: check(selected == ThemeMode::Automatic),
-            shortcut: Some("A".into()),
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetThemeMode {
-                mode: ThemeMode::Automatic,
-            }),
-        },
-        ContextMenuItem::Entry {
-            label: ThemeMode::Light.label().into(),
-            icon: check(selected == ThemeMode::Light),
-            shortcut: Some("L".into()),
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetThemeMode {
-                mode: ThemeMode::Light,
-            }),
-        },
-        ContextMenuItem::Entry {
-            label: ThemeMode::Dark.label().into(),
-            icon: check(selected == ThemeMode::Dark),
-            shortcut: Some("D".into()),
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetThemeMode {
-                mode: ThemeMode::Dark,
-            }),
-        },
-    ])
-}
-
-fn settings_date_format_model(host: &PopoverHost) -> ContextMenuModel {
-    let selected = host.date_time_format;
-    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
-    let mut items = vec![
-        ContextMenuItem::Header("Date format".into()),
-        ContextMenuItem::Separator,
-    ];
-
-    for fmt in DateTimeFormat::all() {
-        let format = *fmt;
-        items.push(ContextMenuItem::Entry {
-            label: format.label().into(),
-            icon: check(selected == format),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetDateTimeFormat { format }),
-        });
-    }
-
-    ContextMenuModel::new(items)
-}
-
-fn settings_timezone_model(host: &PopoverHost) -> ContextMenuModel {
-    let selected = host.timezone;
-    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
-    let mut items = vec![
-        ContextMenuItem::Header("Date timezone".into()),
-        ContextMenuItem::Separator,
-    ];
-
-    for tz in Timezone::all() {
-        let timezone = *tz;
-        items.push(ContextMenuItem::Entry {
-            label: format!("{} ({})", timezone.label(), timezone.cities()).into(),
-            icon: check(selected == timezone),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetTimezone { timezone }),
-        });
-    }
-
-    ContextMenuModel::new(items)
-}
-
 impl PopoverHost {
     fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
         self.state
@@ -327,8 +245,8 @@ impl PopoverHost {
             } => Some(worktree_section::model(*repo_id)),
             PopoverKind::Repo {
                 repo_id,
-                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path }),
-            } => Some(worktree::model(*repo_id, path)),
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path, branch }),
+            } => Some(worktree::model(*repo_id, path, branch.as_deref())),
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::SectionMenu),
@@ -345,9 +263,6 @@ impl PopoverHost {
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 Some(diff_hunk::model(self, *repo_id, *src_ix))
             }
-            PopoverKind::SettingsThemeMenu => Some(settings_theme_model(self)),
-            PopoverKind::SettingsDateFormatMenu => Some(settings_date_format_model(self)),
-            PopoverKind::SettingsTimezoneMenu => Some(settings_timezone_model(self)),
             PopoverKind::DiffEditorMenu {
                 repo_id,
                 area,
@@ -358,6 +273,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 lines_count,
                 copy_text,
+                copy_target,
             } => Some(diff_editor::model(
                 *repo_id,
                 *area,
@@ -368,6 +284,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 *lines_count,
                 copy_text,
+                *copy_target,
             )),
             PopoverKind::ConflictResolverInputRowMenu {
                 line_label,
@@ -411,19 +328,18 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(*repo_id))
             }
-            PopoverKind::HistoryColumnSettings => Some(history_column_settings::model(self, cx)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             _ => None,
         }
     }
 
-    pub(super) fn context_menu_activate_action(
+    pub(in crate::view) fn context_menu_activate_action(
         &mut self,
         action: ContextMenuAction,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let mut close_after_action = true;
+        let close_after_action = true;
         match action {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
@@ -552,58 +468,6 @@ impl PopoverHost {
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
             }
-            ContextMenuAction::SetHistoryColumns {
-                show_author,
-                show_date,
-                show_sha,
-            } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.history_view.update(cx, |view, cx| {
-                        view.history_show_author = show_author;
-                        view.history_show_date = show_date;
-                        view.history_show_sha = show_sha;
-                        cx.notify();
-                    });
-                });
-                self.schedule_ui_settings_persist(cx);
-                close_after_action = false;
-            }
-            ContextMenuAction::ResetHistoryColumnWidths => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.history_view.update(cx, |view, cx| {
-                        view.reset_history_column_widths();
-                        cx.notify();
-                    });
-                });
-                close_after_action = false;
-            }
-            ContextMenuAction::SetThemeMode { mode } => {
-                self.set_theme_mode(mode, window.appearance(), cx);
-                self.settings_submenu = None;
-                self.settings_submenu_top = None;
-                self.settings_submenu_left = None;
-                self.settings_submenu_width = None;
-                self.settings_submenu_max_h = None;
-                close_after_action = false;
-            }
-            ContextMenuAction::SetDateTimeFormat { format } => {
-                self.set_date_time_format(format, cx);
-                self.settings_submenu = None;
-                self.settings_submenu_top = None;
-                self.settings_submenu_left = None;
-                self.settings_submenu_width = None;
-                self.settings_submenu_max_h = None;
-                close_after_action = false;
-            }
-            ContextMenuAction::SetTimezone { timezone } => {
-                self.set_timezone(timezone, cx);
-                self.settings_submenu = None;
-                self.settings_submenu_top = None;
-                self.settings_submenu_left = None;
-                self.settings_submenu_width = None;
-                self.settings_submenu_max_h = None;
-                close_after_action = false;
-            }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;
                 let root_view = self.root_view.clone();
@@ -622,7 +486,10 @@ impl PopoverHost {
                     self.take_status_paths_for_action(repo_id, area, &path, cx);
                 if used_selection {
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::StagePaths { repo_id, paths });
+                    self.store.dispatch(Msg::StagePaths {
+                        repo_id,
+                        paths: paths.into(),
+                    });
                 } else {
                     self.store.dispatch(Msg::SelectDiff {
                         repo_id,
@@ -643,7 +510,10 @@ impl PopoverHost {
                     self.take_status_paths_for_action(repo_id, area, &path, cx);
                 if used_selection {
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    self.store.dispatch(Msg::UnstagePaths { repo_id, paths });
+                    self.store.dispatch(Msg::UnstagePaths {
+                        repo_id,
+                        paths: paths.into(),
+                    });
                 } else {
                     self.store.dispatch(Msg::SelectDiff {
                         repo_id,
@@ -823,6 +693,11 @@ impl PopoverHost {
             ContextMenuAction::CopyText { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             }
+            ContextMenuAction::CopyDiffText { visible_ix, region } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
+                });
+            }
             ContextMenuAction::ApplyIndexPatch {
                 repo_id,
                 patch,
@@ -908,7 +783,7 @@ impl PopoverHost {
             }
         }
         if close_after_action {
-            self.close_popover(cx);
+            self.close_popover_and_restore_focus(window, cx);
         } else {
             cx.notify();
         }
@@ -978,14 +853,10 @@ impl PopoverHost {
             .repos
             .iter()
             .find(|r| r.id == repo_id)
-            .and_then(|r| match &r.status {
-                Loadable::Ready(status) => status
-                    .unstaged
-                    .iter()
-                    .chain(status.staged.iter())
-                    .find(|s| s.path == path)
-                    .map(|s| s.kind),
-                _ => None,
+            .and_then(|repo| {
+                repo.status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                    .or_else(|| repo.status_entry_for_path(DiffArea::Staged, path.as_path()))
+                    .map(|status| status.kind)
             })
             .is_some_and(|kind| matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added));
 
@@ -1053,8 +924,8 @@ impl PopoverHost {
                 .key_context("ContextMenu")
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
-                        window.focus(&this.context_menu_focus_handle);
+                    cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                        window.focus(&this.context_menu_focus_handle, cx);
                     }),
                 )
                 .on_key_down(
@@ -1067,25 +938,30 @@ impl PopoverHost {
 
                         match key {
                             "escape" => {
-                                this.close_popover(cx);
+                                cx.stop_propagation();
+                                this.close_popover_and_restore_focus(window, cx);
                             }
                             "up" => {
+                                cx.stop_propagation();
                                 let next = model_for_keys
                                     .next_selectable(this.context_menu_selected_ix, -1);
                                 this.context_menu_selected_ix = next;
                                 cx.notify();
                             }
                             "down" => {
+                                cx.stop_propagation();
                                 let next = model_for_keys
                                     .next_selectable(this.context_menu_selected_ix, 1);
                                 this.context_menu_selected_ix = next;
                                 cx.notify();
                             }
                             "home" => {
+                                cx.stop_propagation();
                                 this.context_menu_selected_ix = model_for_keys.first_selectable();
                                 cx.notify();
                             }
                             "end" => {
+                                cx.stop_propagation();
                                 this.context_menu_selected_ix = model_for_keys.last_selectable();
                                 cx.notify();
                             }
@@ -1096,6 +972,7 @@ impl PopoverHost {
                                 ) else {
                                     return;
                                 };
+                                cx.stop_propagation();
                                 if let Some(action) =
                                     context_menu_entry_action_at(&model_for_keys, ix)
                                 {
@@ -1108,6 +985,7 @@ impl PopoverHost {
                                     && let Some(action) =
                                         context_menu_entry_action_at(&model_for_keys, ix)
                                 {
+                                    cx.stop_propagation();
                                     this.context_menu_activate_action(action, window, cx);
                                 }
                             }

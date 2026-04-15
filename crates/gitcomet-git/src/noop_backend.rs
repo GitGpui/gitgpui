@@ -9,8 +9,7 @@ use std::sync::Arc;
 pub struct NoopBackend;
 
 impl GitBackend for NoopBackend {
-    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-        let _ = workdir;
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
         Err(Error::new(ErrorKind::Unsupported(
             "No Git backend enabled. Build with `--features gix`.",
         )))
@@ -179,6 +178,7 @@ mod tests {
         let commit = CommitId("abc123".into());
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
+            resume_from: None,
         };
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("file.txt"),
@@ -221,6 +221,7 @@ mod tests {
         let commit = CommitId("abc123".into());
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
+            resume_from: None,
         };
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("file.txt"),
@@ -289,8 +290,17 @@ mod tests {
         assert_unsupported(repo.remove_worktree_with_output(path));
         assert_unsupported(repo.force_remove_worktree_with_output(path));
         assert_unsupported(repo.list_submodules());
-        assert_unsupported(repo.add_submodule_with_output("https://example.com/repo.git", path));
-        assert_unsupported(repo.update_submodules_with_output());
+        assert_unsupported(repo.check_submodule_add_trust("https://example.com/repo.git", path));
+        assert_unsupported(repo.check_submodule_update_trust());
+        assert_unsupported(repo.add_submodule_with_output(
+            "https://example.com/repo.git",
+            path,
+            None,
+            None,
+            false,
+            &[],
+        ));
+        assert_unsupported(repo.update_submodules_with_output(&[]));
         assert_unsupported(repo.remove_submodule_with_output(path));
     }
 }

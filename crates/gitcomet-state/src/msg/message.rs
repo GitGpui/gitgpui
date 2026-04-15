@@ -1,14 +1,20 @@
-use crate::model::{ConflictFileLoadMode, RepoId};
+use crate::model::GitLogTagFetchMode;
+use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
+use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
-use gitcomet_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustDecision,
+    SubmoduleTrustTarget,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::repo_command_kind::RepoCommandKind;
 use super::repo_external_change::RepoExternalChange;
+use super::{RepoPath, RepoPathList};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictAutosolveMode {
@@ -87,6 +93,11 @@ pub enum Msg {
         secret: String,
     },
     CancelAuthPrompt,
+    SetGitRuntimeState(GitRuntimeState),
+    SetGitLogSettings {
+        show_history_tags: bool,
+        tag_fetch_mode: GitLogTagFetchMode,
+    },
     SetActiveRepo {
         repo_id: RepoId,
     },
@@ -130,6 +141,10 @@ pub enum Msg {
     ClearDiffSelection {
         repo_id: RepoId,
     },
+    EnsureSidebarData {
+        repo_id: RepoId,
+        request: SidebarDataRequest,
+    },
     LoadStashes {
         repo_id: RepoId,
     },
@@ -155,6 +170,12 @@ pub enum Msg {
         repo_id: RepoId,
     },
     LoadSubmodules {
+        repo_id: RepoId,
+    },
+    LoadTags {
+        repo_id: RepoId,
+    },
+    LoadRemoteTags {
         repo_id: RepoId,
     },
     RefreshBranches {
@@ -217,6 +238,9 @@ pub enum Msg {
         url: String,
         dest: PathBuf,
     },
+    AbortCloneRepo {
+        dest: PathBuf,
+    },
     ExportPatch {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -243,10 +267,28 @@ pub enum Msg {
         repo_id: RepoId,
         url: String,
         path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
+    },
+    AddSubmoduleTrusted {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
+        approved_sources: Vec<SubmoduleTrustTarget>,
     },
     UpdateSubmodules {
         repo_id: RepoId,
     },
+    UpdateSubmodulesTrusted {
+        repo_id: RepoId,
+        approved_sources: Vec<SubmoduleTrustTarget>,
+    },
+    ConfirmSubmoduleTrustPrompt,
+    CancelSubmoduleTrustPrompt,
     RemoveSubmodule {
         repo_id: RepoId,
         path: PathBuf,
@@ -257,7 +299,7 @@ pub enum Msg {
     },
     StagePaths {
         repo_id: RepoId,
-        paths: Vec<PathBuf>,
+        paths: RepoPathList,
     },
     UnstagePath {
         repo_id: RepoId,
@@ -265,7 +307,7 @@ pub enum Msg {
     },
     UnstagePaths {
         repo_id: RepoId,
-        paths: Vec<PathBuf>,
+        paths: RepoPathList,
     },
     DiscardWorktreeChangesPath {
         repo_id: RepoId,
@@ -421,34 +463,34 @@ pub enum Msg {
     },
     ConflictSetHideResolved {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         hide_resolved: bool,
     },
     ConflictApplyBulkChoice {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         choice: ConflictBulkChoice,
     },
     ConflictSetRegionChoice {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         region_index: usize,
         choice: ConflictRegionChoice,
     },
     ConflictSyncRegionResolutions {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         updates: Vec<ConflictRegionResolutionUpdate>,
     },
     ConflictApplyAutosolve {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         mode: ConflictAutosolveMode,
         whitespace_normalize: bool,
     },
     ConflictResetResolutions {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
     },
     Stash {
         repo_id: RepoId,
@@ -477,7 +519,7 @@ pub enum InternalMsg {
         error: String,
     },
     CloneRepoProgress {
-        dest: PathBuf,
+        dest: Arc<PathBuf>,
         line: String,
     },
     CloneRepoFinished {
@@ -506,6 +548,14 @@ pub enum InternalMsg {
     RemoteBranchesLoaded {
         repo_id: RepoId,
         result: Result<Vec<RemoteBranch>, Error>,
+    },
+    WorktreeStatusLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<FileStatus>, Error>,
+    },
+    StagedStatusLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<FileStatus>, Error>,
     },
     StatusLoaded {
         repo_id: RepoId,
@@ -574,6 +624,19 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Vec<Submodule>, Error>,
     },
+    SubmoduleAddTrustChecked {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
+        result: Result<SubmoduleTrustDecision, Error>,
+    },
+    SubmoduleUpdateTrustChecked {
+        repo_id: RepoId,
+        result: Result<SubmoduleTrustDecision, Error>,
+    },
     CommitDetailsLoaded {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -588,6 +651,12 @@ pub enum InternalMsg {
         repo_id: RepoId,
         target: DiffTarget,
         result: Result<Option<FileDiffText>, Error>,
+    },
+    DiffPreviewTextFileLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        side: DiffPreviewTextSide,
+        result: Result<Option<PathBuf>, Error>,
     },
     DiffFileImageLoaded {
         repo_id: RepoId,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::diff_utils::compute_diff_yaml_block_scalar_for_src_ix;
 use crate::view::markdown_preview;
 use crate::view::perf::{self, ViewPerfSpan};
 use crate::view::rows;
@@ -8,8 +9,12 @@ mod file_diff;
 mod image_cache;
 mod patch_diff;
 
-pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
-use self::file_diff::{build_file_diff_cache_rebuild, build_inline_text, file_diff_text_signature};
+pub(in crate::view) use self::file_diff::{
+    PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild,
+};
+use self::file_diff::{build_inline_text, file_diff_text_signature};
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
 use self::patch_diff::{
     PATCH_DIFF_PAGE_SIZE, PatchSplitVisibleMeta, build_patch_split_visible_meta_from_src,
@@ -37,6 +42,12 @@ impl FileDiffPreparedSyntaxApplyResult {
     fn any(self) -> bool {
         self.split_left || self.split_right
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SyncFileDiffPreparedSyntaxApplyResult {
+    inserted: bool,
+    needs_background_prepare: bool,
 }
 
 #[cfg(test)]
@@ -143,6 +154,23 @@ impl MainPaneView {
             provider.row(inline_ix)
         } else {
             self.file_diff_inline_cache.get(inline_ix).cloned()
+        }
+    }
+
+    pub(in crate::view) fn file_diff_inline_render_data(
+        &self,
+        inline_ix: usize,
+    ) -> Option<self::file_diff::InlineFileDiffRowRenderData> {
+        if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
+            provider.render_data(inline_ix)
+        } else {
+            let line = self.file_diff_inline_cache.get(inline_ix)?.clone();
+            Some(self::file_diff::InlineFileDiffRowRenderData {
+                kind: line.kind,
+                old_line: line.old_line,
+                new_line: line.new_line,
+                text: crate::view::diff_utils::diff_content_line_text(&line),
+            })
         }
     }
 
@@ -528,10 +556,14 @@ impl MainPaneView {
         self.worktree_markdown_preview_path = Some(path.clone());
         self.worktree_markdown_preview_source_rev = source_rev;
 
-        let source_text = self.worktree_preview_text.clone();
-        if source_text.len() > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
+        let source_len = if self.worktree_preview_text.is_empty() {
+            self.worktree_preview_source_len
+        } else {
+            self.worktree_preview_text.len()
+        };
+        if source_len > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
             self.worktree_markdown_preview = Loadable::Error(
-                markdown_preview::single_preview_unavailable_reason(source_text.len()).to_string(),
+                markdown_preview::single_preview_unavailable_reason(source_len).to_string(),
             );
             self.worktree_markdown_preview_inflight = None;
             return;
@@ -541,14 +573,38 @@ impl MainPaneView {
         self.worktree_markdown_preview_seq = self.worktree_markdown_preview_seq.wrapping_add(1);
         let seq = self.worktree_markdown_preview_seq;
         self.worktree_markdown_preview_inflight = Some(seq);
+        let source_text =
+            (!self.worktree_preview_text.is_empty()).then_some(self.worktree_preview_text.clone());
+        let source_path = self.worktree_preview_source_path.clone();
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let result = smol::unblock(move || {
+                let build_preview = move || {
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
+                    let source_text = match source_text {
+                        Some(source_text) => source_text,
+                        None => {
+                            let source_path = source_path
+                                .ok_or_else(|| "Preview source path is unavailable.".to_string())?;
+                            std::fs::read_to_string(&source_path)
+                                .map(SharedString::from)
+                                .map_err(|e| {
+                                    if e.kind() == std::io::ErrorKind::InvalidData {
+                                        "File is not valid UTF-8; binary preview is not supported."
+                                            .to_string()
+                                    } else {
+                                        e.to_string()
+                                    }
+                                })?
+                        }
+                    };
                     build_single_markdown_preview_document(source_text.as_ref())
-                })
-                .await;
+                };
+                let result = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(build_preview).await
+                } else {
+                    build_preview()
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.worktree_markdown_preview_inflight != Some(seq) {
@@ -572,27 +628,39 @@ impl MainPaneView {
         .detach();
     }
 
-    pub(in crate::view) fn set_worktree_preview_ready_source(
+    fn apply_worktree_preview_ready_state(
         &mut self,
-        path: std::path::PathBuf,
+        display_path: std::path::PathBuf,
+        source_path: std::path::PathBuf,
+        source_len: usize,
         source_text: SharedString,
         line_starts: Arc<[usize]>,
+        line_flags: Arc<[u8]>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let line_count = indexed_line_count(source_text.as_ref(), line_starts.as_ref());
-        let source_changed = self.worktree_preview_path.as_ref() != Some(&path)
+        let line_count = indexed_line_count_from_len(source_len, line_starts.as_ref());
+        let source_changed = self.worktree_preview_path.as_ref() != Some(&display_path)
+            || self.worktree_preview_source_path.as_ref() != Some(&source_path)
             || self.worktree_preview_line_count() != Some(line_count)
-            || self.worktree_preview_text.len() != source_text.len()
-            || self.worktree_preview_text.as_ref() != source_text.as_ref();
+            || self.worktree_preview_source_len != source_len
+            || self.worktree_preview_text.as_ref() != source_text.as_ref()
+            || self.worktree_preview_line_starts.as_ref() != line_starts.as_ref()
+            || self.worktree_preview_line_flags.as_ref() != line_flags.as_ref();
         let cache_binding_changed =
-            self.worktree_preview_segments_cache_path.as_ref() != Some(&path);
+            self.worktree_preview_segments_cache_path.as_ref() != Some(&display_path);
+        let same_path_source_refresh = source_changed && !cache_binding_changed;
 
-        self.worktree_preview_path = Some(path.clone());
+        self.worktree_preview_path = Some(display_path.clone());
+        self.worktree_preview_source_path = Some(source_path);
         self.worktree_preview = Loadable::Ready(line_count);
+        self.worktree_preview_source_len = source_len;
         self.worktree_preview_text = source_text;
         self.worktree_preview_line_starts = line_starts;
-        self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
-        self.worktree_preview_segments_cache_path = Some(path);
+        self.worktree_preview_line_flags = line_flags;
+        self.worktree_preview_search_trigram_index = None;
+        self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&display_path);
+        self.worktree_preview_segments_cache_path = Some(display_path);
+        self.worktree_preview_cache_write_blocked_until_rev = None;
         if source_changed || cache_binding_changed {
             self.worktree_preview_segments_cache.clear();
         }
@@ -607,7 +675,70 @@ impl MainPaneView {
             self.worktree_markdown_preview_inflight = None;
         }
 
+        if same_path_source_refresh {
+            let blocked_rev = self.worktree_preview_content_rev;
+            self.worktree_preview_cache_write_blocked_until_rev = Some(blocked_rev);
+            if !crate::ui_runtime::current().uses_background_compute() {
+                if self.worktree_preview_cache_write_blocked_until_rev == Some(blocked_rev) {
+                    self.worktree_preview_cache_write_blocked_until_rev = None;
+                }
+            } else {
+                cx.spawn(
+                    async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                        smol::Timer::after(std::time::Duration::from_millis(1)).await;
+                        let _ = view.update(cx, |this, _cx| {
+                            if this.worktree_preview_cache_write_blocked_until_rev
+                                == Some(blocked_rev)
+                            {
+                                this.worktree_preview_cache_write_blocked_until_rev = None;
+                            }
+                        });
+                    },
+                )
+                .detach();
+            }
+        }
+
         self.refresh_worktree_preview_syntax_document(cx);
+    }
+
+    pub(in crate::view) fn set_worktree_preview_ready_source(
+        &mut self,
+        path: std::path::PathBuf,
+        source_text: SharedString,
+        line_starts: Arc<[usize]>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let line_flags = preview_line_flags_from_source(source_text.as_ref(), line_starts.as_ref());
+        self.apply_worktree_preview_ready_state(
+            path.clone(),
+            path,
+            source_text.len(),
+            source_text,
+            line_starts,
+            line_flags,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn set_worktree_preview_ready_indexed_source(
+        &mut self,
+        display_path: std::path::PathBuf,
+        source_path: std::path::PathBuf,
+        source_len: usize,
+        line_starts: Arc<[usize]>,
+        line_flags: Arc<[u8]>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.apply_worktree_preview_ready_state(
+            display_path,
+            source_path,
+            source_len,
+            SharedString::default(),
+            line_starts,
+            line_flags,
+            cx,
+        );
     }
 
     pub(in crate::view) fn set_worktree_preview_ready_rows(
@@ -633,6 +764,9 @@ impl MainPaneView {
             return;
         };
         if !matches!(self.worktree_preview, Loadable::Ready(_)) {
+            return;
+        }
+        if self.worktree_preview_text.is_empty() {
             return;
         }
         let source_text = self.worktree_preview_text.clone();
@@ -661,7 +795,7 @@ impl MainPaneView {
             rows::PrepareDiffSyntaxDocumentResult::TimedOut => {
                 cx.spawn(
                     async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                        let parsed_document = smol::unblock(move || {
+                        let prepare_document = move || {
                             rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                                 language,
                                 FULL_DOCUMENT_SYNTAX_MODE,
@@ -670,8 +804,13 @@ impl MainPaneView {
                                 background_reparse_seed,
                                 None,
                             )
-                        })
-                        .await;
+                        };
+                        let parsed_document =
+                            if crate::ui_runtime::current().uses_background_compute() {
+                                smol::unblock(prepare_document).await
+                            } else {
+                                prepare_document()
+                            };
 
                         let _ = view.update(cx, |this, cx| {
                             let Some(parsed_document) = parsed_document else {
@@ -707,16 +846,23 @@ impl MainPaneView {
         &mut self,
         attempt: Option<rows::PrepareDiffSyntaxDocumentResult>,
         key: &Option<PreparedSyntaxDocumentKey>,
-    ) -> bool {
+    ) -> SyncFileDiffPreparedSyntaxApplyResult {
         match attempt {
             Some(rows::PrepareDiffSyntaxDocumentResult::Ready(document)) => {
-                if let Some(key) = key.as_ref() {
-                    self.insert_prepared_syntax_document(key.clone(), document);
+                SyncFileDiffPreparedSyntaxApplyResult {
+                    inserted: key.as_ref().is_some_and(|key| {
+                        self.insert_prepared_syntax_document(key.clone(), document)
+                    }),
+                    needs_background_prepare: false,
                 }
-                false
             }
-            Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => true,
-            _ => false,
+            Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => {
+                SyncFileDiffPreparedSyntaxApplyResult {
+                    inserted: false,
+                    needs_background_prepare: true,
+                }
+            }
+            _ => SyncFileDiffPreparedSyntaxApplyResult::default(),
         }
     }
 
@@ -810,10 +956,20 @@ impl MainPaneView {
             )
         });
 
-        let needs_split_left_async =
-            self.apply_sync_syntax_result(split_left_attempt, &split_left_key);
-        let needs_split_right_async =
-            self.apply_sync_syntax_result(split_right_attempt, &split_right_key);
+        let split_left_sync = self.apply_sync_syntax_result(split_left_attempt, &split_left_key);
+        let split_right_sync = self.apply_sync_syntax_result(split_right_attempt, &split_right_key);
+        let needs_split_left_async = split_left_sync.needs_background_prepare;
+        let needs_split_right_async = split_right_sync.needs_background_prepare;
+
+        if split_left_sync.inserted {
+            self.file_diff_style_cache_epochs.bump_left();
+        }
+        if split_right_sync.inserted {
+            self.file_diff_style_cache_epochs.bump_right();
+        }
+        if split_left_sync.inserted || split_right_sync.inserted {
+            cx.notify();
+        }
 
         if !needs_split_left_async && !needs_split_right_async {
             return;
@@ -847,30 +1003,33 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let parsed_documents =
-                    smol::unblock(move || FileDiffBackgroundPreparedSyntaxDocuments {
-                        split_left: split_left_source.and_then(|(text, line_starts)| {
-                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                                language,
-                                FULL_DOCUMENT_SYNTAX_MODE,
-                                text,
-                                line_starts,
-                                split_left_background_reparse_seed,
-                                split_left_edit_hint,
-                            )
-                        }),
-                        split_right: split_right_source.and_then(|(text, line_starts)| {
-                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                                language,
-                                FULL_DOCUMENT_SYNTAX_MODE,
-                                text,
-                                line_starts,
-                                split_right_background_reparse_seed,
-                                split_right_edit_hint,
-                            )
-                        }),
-                    })
-                    .await;
+                let prepare_documents = move || FileDiffBackgroundPreparedSyntaxDocuments {
+                    split_left: split_left_source.and_then(|(text, line_starts)| {
+                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                            language,
+                            FULL_DOCUMENT_SYNTAX_MODE,
+                            text,
+                            line_starts,
+                            split_left_background_reparse_seed,
+                            split_left_edit_hint,
+                        )
+                    }),
+                    split_right: split_right_source.and_then(|(text, line_starts)| {
+                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                            language,
+                            FULL_DOCUMENT_SYNTAX_MODE,
+                            text,
+                            line_starts,
+                            split_right_background_reparse_seed,
+                            split_right_edit_hint,
+                        )
+                    }),
+                };
+                let parsed_documents = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(prepare_documents).await
+                } else {
+                    prepare_documents()
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_diff_syntax_generation != syntax_generation {
@@ -1010,9 +1169,12 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let rebuild =
-                    smol::unblock(move || build_file_diff_cache_rebuild(file.as_ref(), &workdir))
-                        .await;
+                let rebuild_cache = move || build_file_diff_cache_rebuild(file.as_ref(), &workdir);
+                let rebuild = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(rebuild_cache).await
+                } else {
+                    rebuild_cache()
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_diff_cache_inflight != Some(seq) {
@@ -1157,11 +1319,11 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let result = smol::unblock(move || {
+                let build_preview = move || {
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
                     markdown_preview::build_markdown_diff_preview(
-                        old_source.as_str(),
-                        new_source.as_str(),
+                        old_source.as_ref(),
+                        new_source.as_ref(),
                     )
                     .map(Arc::new)
                     .ok_or_else(|| {
@@ -1170,8 +1332,12 @@ impl MainPaneView {
                         )
                         .to_string()
                     })
-                })
-                .await;
+                };
+                let result = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(build_preview).await
+                } else {
+                    build_preview()
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_markdown_preview_inflight != Some(seq) {
@@ -1206,6 +1372,7 @@ impl MainPaneView {
         self.diff_cache_target = None;
         self.diff_file_for_src_ix.clear();
         self.diff_language_for_src_ix.clear();
+        self.diff_yaml_block_scalar_for_src_ix.clear();
         self.diff_click_kinds.clear();
         self.diff_line_kind_for_src_ix.clear();
         self.diff_hide_unified_header_for_src_ix.clear();
@@ -1255,12 +1422,35 @@ impl MainPaneView {
             Arc::clone(&diff),
             PATCH_DIFF_PAGE_SIZE,
         ));
-        let split_row_provider = Arc::new(PagedPatchSplitRows::new(Arc::clone(&row_provider)));
+        let mut split_row_count = 0usize;
+        let mut pending_split_removes = 0usize;
+        let mut pending_split_adds = 0usize;
         self.diff_row_provider = Some(row_provider);
-        self.diff_split_row_provider = Some(split_row_provider);
 
         self.diff_file_for_src_ix = compute_diff_file_for_src_ix(diff.lines.as_slice());
-        self.diff_line_kind_for_src_ix = diff.lines.iter().map(|line| line.kind).collect();
+        self.diff_line_kind_for_src_ix = diff
+            .lines
+            .iter()
+            .map(|line| {
+                match line.kind {
+                    gitcomet_core::domain::DiffLineKind::Remove => pending_split_removes += 1,
+                    gitcomet_core::domain::DiffLineKind::Add => pending_split_adds += 1,
+                    gitcomet_core::domain::DiffLineKind::Context
+                    | gitcomet_core::domain::DiffLineKind::Header
+                    | gitcomet_core::domain::DiffLineKind::Hunk => {
+                        split_row_count += pending_split_removes.max(pending_split_adds) + 1;
+                        pending_split_removes = 0;
+                        pending_split_adds = 0;
+                    }
+                }
+                line.kind
+            })
+            .collect();
+        split_row_count += pending_split_removes.max(pending_split_adds);
+        self.diff_split_row_provider = Some(Arc::new(PagedPatchSplitRows::new_with_len_hint(
+            Arc::clone(self.diff_row_provider.as_ref().expect("set just above")),
+            split_row_count,
+        )));
         self.diff_hide_unified_header_for_src_ix = diff
             .lines
             .iter()
@@ -1343,7 +1533,11 @@ impl MainPaneView {
             };
             self.diff_language_for_src_ix.push(language);
         }
-
+        self.diff_yaml_block_scalar_for_src_ix = compute_diff_yaml_block_scalar_for_src_ix(
+            diff.lines.as_slice(),
+            self.diff_file_for_src_ix.as_slice(),
+            self.diff_language_for_src_ix.as_slice(),
+        );
         if let Some(preview) = build_new_file_preview_from_diff(
             diff.lines.as_slice(),
             &workdir,
@@ -1488,6 +1682,7 @@ impl MainPaneView {
         self.diff_visible_is_file_view = is_file_view;
         self.diff_horizontal_min_width = px(0.0);
         self.diff_visible_inline_map = None;
+        self.diff_search_inline_patch_trigram_index = None;
 
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();
@@ -1705,31 +1900,31 @@ mod tests {
         let diff = vec![
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Header,
-                text: Arc::from("diff --git a/docs/table.md b/docs/table.md"),
+                text: "diff --git a/docs/table.md b/docs/table.md".into(),
                 old_line: None,
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Header,
-                text: Arc::from("deleted file mode 100644"),
+                text: "deleted file mode 100644".into(),
                 old_line: None,
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| **Header Bold** | B |"),
+                text: "-| **Header Bold** | B |".into(),
                 old_line: Some(1),
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| --- | --- |"),
+                text: "-| --- | --- |".into(),
                 old_line: Some(2),
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| [link](https://example.com) | plain |"),
+                text: "-| [link](https://example.com) | plain |".into(),
                 old_line: Some(3),
                 new_line: None,
             },

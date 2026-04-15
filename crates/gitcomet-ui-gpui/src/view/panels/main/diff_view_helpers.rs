@@ -8,15 +8,9 @@ impl MainPaneView {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
                 {
                     DiffTarget::WorkingTree { path, area } => {
-                        let kind = self.active_repo().and_then(|repo| match &repo.status {
-                            Loadable::Ready(status) => {
-                                let list = match area {
-                                    DiffArea::Unstaged => &status.unstaged,
-                                    DiffArea::Staged => &status.staged,
-                                };
-                                list.iter().find(|e| e.path == *path).map(|e| e.kind)
-                            }
-                            _ => None,
+                        let kind = self.active_repo().and_then(|repo| {
+                            repo.status_entry_for_path(*area, path.as_path())
+                                .map(|entry| entry.kind)
                         });
 
                         let (icon, color) = match kind.unwrap_or(FileStatusKind::Modified) {
@@ -85,7 +79,7 @@ impl MainPaneView {
 
     pub(super) fn diff_nav_hotkey_hint(theme: AppTheme, label: &'static str) -> gpui::Div {
         div()
-            .font_family("monospace")
+            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
             .text_xs()
             .text_color(theme.colors.text_muted)
             .child(label)
@@ -100,22 +94,21 @@ impl MainPaneView {
         let buttons = (|| {
             let repo_id = repo_id?;
             let repo = self.active_repo()?;
-            let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()?
-            else {
-                return None;
-            };
-            let area = *area;
+            let change_tracking_view = self.active_change_tracking_view(cx);
 
-            let (prev, next) = match &repo.status {
-                Loadable::Ready(status) => {
-                    let entries = match area {
-                        DiffArea::Unstaged => status.unstaged.as_slice(),
-                        DiffArea::Staged => status.staged.as_slice(),
-                    };
-                    Self::status_prev_next_indices(entries, path.as_path())
-                }
-                _ => (None, None),
-            };
+            let diff_target = repo.diff_state.diff_target.as_ref()?;
+            let prev = status_nav::adjacent_diff_file_target_for_repo(
+                repo,
+                diff_target,
+                change_tracking_view,
+                -1,
+            );
+            let next = status_nav::adjacent_diff_file_target_for_repo(
+                repo,
+                diff_target,
+                change_tracking_view,
+                1,
+            );
 
             let prev_disabled = prev.is_none();
             let next_disabled = next.is_none();
@@ -128,7 +121,7 @@ impl MainPaneView {
                 .style(components::ButtonStyle::Outlined)
                 .disabled(prev_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
-                    if this.try_select_adjacent_status_file(repo_id, -1, window, cx) {
+                    if this.try_select_adjacent_diff_file(repo_id, -1, window, cx) {
                         cx.notify();
                     }
                 })
@@ -150,7 +143,7 @@ impl MainPaneView {
                 .style(components::ButtonStyle::Outlined)
                 .disabled(next_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
-                    if this.try_select_adjacent_status_file(repo_id, 1, window, cx) {
+                    if this.try_select_adjacent_diff_file(repo_id, 1, window, cx) {
                         cx.notify();
                     }
                 })

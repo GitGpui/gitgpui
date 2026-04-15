@@ -1,4 +1,4 @@
-use crate::msg::Msg;
+use crate::msg::{Msg, RepoPathList};
 use gitcomet_core::auth::{
     StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
 };
@@ -62,6 +62,25 @@ fn send_refresh_branches_on_success(
     }
 }
 
+fn send_load_worktrees_on_success(
+    msg_tx: &mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    result: &Result<(), Error>,
+) {
+    if result.is_ok() {
+        send_or_log(msg_tx, Msg::LoadWorktrees { repo_id });
+    }
+}
+
+fn send_refresh_branches_and_load_worktrees_on_success(
+    msg_tx: &mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    result: &Result<(), Error>,
+) {
+    send_refresh_branches_on_success(msg_tx, repo_id, result);
+    send_load_worktrees_on_success(msg_tx, repo_id, result);
+}
+
 fn dedup_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths.sort();
     paths.dedup();
@@ -89,9 +108,17 @@ pub(super) fn schedule_checkout_branch(
     repo_id: RepoId,
     name: String,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        repo.checkout_branch(&name)
-    });
+    schedule_repo_action_with_hook(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        move |repo| repo.checkout_branch(&name),
+        send_refresh_branches_and_load_worktrees_on_success,
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
+    );
 }
 
 pub(super) fn schedule_checkout_remote_branch(
@@ -109,7 +136,7 @@ pub(super) fn schedule_checkout_remote_branch(
         msg_tx,
         repo_id,
         move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch),
-        send_refresh_branches_on_success,
+        send_refresh_branches_and_load_worktrees_on_success,
         |repo_id, result| {
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
         },
@@ -123,9 +150,17 @@ pub(super) fn schedule_checkout_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        repo.checkout_commit(&commit_id)
-    });
+    schedule_repo_action_with_hook(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        move |repo| repo.checkout_commit(&commit_id),
+        send_load_worktrees_on_success,
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
+    );
 }
 
 pub(super) fn schedule_cherry_pick_commit(
@@ -192,6 +227,9 @@ pub(super) fn schedule_create_branch_and_checkout(
         if refresh {
             send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
         }
+        if result.is_ok() {
+            send_or_log(&msg_tx, Msg::LoadWorktrees { repo_id });
+        }
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result }),
@@ -257,10 +295,10 @@ pub(super) fn schedule_stage_paths(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
-    paths: Vec<PathBuf>,
+    paths: RepoPathList,
 ) {
     schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let unique = dedup_paths(paths);
+        let unique = dedup_paths(paths.as_slice().to_vec());
         let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
         repo.stage(&refs)
     });
@@ -284,10 +322,10 @@ pub(super) fn schedule_unstage_paths(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
-    paths: Vec<PathBuf>,
+    paths: RepoPathList,
 ) {
     schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let unique = dedup_paths(paths);
+        let unique = dedup_paths(paths.as_slice().to_vec());
         let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
         repo.unstage(&refs)
     });

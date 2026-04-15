@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::{CommitDetails, CommitFileChange};
 
 fn copied_path_ends_with(text: &str, suffix: &std::path::Path) -> bool {
     let normalize = |value: &str| value.replace('\\', "/");
@@ -97,12 +98,8 @@ fn apply_state(
     state: Arc<AppState>,
 ) {
     cx.update(|window, app| {
-        let state_for_host = Arc::clone(&state);
         view.update(app, |this, cx| {
             push_test_state(this, state, cx);
-            this.popover_host.update(cx, |host, _cx| {
-                host.set_state_for_test(state_for_host);
-            });
         });
         let _ = window.draw(app);
     });
@@ -116,6 +113,72 @@ fn app_state_with_active_repo(repo: RepoState) -> Arc<AppState> {
         active_repo: Some(repo_id),
         ..Default::default()
     })
+}
+
+fn set_change_tracking_view_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    next: ChangeTrackingView,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| this.set_change_tracking_view(next, cx));
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
+fn diff_panel_is_focused(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> bool {
+    cx.update(|window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_panel_focus_handle
+            .is_focused(window)
+    })
+}
+
+fn popover_is_open(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> bool {
+    cx.update(|_window, app| view.read(app).popover_host.read(app).is_open())
+}
+
+fn active_worktree_diff_target_path(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<std::path::PathBuf> {
+    cx.update(|_window, app| {
+        let root = view.read(app);
+        let repo_id = root.state.active_repo?;
+        let repo = root.state.repos.iter().find(|repo| repo.id == repo_id)?;
+        match repo.diff_state.diff_target.clone()? {
+            DiffTarget::WorkingTree { path, .. } => Some(path),
+            _ => None,
+        }
+    })
+}
+
+fn open_change_tracking_settings_popover(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::ChangeTrackingSettings,
+                    gpui::point(px(72.0), px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+        let _ = window.draw(app);
+    });
 }
 
 fn shortcut_fixture_repo(
@@ -136,7 +199,7 @@ fn shortcut_fixture_repo(
         gitcomet_core::domain::LogPage {
             commits: vec![gitcomet_core::domain::Commit {
                 id: commit_id.clone(),
-                parent_ids: vec![],
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                 summary: "Initial commit".into(),
                 author: "Alice".into(),
                 time: std::time::SystemTime::UNIX_EPOCH,
@@ -188,9 +251,7 @@ fn simple_hunk_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
 }
 
 #[gpui::test]
-fn settings_and_history_context_menu_shortcuts_match_expected_actions(
-    cx: &mut gpui::TestAppContext,
-) {
+fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -204,31 +265,6 @@ fn settings_and_history_context_menu_shortcuts_match_expected_actions(
     ));
     let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     apply_state(cx, &view, app_state_with_active_repo(repo));
-
-    let theme_model = cx
-        .update(|_window, app| context_menu_model_for(&view, app, PopoverKind::SettingsThemeMenu));
-    assert_declared_shortcuts(&theme_model, &["A", "L", "D"]);
-    assert_shortcut_action!(
-        theme_model,
-        "A",
-        ContextMenuAction::SetThemeMode {
-            mode: ThemeMode::Automatic
-        }
-    );
-    assert_shortcut_action!(
-        theme_model,
-        "L",
-        ContextMenuAction::SetThemeMode {
-            mode: ThemeMode::Light
-        }
-    );
-    assert_shortcut_action!(
-        theme_model,
-        "D",
-        ContextMenuAction::SetThemeMode {
-            mode: ThemeMode::Dark
-        }
-    );
 
     let history_filter_model = cx.update(|_window, app| {
         context_menu_model_for(&view, app, PopoverKind::HistoryBranchFilter { repo_id })
@@ -263,43 +299,6 @@ fn settings_and_history_context_menu_shortcuts_match_expected_actions(
             });
         });
     });
-
-    let history_columns_model = cx.update(|_window, app| {
-        context_menu_model_for(&view, app, PopoverKind::HistoryColumnSettings)
-    });
-    assert_declared_shortcuts(&history_columns_model, &["A", "D", "S", "R"]);
-    assert_shortcut_action!(
-        history_columns_model,
-        "A",
-        ContextMenuAction::SetHistoryColumns {
-            show_author,
-            show_date,
-            show_sha
-        } if !*show_author && *show_date && *show_sha
-    );
-    assert_shortcut_action!(
-        history_columns_model,
-        "D",
-        ContextMenuAction::SetHistoryColumns {
-            show_author,
-            show_date,
-            show_sha
-        } if *show_author && !*show_date && *show_sha
-    );
-    assert_shortcut_action!(
-        history_columns_model,
-        "S",
-        ContextMenuAction::SetHistoryColumns {
-            show_author,
-            show_date,
-            show_sha
-        } if *show_author && *show_date && !*show_sha
-    );
-    assert_shortcut_action!(
-        history_columns_model,
-        "R",
-        ContextMenuAction::ResetHistoryColumnWidths
-    );
 
     let change_tracking_model = cx.update(|_window, app| {
         context_menu_model_for(&view, app, PopoverKind::ChangeTrackingSettings)
@@ -908,6 +907,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
                 discard_lines_patch: Some("discard patch".into()),
                 lines_count: 3,
                 copy_text: Some("copied selection".into()),
+                copy_target: None,
             },
         )
     });
@@ -950,6 +950,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
                 discard_lines_patch: None,
                 lines_count: 1,
                 copy_text: Some("staged copy".into()),
+                copy_target: None,
             },
         )
     });
@@ -1020,5 +1021,361 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
         conflict_output_model,
         "Ctrl+V",
         ContextMenuAction::ConflictResolverOutputPaste
+    );
+}
+
+#[gpui::test]
+fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(703);
+    let commit_id = CommitId("cafebabecafebabe".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_split_untracked_nav",
+        std::process::id()
+    ));
+    let untracked_a = std::path::PathBuf::from("new-a.txt");
+    let tracked = std::path::PathBuf::from("src/lib.rs");
+    let untracked_b = std::path::PathBuf::from("new-b.txt");
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![
+                gitcomet_core::domain::FileStatus {
+                    path: untracked_a.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: tracked.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: untracked_b.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                    conflict: None,
+                },
+            ],
+        }
+        .into(),
+    );
+    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: untracked_a.clone(),
+        area: DiffArea::Unstaged,
+    });
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    set_change_tracking_view_for_test(cx, &view, ChangeTrackingView::SplitUntracked);
+
+    let moved = cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
+        })
+    });
+    assert!(
+        moved,
+        "expected adjacent navigation to move to the next untracked row"
+    );
+}
+
+#[gpui::test]
+fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(704);
+    let commit_id = CommitId("deadc0dedeadc0de".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_split_tracked_nav",
+        std::process::id()
+    ));
+    let untracked = std::path::PathBuf::from("new-a.txt");
+    let tracked_a = std::path::PathBuf::from("src/lib.rs");
+    let tracked_b = std::path::PathBuf::from("src/main.rs");
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![
+                gitcomet_core::domain::FileStatus {
+                    path: untracked.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: tracked_a.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: tracked_b.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                },
+            ],
+        }
+        .into(),
+    );
+    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: tracked_a.clone(),
+        area: DiffArea::Unstaged,
+    });
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    set_change_tracking_view_for_test(cx, &view, ChangeTrackingView::SplitUntracked);
+
+    let moved = cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.try_select_adjacent_diff_file(repo_id, -1, window, cx)
+        })
+    });
+    assert!(
+        !moved,
+        "tracked-section navigation should not jump into the split untracked section"
+    );
+}
+
+#[gpui::test]
+fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(7051);
+    let commit_id = CommitId("fedcba0987654321".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_details_file_nav_scroll",
+        std::process::id()
+    ));
+    let files = (0..64)
+        .map(|ix| CommitFileChange {
+            path: std::path::PathBuf::from(format!("src/commit_nav/file_{ix:02}.rs")),
+            kind: FileStatusKind::Modified,
+        })
+        .collect::<Vec<_>>();
+    let start_ix = 40usize;
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.history_state.selected_commit = Some(commit_id.clone());
+    repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
+        id: commit_id.clone(),
+        message: "subject".into(),
+        committed_at: "2026-04-14 12:00:00 +0300".into(),
+        parent_ids: vec![],
+        files: files.clone(),
+    }));
+    repo.diff_state.diff_target = Some(DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(files[start_ix].path.clone()),
+    });
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1024.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+
+    let initial_offset_y = cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        uniform_list_offset(&pane.commit_files_scroll).y
+    });
+    assert_eq!(
+        initial_offset_y,
+        px(0.0),
+        "expected the commit-details file list to start at the top"
+    );
+
+    let moved = cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
+        })
+    });
+    assert!(
+        moved,
+        "expected commit-details adjacent navigation to succeed"
+    );
+    draw_and_drain_test_window(cx);
+
+    let offset_y = cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        uniform_list_offset(&pane.commit_files_scroll).y
+    });
+    assert!(
+        offset_y < px(0.0),
+        "expected commit-details file navigation to scroll the selected row into view (offset_y={offset_y:?})",
+    );
+}
+
+#[gpui::test]
+fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigation(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(705);
+    let commit_id = CommitId("1234567812345678".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_change_tracking_focus_switch",
+        std::process::id()
+    ));
+    let untracked_a = std::path::PathBuf::from("new-a.txt");
+    let tracked = std::path::PathBuf::from("src/lib.rs");
+    let untracked_b = std::path::PathBuf::from("new-b.txt");
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![
+                gitcomet_core::domain::FileStatus {
+                    path: untracked_a.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: tracked,
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: untracked_b.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                    conflict: None,
+                },
+            ],
+        }
+        .into(),
+    );
+    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: untracked_a.clone(),
+        area: DiffArea::Unstaged,
+    });
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected the diff panel to be focused before opening change-tracking settings"
+    );
+
+    open_change_tracking_settings_popover(cx, &view);
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the change-tracking settings popover to open"
+    );
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected opening the change-tracking settings popover to move focus away from the diff panel"
+    );
+
+    cx.simulate_keystrokes("s");
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        cx.update(|_window, app| {
+            crate::view::test_support::change_tracking_view(view.read(app))
+        }),
+        ChangeTrackingView::SplitUntracked,
+        "expected selecting the split view menu entry to update the change-tracking layout"
+    );
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected the change-tracking settings popover to close after selecting split view"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected closing the change-tracking settings popover to restore diff-panel focus"
+    );
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(untracked_a),
+        "expected the active diff target to stay selected after switching to split view"
+    );
+
+    let moved = cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
+        })
+    });
+    assert!(
+        moved,
+        "expected adjacent navigation to keep working immediately after switching to split view"
+    );
+}
+
+#[gpui::test]
+fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(706);
+    let commit_id = CommitId("8765432187654321".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_change_tracking_focus_escape",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![gitcomet_core::domain::FileStatus {
+                path: path.clone(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }],
+        }
+        .into(),
+    );
+    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path,
+        area: DiffArea::Unstaged,
+    });
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+    open_change_tracking_settings_popover(cx, &view);
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the change-tracking settings popover to be open before dismissing it"
+    );
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected the change-tracking settings popover to hold focus while it is open"
+    );
+
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected Escape to close the change-tracking settings popover"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected dismissing change-tracking settings to restore diff-panel focus"
     );
 }

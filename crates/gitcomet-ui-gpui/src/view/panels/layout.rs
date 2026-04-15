@@ -90,7 +90,107 @@ fn visible_bounds_probe() -> Div {
     div().absolute().top_0().left_0().size_full()
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct StatusSectionActionSelection {
+    paths: Vec<std::path::PathBuf>,
+    from_explicit_selection: bool,
+}
+
+impl StatusSectionActionSelection {
+    fn count(&self) -> usize {
+        self.paths.len()
+    }
+
+    fn popover_path(&self) -> Option<std::path::PathBuf> {
+        (!self.from_explicit_selection && self.paths.len() == 1).then(|| self.paths[0].clone())
+    }
+}
+
+fn explicit_status_section_action_paths(
+    selection: &StatusMultiSelection,
+    section: StatusSection,
+) -> Vec<std::path::PathBuf> {
+    match section {
+        StatusSection::CombinedUnstaged => selection
+            .selected_paths_for_area(DiffArea::Unstaged)
+            .to_vec(),
+        StatusSection::Untracked => selection.untracked.clone(),
+        StatusSection::Unstaged => selection.unstaged.clone(),
+        StatusSection::Staged => selection.staged.clone(),
+    }
+}
+
+fn active_status_section_action_path(
+    repo: &RepoState,
+    diff_target: Option<&DiffTarget>,
+    section: StatusSection,
+) -> Option<std::path::PathBuf> {
+    let DiffTarget::WorkingTree { path, area } = diff_target? else {
+        return None;
+    };
+    if *area != section.diff_area() {
+        return None;
+    }
+
+    StatusSectionEntries::from_repo(repo, section)
+        .is_some_and(|entries| entries.contains_path(path.as_path()))
+        .then(|| path.clone())
+}
+
+fn status_section_action_selection(
+    repo: &RepoState,
+    diff_target: Option<&DiffTarget>,
+    selection: Option<&StatusMultiSelection>,
+    section: StatusSection,
+) -> StatusSectionActionSelection {
+    if let Some(selection) = selection {
+        let paths = explicit_status_section_action_paths(selection, section);
+        if !paths.is_empty() {
+            return StatusSectionActionSelection {
+                paths,
+                from_explicit_selection: true,
+            };
+        }
+    }
+
+    active_status_section_action_path(repo, diff_target, section)
+        .map(|path| StatusSectionActionSelection {
+            paths: vec![path],
+            from_explicit_selection: false,
+        })
+        .unwrap_or_default()
+}
+
 impl DetailsPaneView {
+    fn status_section_action_selection(
+        &self,
+        repo_id: RepoId,
+        section: StatusSection,
+    ) -> StatusSectionActionSelection {
+        let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
+            return StatusSectionActionSelection::default();
+        };
+
+        status_section_action_selection(
+            repo,
+            repo.diff_state.diff_target.as_ref(),
+            self.status_multi_selection.get(&repo_id),
+            section,
+        )
+    }
+
+    fn take_status_section_action_selection(
+        &mut self,
+        repo_id: RepoId,
+        section: StatusSection,
+    ) -> StatusSectionActionSelection {
+        let selection = self.status_section_action_selection(repo_id, section);
+        if selection.from_explicit_selection {
+            self.status_multi_selection.remove(&repo_id);
+        }
+        selection
+    }
+
     fn measured_status_sections_total_height(&self, resize_handle_h: Pixels) -> Option<Pixels> {
         self.current_status_sections_bounds()
             .map(|bounds| (bounds.size.height - resize_handle_h).max(px(0.0)))
@@ -292,10 +392,9 @@ impl DetailsPaneView {
         if repo.commit_in_flight > 0 {
             return false;
         }
-        let staged_count = match &repo.status {
-            Loadable::Ready(status) => status.staged.len(),
-            _ => 0,
-        };
+        let staged_count = repo
+            .staged_status_entries()
+            .map_or(0, |entries| entries.len());
         let is_merge_active = merge_active(Some(repo));
         commit_allowed(is_merge_active, staged_count) && !message.trim().is_empty()
     }
@@ -425,7 +524,7 @@ impl DetailsPaneView {
                                 .w_full()
                                 .h_full()
                                 .min_h(px(0.0))
-                                .track_scroll(self.commit_files_scroll.clone());
+                                .track_scroll(&self.commit_files_scroll);
                                 let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
                                     self.commit_files_scroll.clone(),
                                     components::ScrollbarAxis::Vertical,
@@ -440,10 +539,12 @@ impl DetailsPaneView {
                                     .h_full()
                                     .min_h(px(0.0))
                                     .w_full()
+                                    .overflow_hidden()
                                     .child(
                                         div()
                                             .w_full()
                                             .flex_1()
+                                            .h_full()
                                             .min_h(px(0.0))
                                             .pr(files_scrollbar_gutter)
                                             .child(list),
@@ -581,7 +682,7 @@ impl DetailsPaneView {
                             .w_full()
                             .h_full()
                             .min_h(px(0.0))
-                            .track_scroll(self.commit_files_scroll.clone());
+                            .track_scroll(&self.commit_files_scroll);
                             let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
                                 self.commit_files_scroll.clone(),
                                 components::ScrollbarAxis::Vertical,
@@ -596,10 +697,12 @@ impl DetailsPaneView {
                                 .h_full()
                                 .min_h(px(0.0))
                                 .w_full()
+                                .overflow_hidden()
                                 .child(
                                     div()
                                         .w_full()
                                         .flex_1()
+                                        .h_full()
                                         .min_h(px(0.0))
                                         .pr(files_scrollbar_gutter)
                                         .child(list),
@@ -745,59 +848,67 @@ impl DetailsPaneView {
             .active_repo()
             .map(|r| r.local_actions_in_flight > 0)
             .unwrap_or(false);
-        let (staged_count, unstaged_count) = self
+        let (staged_count, unstaged_count, untracked_count, split_unstaged_count) = self
             .active_repo()
-            .and_then(|r| match &r.status {
-                Loadable::Ready(s) => Some((s.staged.len(), s.unstaged.len())),
-                _ => None,
+            .map(|repo| {
+                (
+                    StatusSectionEntries::from_repo(repo, StatusSection::Staged)
+                        .map_or(0, StatusSectionEntries::len),
+                    StatusSectionEntries::from_repo(repo, StatusSection::CombinedUnstaged)
+                        .map_or(0, StatusSectionEntries::len),
+                    StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
+                        .map_or(0, StatusSectionEntries::len),
+                    StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
+                        .map_or(0, StatusSectionEntries::len),
+                )
             })
-            .unwrap_or((0, 0));
-        let (untracked_count, split_unstaged_count, untracked_paths, split_unstaged_paths) = self
+            .unwrap_or((0, 0, 0, 0));
+        let (untracked_paths, split_unstaged_paths) = self
             .active_repo()
-            .and_then(|r| match &r.status {
-                Loadable::Ready(s) => {
-                    let mut untracked = Vec::new();
-                    let mut tracked = Vec::new();
-                    for entry in &s.unstaged {
-                        if entry.kind == FileStatusKind::Untracked {
-                            untracked.push(entry.path.clone());
-                        } else {
-                            tracked.push(entry.path.clone());
-                        }
-                    }
-                    Some((untracked.len(), tracked.len(), untracked, tracked))
-                }
-                _ => None,
+            .map(|repo| {
+                (
+                    StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
+                        .map_or_else(Vec::new, StatusSectionEntries::path_vec),
+                    StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
+                        .map_or_else(Vec::new, StatusSectionEntries::path_vec),
+                )
             })
-            .unwrap_or_else(|| (0, 0, Vec::new(), Vec::new()));
+            .unwrap_or_else(|| (Vec::new(), Vec::new()));
+        let (unstaged_loading, untracked_loading, split_unstaged_loading, staged_loading) = self
+            .active_repo()
+            .map(|repo| {
+                (
+                    status_section_is_loading(repo, StatusSection::CombinedUnstaged),
+                    status_section_is_loading(repo, StatusSection::Untracked),
+                    status_section_is_loading(repo, StatusSection::Unstaged),
+                    status_section_is_loading(repo, StatusSection::Staged),
+                )
+            })
+            .unwrap_or((false, false, false, false));
 
         let repo_id = self.active_repo_id();
         let selected_combined_unstaged = repo_id
-            .and_then(|rid| {
-                self.status_multi_selection
-                    .get(&rid)
-                    .map(|s| s.selected_count_for_area(DiffArea::Unstaged))
+            .map(|rid| {
+                self.status_section_action_selection(rid, StatusSection::CombinedUnstaged)
+                    .count()
             })
             .unwrap_or(0);
         let selected_untracked = repo_id
-            .and_then(|rid| {
-                self.status_multi_selection
-                    .get(&rid)
-                    .map(|s| s.untracked.len())
+            .map(|rid| {
+                self.status_section_action_selection(rid, StatusSection::Untracked)
+                    .count()
             })
             .unwrap_or(0);
         let selected_split_unstaged = repo_id
-            .and_then(|rid| {
-                self.status_multi_selection
-                    .get(&rid)
-                    .map(|s| s.unstaged.len())
+            .map(|rid| {
+                self.status_section_action_selection(rid, StatusSection::Unstaged)
+                    .count()
             })
             .unwrap_or(0);
         let selected_staged = repo_id
-            .and_then(|rid| {
-                self.status_multi_selection
-                    .get(&rid)
-                    .map(|s| s.staged.len())
+            .map(|rid| {
+                self.status_section_action_selection(rid, StatusSection::Staged)
+                    .count()
             })
             .unwrap_or(0);
 
@@ -817,7 +928,7 @@ impl DetailsPaneView {
                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 this.store.dispatch(Msg::StagePaths {
                     repo_id,
-                    paths: Vec::new(),
+                    paths: Default::default(),
                 });
                 cx.notify();
             })
@@ -845,15 +956,16 @@ impl DetailsPaneView {
                 return;
             };
             let paths = this
-                .status_multi_selection
-                .remove(&repo_id)
-                .map(|s| s.take_selected_paths_for_area(DiffArea::Unstaged))
-                .unwrap_or_default();
+                .take_status_section_action_selection(repo_id, StatusSection::CombinedUnstaged)
+                .paths;
             if paths.is_empty() {
                 return;
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths { repo_id, paths });
+            this.store.dispatch(Msg::StagePaths {
+                repo_id,
+                paths: paths.into(),
+            });
             cx.notify();
         });
 
@@ -867,19 +979,16 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let count = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.selected_count_for_area(DiffArea::Unstaged))
-                .unwrap_or(0);
-            if count == 0 {
+            let selection =
+                this.status_section_action_selection(repo_id, StatusSection::CombinedUnstaged);
+            if selection.paths.is_empty() {
                 return;
             }
             this.open_popover_at(
                 PopoverKind::DiscardChangesConfirm {
                     repo_id,
                     area: DiffArea::Unstaged,
-                    path: None,
+                    path: selection.popover_path(),
                 },
                 e.position(),
                 window,
@@ -888,7 +997,8 @@ impl DetailsPaneView {
             cx.notify();
         });
 
-        let untracked_paths_for_stage_all = untracked_paths.clone();
+        let untracked_paths_for_stage_all =
+            gitcomet_state::msg::RepoPathList::from(untracked_paths.clone());
         let stage_all_untracked = components::Button::new("stage_all_untracked", "Stage all")
             .style(components::ButtonStyle::Subtle)
             .disabled(local_actions_in_flight || untracked_paths_for_stage_all.is_empty())
@@ -919,15 +1029,16 @@ impl DetailsPaneView {
                 return;
             };
             let paths = this
-                .status_multi_selection
-                .remove(&repo_id)
-                .map(|s| s.untracked)
-                .unwrap_or_default();
+                .take_status_section_action_selection(repo_id, StatusSection::Untracked)
+                .paths;
             if paths.is_empty() {
                 return;
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths { repo_id, paths });
+            this.store.dispatch(Msg::StagePaths {
+                repo_id,
+                paths: paths.into(),
+            });
             cx.notify();
         });
 
@@ -941,19 +1052,15 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let count = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.untracked.len())
-                .unwrap_or(0);
-            if count == 0 {
+            let selection = this.status_section_action_selection(repo_id, StatusSection::Untracked);
+            if selection.paths.is_empty() {
                 return;
             }
             this.open_popover_at(
                 PopoverKind::DiscardChangesConfirm {
                     repo_id,
                     area: DiffArea::Unstaged,
-                    path: None,
+                    path: selection.popover_path(),
                 },
                 e.position(),
                 window,
@@ -962,7 +1069,8 @@ impl DetailsPaneView {
             cx.notify();
         });
 
-        let split_unstaged_paths_for_stage_all = split_unstaged_paths.clone();
+        let split_unstaged_paths_for_stage_all =
+            gitcomet_state::msg::RepoPathList::from(split_unstaged_paths.clone());
         let stage_all_split_unstaged =
             components::Button::new("stage_all_split_unstaged", "Stage all")
                 .style(components::ButtonStyle::Subtle)
@@ -994,15 +1102,16 @@ impl DetailsPaneView {
                 return;
             };
             let paths = this
-                .status_multi_selection
-                .remove(&repo_id)
-                .map(|s| s.unstaged)
-                .unwrap_or_default();
+                .take_status_section_action_selection(repo_id, StatusSection::Unstaged)
+                .paths;
             if paths.is_empty() {
                 return;
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths { repo_id, paths });
+            this.store.dispatch(Msg::StagePaths {
+                repo_id,
+                paths: paths.into(),
+            });
             cx.notify();
         });
 
@@ -1016,19 +1125,15 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let count = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.unstaged.len())
-                .unwrap_or(0);
-            if count == 0 {
+            let selection = this.status_section_action_selection(repo_id, StatusSection::Unstaged);
+            if selection.paths.is_empty() {
                 return;
             }
             this.open_popover_at(
                 PopoverKind::DiscardChangesConfirm {
                     repo_id,
                     area: DiffArea::Unstaged,
-                    path: None,
+                    path: selection.popover_path(),
                 },
                 e.position(),
                 window,
@@ -1048,7 +1153,7 @@ impl DetailsPaneView {
                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 this.store.dispatch(Msg::UnstagePaths {
                     repo_id,
-                    paths: Vec::new(),
+                    paths: Default::default(),
                 });
                 cx.notify();
             })
@@ -1074,15 +1179,16 @@ impl DetailsPaneView {
                         return;
                     };
                     let paths = this
-                        .status_multi_selection
-                        .remove(&repo_id)
-                        .map(|s| s.staged)
-                        .unwrap_or_default();
+                        .take_status_section_action_selection(repo_id, StatusSection::Staged)
+                        .paths;
                     if paths.is_empty() {
                         return;
                     }
                     this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    this.store.dispatch(Msg::UnstagePaths { repo_id, paths });
+                    this.store.dispatch(Msg::UnstagePaths {
+                        repo_id,
+                        paths: paths.into(),
+                    });
                     cx.notify();
                 });
 
@@ -1190,25 +1296,33 @@ impl DetailsPaneView {
             actions.child(unstage_all).into_any_element()
         };
 
-        let unstaged_body = if unstaged_count == 0 {
+        let unstaged_body = if unstaged_loading {
+            components::empty_state(theme, "Unstaged", "Loading").into_any_element()
+        } else if unstaged_count == 0 {
             components::empty_state(theme, "Unstaged", "Clean.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::CombinedUnstaged, unstaged_count)
         };
 
-        let untracked_body = if untracked_count == 0 {
+        let untracked_body = if untracked_loading {
+            components::empty_state(theme, "Untracked", "Loading").into_any_element()
+        } else if untracked_count == 0 {
             components::empty_state(theme, "Untracked", "No untracked files.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Untracked, untracked_count)
         };
 
-        let split_unstaged_body = if split_unstaged_count == 0 {
+        let split_unstaged_body = if split_unstaged_loading {
+            components::empty_state(theme, "Unstaged", "Loading").into_any_element()
+        } else if split_unstaged_count == 0 {
             components::empty_state(theme, "Unstaged", "Clean.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Unstaged, split_unstaged_count)
         };
 
-        let staged_list = if staged_count == 0 {
+        let staged_list = if staged_loading {
+            components::empty_state(theme, "Staged", "Loading").into_any_element()
+        } else if staged_count == 0 {
             components::empty_state(theme, "Staged", "No staged changes.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Staged, staged_count)
@@ -1612,7 +1726,7 @@ impl DetailsPaneView {
                     uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(self.unstaged_scroll.clone());
+                        .track_scroll(&self.unstaged_scroll);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -1649,7 +1763,7 @@ impl DetailsPaneView {
                 )
                 .h_full()
                 .min_h(px(0.0))
-                .track_scroll(self.untracked_scroll.clone());
+                .track_scroll(&self.untracked_scroll);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -1686,7 +1800,7 @@ impl DetailsPaneView {
                 )
                 .h_full()
                 .min_h(px(0.0))
-                .track_scroll(self.unstaged_scroll.clone());
+                .track_scroll(&self.unstaged_scroll);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -1719,7 +1833,7 @@ impl DetailsPaneView {
                 let list = uniform_list("staged", count, cx.processor(Self::render_staged_rows))
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.staged_scroll.clone());
+                    .track_scroll(&self.staged_scroll);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -1842,6 +1956,7 @@ mod tests {
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_state::model::{Loadable, RepoId, RepoState};
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_repo() -> RepoState {
         RepoState::new_opening(
@@ -1850,6 +1965,25 @@ mod tests {
                 workdir: PathBuf::from("/tmp/repo"),
             },
         )
+    }
+
+    fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: PathBuf::from(path),
+            kind,
+            conflict: None,
+        }
+    }
+
+    fn repo_with_status(status: RepoStatus) -> RepoState {
+        let mut repo = test_repo();
+        repo.worktree_status = Loadable::Ready(Arc::new(status.unstaged.clone()));
+        repo.worktree_status_rev = 1;
+        repo.staged_status = Loadable::Ready(Arc::new(status.staged.clone()));
+        repo.staged_status_rev = 1;
+        repo.status = Loadable::Ready(status.into());
+        repo.status_rev = 1;
+        repo
     }
 
     #[test]
@@ -1926,5 +2060,113 @@ mod tests {
             DetailsPaneView::sanitized_restored_untracked_height(Some(1)),
             Some(px(STATUS_SECTION_MIN_HEIGHT_PX))
         );
+    }
+
+    #[test]
+    fn status_section_action_selection_falls_back_to_active_combined_unstaged_row() {
+        let repo = repo_with_status(RepoStatus {
+            unstaged: vec![file_status("src/lib.rs", FileStatusKind::Modified)],
+            staged: Vec::new(),
+        });
+        let diff_target = DiffTarget::WorkingTree {
+            path: PathBuf::from("src/lib.rs"),
+            area: DiffArea::Unstaged,
+        };
+
+        let selection = status_section_action_selection(
+            &repo,
+            Some(&diff_target),
+            None,
+            StatusSection::CombinedUnstaged,
+        );
+
+        assert_eq!(
+            selection,
+            StatusSectionActionSelection {
+                paths: vec![PathBuf::from("src/lib.rs")],
+                from_explicit_selection: false,
+            }
+        );
+        assert_eq!(selection.popover_path(), Some(PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn status_section_action_selection_limits_active_row_to_matching_split_section() {
+        let repo = repo_with_status(RepoStatus {
+            unstaged: vec![
+                file_status("new.txt", FileStatusKind::Untracked),
+                file_status("src/lib.rs", FileStatusKind::Modified),
+            ],
+            staged: Vec::new(),
+        });
+        let diff_target = DiffTarget::WorkingTree {
+            path: PathBuf::from("new.txt"),
+            area: DiffArea::Unstaged,
+        };
+
+        let untracked = status_section_action_selection(
+            &repo,
+            Some(&diff_target),
+            None,
+            StatusSection::Untracked,
+        );
+        let unstaged = status_section_action_selection(
+            &repo,
+            Some(&diff_target),
+            None,
+            StatusSection::Unstaged,
+        );
+
+        assert_eq!(
+            untracked,
+            StatusSectionActionSelection {
+                paths: vec![PathBuf::from("new.txt")],
+                from_explicit_selection: false,
+            }
+        );
+        assert!(unstaged.paths.is_empty());
+    }
+
+    #[test]
+    fn status_section_action_selection_prefers_explicit_selection_over_active_row() {
+        let selected_a = PathBuf::from("src/lib.rs");
+        let selected_b = PathBuf::from("src/main.rs");
+        let repo = repo_with_status(RepoStatus {
+            unstaged: vec![
+                file_status(
+                    selected_a.to_string_lossy().as_ref(),
+                    FileStatusKind::Modified,
+                ),
+                file_status(
+                    selected_b.to_string_lossy().as_ref(),
+                    FileStatusKind::Modified,
+                ),
+            ],
+            staged: Vec::new(),
+        });
+        let diff_target = DiffTarget::WorkingTree {
+            path: PathBuf::from("src/other.rs"),
+            area: DiffArea::Unstaged,
+        };
+        let selection = StatusMultiSelection {
+            unstaged: vec![selected_a.clone(), selected_b.clone()],
+            ..Default::default()
+        };
+
+        let action_selection = status_section_action_selection(
+            &repo,
+            Some(&diff_target),
+            Some(&selection),
+            StatusSection::CombinedUnstaged,
+        );
+
+        assert_eq!(
+            action_selection,
+            StatusSectionActionSelection {
+                paths: vec![selected_a, selected_b],
+                from_explicit_selection: true,
+            }
+        );
+        assert_eq!(action_selection.popover_path(), None);
     }
 }

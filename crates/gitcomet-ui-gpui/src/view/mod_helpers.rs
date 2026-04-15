@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::path_utils::canonicalize_or_original;
 
 pub(super) fn toast_fade_in_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_IN_MS)
@@ -10,6 +11,44 @@ pub(super) fn toast_fade_out_duration() -> Duration {
 
 pub(super) fn toast_total_lifetime(ttl: Duration) -> Duration {
     toast_fade_in_duration() + ttl + toast_fade_out_duration()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct SelectedBranch {
+    pub(in crate::view) repo_id: RepoId,
+    pub(in crate::view) section: BranchSection,
+    pub(in crate::view) name: String,
+}
+
+pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
+    theme.colors.emphasis_text
+}
+
+pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.10 })
+}
+
+pub(in crate::view) fn selected_branch_history_entry_text(
+    selected_branch: Option<&SelectedBranch>,
+    repo_id: RepoId,
+    is_head: bool,
+    selected: bool,
+) -> Option<SharedString> {
+    if !selected {
+        return None;
+    }
+
+    let selected_branch = selected_branch?;
+    if selected_branch.repo_id != repo_id {
+        return None;
+    }
+
+    match selected_branch.section {
+        BranchSection::Local if is_head => Some(format!("HEAD → {}", selected_branch.name).into()),
+        BranchSection::Local | BranchSection::Remote => {
+            Some(SharedString::from(selected_branch.name.clone()))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,11 +64,15 @@ pub(super) enum HistoryColResizeHandle {
 pub(super) struct HistoryColResizeState {
     pub(super) handle: HistoryColResizeHandle,
     pub(super) start_x: Pixels,
-    pub(super) start_branch: Pixels,
-    pub(super) start_graph: Pixels,
-    pub(super) start_author: Pixels,
-    pub(super) start_date: Pixels,
-    pub(super) start_sha: Pixels,
+    pub(super) start_width: Pixels,
+    pub(super) current_width: Pixels,
+    pub(super) drag_delta_sign: f32,
+    pub(super) min_width: Pixels,
+    pub(super) static_max_width: Pixels,
+    pub(super) other_fixed_width: Pixels,
+    pub(super) bounds_available_width: Pixels,
+    pub(super) max_width: Pixels,
+    pub(super) visible_columns: (bool, bool, bool),
 }
 
 pub(super) struct ResizeDragGhost;
@@ -55,7 +98,7 @@ pub(super) fn absolute_scroll_y(handle: &ScrollHandle) -> Pixels {
 }
 
 pub(super) fn scroll_is_near_bottom(handle: &ScrollHandle, threshold: Pixels) -> bool {
-    let max_offset = handle.max_offset().height.max(px(0.0));
+    let max_offset = handle.max_offset().y.max(px(0.0));
     if max_offset <= px(0.0) {
         return true;
     }
@@ -270,12 +313,96 @@ pub(super) enum PaneResizeHandle {
     Details,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct PaneResizeState {
     pub(super) handle: PaneResizeHandle,
     pub(super) start_x: Pixels,
-    pub(super) start_sidebar: Pixels,
-    pub(super) start_details: Pixels,
+    pub(super) start_width: Pixels,
+    pub(super) other_width: Pixels,
+    pub(super) drag_delta_sign: f32,
+    pub(super) bounds_total_w: Pixels,
+    pub(super) bounds_sidebar_collapsed: bool,
+    pub(super) bounds_details_collapsed: bool,
+    pub(super) min_width: Pixels,
+    pub(super) max_width: Pixels,
+}
+
+impl PaneResizeState {
+    #[inline]
+    pub(super) fn new(
+        handle: PaneResizeHandle,
+        start_x: Pixels,
+        start_sidebar: Pixels,
+        start_details: Pixels,
+        total_w: Pixels,
+        sidebar_collapsed: bool,
+        details_collapsed: bool,
+    ) -> Self {
+        let (min_width, start_width, other_width, other_collapsed, drag_delta_sign) = match handle {
+            PaneResizeHandle::Sidebar => (
+                px(super::SIDEBAR_MIN_PX),
+                start_sidebar,
+                start_details,
+                details_collapsed,
+                1.0,
+            ),
+            PaneResizeHandle::Details => (
+                px(super::DETAILS_MIN_PX),
+                start_details,
+                start_sidebar,
+                sidebar_collapsed,
+                -1.0,
+            ),
+        };
+        let (_, max_width) = super::pane_resize_drag_width_bounds_for_other_pane(
+            min_width,
+            other_width,
+            other_collapsed,
+            total_w,
+            sidebar_collapsed,
+            details_collapsed,
+        );
+        Self {
+            handle,
+            start_x,
+            start_width,
+            other_width,
+            drag_delta_sign,
+            bounds_total_w: total_w,
+            bounds_sidebar_collapsed: sidebar_collapsed,
+            bounds_details_collapsed: details_collapsed,
+            min_width,
+            max_width,
+        }
+    }
+
+    #[inline]
+    pub(super) fn drag_width_bounds(
+        &self,
+        total_w: Pixels,
+        sidebar_collapsed: bool,
+        details_collapsed: bool,
+    ) -> (Pixels, Pixels) {
+        if self.bounds_total_w == total_w
+            && self.bounds_sidebar_collapsed == sidebar_collapsed
+            && self.bounds_details_collapsed == details_collapsed
+        {
+            (self.min_width, self.max_width)
+        } else {
+            let other_collapsed = match self.handle {
+                PaneResizeHandle::Sidebar => details_collapsed,
+                PaneResizeHandle::Details => sidebar_collapsed,
+            };
+            super::pane_resize_drag_width_bounds_for_other_pane(
+                self.min_width,
+                self.other_width,
+                other_collapsed,
+                total_w,
+                sidebar_collapsed,
+                details_collapsed,
+            )
+        }
+    }
 }
 
 pub(super) use ResizeDragGhost as PaneResizeDragGhost;
@@ -407,6 +534,7 @@ pub(super) struct DiffTextHitbox {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) layout_key: u64,
     pub(super) text_len: usize,
+    pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
 }
 
 #[derive(Clone)]
@@ -452,17 +580,121 @@ impl StatusSection {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatusSectionFilter {
+    All,
+    UntrackedOnly,
+    ExcludeUntracked,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct StatusSectionEntries<'a> {
+    entries: &'a [FileStatus],
+    filter: StatusSectionFilter,
+}
+
+impl<'a> StatusSectionEntries<'a> {
+    pub(super) fn from_repo(repo: &'a RepoState, section: StatusSection) -> Option<Self> {
+        let (entries, filter) = match section {
+            StatusSection::CombinedUnstaged => {
+                (repo.worktree_status_entries()?, StatusSectionFilter::All)
+            }
+            StatusSection::Untracked => (
+                repo.worktree_status_entries()?,
+                StatusSectionFilter::UntrackedOnly,
+            ),
+            StatusSection::Unstaged => (
+                repo.worktree_status_entries()?,
+                StatusSectionFilter::ExcludeUntracked,
+            ),
+            StatusSection::Staged => (repo.staged_status_entries()?, StatusSectionFilter::All),
+        };
+        Some(Self { entries, filter })
+    }
+
+    pub(super) fn iter(self) -> StatusSectionIter<'a> {
+        StatusSectionIter {
+            inner: self.entries.iter(),
+            filter: self.filter,
+        }
+    }
+
+    pub(super) fn len(self) -> usize {
+        self.iter().count()
+    }
+
+    pub(super) fn get(self, index: usize) -> Option<&'a FileStatus> {
+        self.iter().nth(index)
+    }
+
+    pub(super) fn path_vec(self) -> Vec<std::path::PathBuf> {
+        self.iter().map(|entry| entry.path.clone()).collect()
+    }
+
+    pub(super) fn contains_path(self, path: &std::path::Path) -> bool {
+        self.iter().any(|entry| entry.path == path)
+    }
+}
+
+pub(super) struct StatusSectionIter<'a> {
+    inner: std::slice::Iter<'a, FileStatus>,
+    filter: StatusSectionFilter,
+}
+
+impl<'a> Iterator for StatusSectionIter<'a> {
+    type Item = &'a FileStatus;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .find(|entry| status_section_filter_matches(self.filter, entry))
+    }
+}
+
+fn status_section_filter_matches(filter: StatusSectionFilter, entry: &FileStatus) -> bool {
+    match filter {
+        StatusSectionFilter::All => true,
+        StatusSectionFilter::UntrackedOnly => entry.kind == FileStatusKind::Untracked,
+        StatusSectionFilter::ExcludeUntracked => entry.kind != FileStatusKind::Untracked,
+    }
+}
+
+pub(super) fn status_section_rev(repo: &RepoState, section: StatusSection) -> u64 {
+    match section {
+        StatusSection::Staged => repo.staged_status_cache_rev(),
+        StatusSection::CombinedUnstaged | StatusSection::Untracked | StatusSection::Unstaged => {
+            repo.worktree_status_cache_rev()
+        }
+    }
+}
+
+pub(super) fn status_section_is_loading(repo: &RepoState, section: StatusSection) -> bool {
+    match section {
+        StatusSection::Staged => repo.staged_status_is_loading(),
+        StatusSection::CombinedUnstaged | StatusSection::Untracked | StatusSection::Unstaged => {
+            repo.worktree_status_is_loading()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct StatusMultiSelection {
     pub(super) untracked: Vec<std::path::PathBuf>,
     pub(super) untracked_anchor: Option<std::path::PathBuf>,
     pub(super) unstaged: Vec<std::path::PathBuf>,
     pub(super) unstaged_anchor: Option<std::path::PathBuf>,
+    pub(super) unstaged_anchor_index: Option<usize>,
+    pub(super) unstaged_anchor_status_rev: Option<u64>,
     pub(super) staged: Vec<std::path::PathBuf>,
     pub(super) staged_anchor: Option<std::path::PathBuf>,
+    pub(super) staged_anchor_index: Option<usize>,
+    pub(super) staged_anchor_status_rev: Option<u64>,
 }
 
 impl StatusMultiSelection {
+    pub(super) fn is_empty(&self) -> bool {
+        self.untracked.is_empty() && self.unstaged.is_empty() && self.staged.is_empty()
+    }
+
     pub(super) fn selected_paths_for_area(&self, area: DiffArea) -> &[std::path::PathBuf] {
         match area {
             DiffArea::Unstaged => {
@@ -498,9 +730,10 @@ impl StatusMultiSelection {
     }
 }
 
+#[cfg(test)]
 pub(super) fn reconcile_status_multi_selection(
     selection: &mut StatusMultiSelection,
-    status: &RepoStatus,
+    status: &gitcomet_core::domain::RepoStatus,
 ) {
     let mut untracked_paths: HashSet<&std::path::Path> =
         HashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
@@ -533,6 +766,8 @@ pub(super) fn reconcile_status_multi_selection(
         .is_some_and(|a| !unstaged_paths.contains(&a.as_path()))
     {
         selection.unstaged_anchor = None;
+        selection.unstaged_anchor_index = None;
+        selection.unstaged_anchor_status_rev = None;
     }
 
     let mut staged_paths: HashSet<&std::path::Path> =
@@ -550,6 +785,71 @@ pub(super) fn reconcile_status_multi_selection(
         .is_some_and(|a| !staged_paths.contains(&a.as_path()))
     {
         selection.staged_anchor = None;
+        selection.staged_anchor_index = None;
+        selection.staged_anchor_status_rev = None;
+    }
+}
+
+pub(super) fn reconcile_status_multi_selection_with_repo(
+    selection: &mut StatusMultiSelection,
+    repo: &RepoState,
+) {
+    if let Some(worktree) = repo.worktree_status_entries() {
+        let mut untracked_paths: HashSet<&std::path::Path> =
+            HashSet::with_capacity_and_hasher(worktree.len(), Default::default());
+        let mut unstaged_paths: HashSet<&std::path::Path> =
+            HashSet::with_capacity_and_hasher(worktree.len(), Default::default());
+        for entry in worktree {
+            unstaged_paths.insert(entry.path.as_path());
+            if entry.kind == FileStatusKind::Untracked {
+                untracked_paths.insert(entry.path.as_path());
+            }
+        }
+
+        selection
+            .untracked
+            .retain(|p| untracked_paths.contains(&p.as_path()));
+        if selection
+            .untracked_anchor
+            .as_ref()
+            .is_some_and(|a| !untracked_paths.contains(&a.as_path()))
+        {
+            selection.untracked_anchor = None;
+        }
+
+        selection
+            .unstaged
+            .retain(|p| unstaged_paths.contains(&p.as_path()));
+        if selection
+            .unstaged_anchor
+            .as_ref()
+            .is_some_and(|a| !unstaged_paths.contains(&a.as_path()))
+        {
+            selection.unstaged_anchor = None;
+            selection.unstaged_anchor_index = None;
+            selection.unstaged_anchor_status_rev = None;
+        }
+    }
+
+    if let Some(staged) = repo.staged_status_entries() {
+        let mut staged_paths: HashSet<&std::path::Path> =
+            HashSet::with_capacity_and_hasher(staged.len(), Default::default());
+        for entry in staged {
+            staged_paths.insert(entry.path.as_path());
+        }
+
+        selection
+            .staged
+            .retain(|p| staged_paths.contains(&p.as_path()));
+        if selection
+            .staged_anchor
+            .as_ref()
+            .is_some_and(|a| !staged_paths.contains(&a.as_path()))
+        {
+            selection.staged_anchor = None;
+            selection.staged_anchor_index = None;
+            selection.staged_anchor_status_rev = None;
+        }
     }
 }
 
@@ -655,7 +955,10 @@ impl DeferredLineStarts {
 
     fn materialized_with_count(line_starts: std::sync::Arc<[usize]>, line_count: usize) -> Self {
         let starts = std::sync::OnceLock::new();
-        let _ = starts.set(line_starts);
+        assert!(
+            starts.set(line_starts).is_ok(),
+            "fresh OnceLock should accept line starts"
+        );
         Self {
             line_count,
             starts: std::sync::Arc::new(starts),
@@ -785,6 +1088,7 @@ impl Default for ConflictModeState {
 pub(super) struct ConflictResolverUiState {
     pub(super) repo_id: Option<RepoId>,
     pub(super) path: Option<std::path::PathBuf>,
+    pub(super) shared_path: Option<gitcomet_state::msg::RepoPath>,
     pub(super) loaded_file: Option<gitcomet_state::model::ConflictFile>,
     pub(super) conflict_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(super) source_hash: Option<u64>,
@@ -838,6 +1142,8 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolver_pending_recompute_seq: u64,
     /// Resolved-output outline metadata (provenance, conflict markers, source index).
     pub(super) resolved_outline: ResolvedOutlineData,
+    /// Cached per-line gutter render state for resolved-output preview rows.
+    pub(super) resolved_outline_gutter_rows: Vec<conflict_resolver::ResolvedOutputGutterRow>,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Cached image previews for the merge-input sides.
@@ -851,6 +1157,7 @@ impl Default for ConflictResolverUiState {
         Self {
             repo_id: None,
             path: None,
+            shared_path: None,
             loaded_file: None,
             conflict_syntax_language: None,
             source_hash: None,
@@ -881,6 +1188,7 @@ impl Default for ConflictResolverUiState {
             conflict_rev: 0,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
+            resolved_outline_gutter_rows: Vec::new(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
@@ -911,6 +1219,10 @@ fn indexed_line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -
 impl ConflictResolverUiState {
     pub(super) fn matches_target(&self, repo_id: RepoId, path: &std::path::Path) -> bool {
         self.repo_id == Some(repo_id) && self.path.as_deref() == Some(path)
+    }
+
+    pub(super) fn dispatch_path(&self) -> Option<gitcomet_state::msg::RepoPath> {
+        self.shared_path.clone()
     }
 
     pub(super) fn cached_loaded_file_for_target(
@@ -972,9 +1284,8 @@ impl ConflictResolverUiState {
     }
 
     #[track_caller]
-    pub(super) fn debug_assert_rendering_mode_invariants(&self) {
-        let _ = self;
-    }
+    #[allow(unused_variables)]
+    pub(super) fn debug_assert_rendering_mode_invariants(&self) {}
 
     pub(super) fn three_way_line_count(&self, side: ThreeWayColumn) -> usize {
         self.three_way_line_starts[side].line_count()
@@ -1327,9 +1638,8 @@ impl ConflictResolverUiState {
     /// via `compute_word_highlights_for_row` at render time instead).
     pub(super) fn two_way_split_word_highlight(
         &self,
-        row_ix: usize,
+        _row_ix: usize,
     ) -> Option<&conflict_resolver::TwoWayWordHighlightPair> {
-        let _ = row_ix;
         None
     }
 
@@ -1342,16 +1652,17 @@ impl ConflictResolverUiState {
             self.three_way_line_count(ThreeWayColumn::Ours),
             self.three_way_line_count(ThreeWayColumn::Theirs),
         );
+        let three_way_visible_projection =
+            conflict_resolver::build_three_way_visible_projection_with_resolved_flags(
+                self.three_way_len,
+                &maps.conflict_ranges[1],
+                &maps.conflict_resolved,
+                self.hide_resolved,
+            );
         self.apply_three_way_conflict_maps(maps);
         match &mut self.mode_state {
             ConflictModeState::Streamed(s) => {
-                s.three_way_visible_projection =
-                    conflict_resolver::build_three_way_visible_projection(
-                        self.three_way_len,
-                        &self.three_way_conflict_ranges[ThreeWayColumn::Ours],
-                        &self.marker_segments,
-                        self.hide_resolved,
-                    );
+                s.three_way_visible_projection = three_way_visible_projection;
             }
         }
         self.three_way_visible_state_ready = true;
@@ -1562,6 +1873,7 @@ mod conflict_resolver_ui_state_tests {
             conflict_ranges: [vec![0..3], vec![0..5], vec![0..4]],
             line_conflict_maps: [vec![Some(0); 3], vec![Some(0); 5], vec![Some(0); 4]],
             conflict_has_base: vec![true],
+            conflict_resolved: vec![true],
         };
         state.apply_three_way_conflict_maps(maps.clone());
 
@@ -1893,12 +2205,6 @@ pub(super) enum PopoverKind {
         message: String,
     },
     CloneRepo,
-    #[allow(dead_code)]
-    Settings,
-    SettingsThemeMenu,
-    SettingsDateFormatMenu,
-    SettingsTimezoneMenu,
-    OpenSourceLicenses,
     ResetPrompt {
         repo_id: RepoId,
         target: String,
@@ -1939,6 +2245,7 @@ pub(super) enum PopoverKind {
     ForceRemoveWorktreeConfirm {
         repo_id: RepoId,
         path: std::path::PathBuf,
+        branch: Option<String>,
     },
     DiscardChangesConfirm {
         repo_id: RepoId,
@@ -1966,6 +2273,7 @@ pub(super) enum PopoverKind {
         discard_lines_patch: Option<String>,
         lines_count: usize,
         copy_text: Option<String>,
+        copy_target: Option<(usize, DiffTextRegion)>,
     },
     ConflictResolverInputRowMenu {
         line_label: SharedString,
@@ -2018,7 +2326,6 @@ pub(super) enum PopoverKind {
     HistoryBranchFilter {
         repo_id: RepoId,
     },
-    HistoryColumnSettings,
     ChangeTrackingSettings,
 }
 
@@ -2041,11 +2348,17 @@ pub(super) enum RemotePopoverKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum WorktreePopoverKind {
     SectionMenu,
-    Menu { path: std::path::PathBuf },
+    Menu {
+        path: std::path::PathBuf,
+        branch: Option<String>,
+    },
     AddPrompt,
     OpenPicker,
     RemovePicker,
-    RemoveConfirm { path: std::path::PathBuf },
+    RemoveConfirm {
+        path: std::path::PathBuf,
+        branch: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2053,6 +2366,7 @@ pub(super) enum SubmodulePopoverKind {
     SectionMenu,
     Menu { path: std::path::PathBuf },
     AddPrompt,
+    TrustConfirm,
     OpenPicker,
     RemovePicker,
     RemoveConfirm { path: std::path::PathBuf },
@@ -2212,6 +2526,15 @@ pub(super) enum FocusedMergetoolBootstrapAction {
     Complete,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum DeferredRepoBootstrap {
+    RestoreSession {
+        open_repos: Vec<std::path::PathBuf>,
+        active_repo: Option<std::path::PathBuf>,
+    },
+    OpenRepo(std::path::PathBuf),
+}
+
 pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
     let path = if path.is_relative() {
         std::env::current_dir()
@@ -2244,41 +2567,7 @@ pub(super) fn focused_mergetool_target_path(
 }
 
 pub(super) fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf {
-    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
-}
-
-#[cfg(windows)]
-pub(super) fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
-    use std::path::{Component, Prefix};
-
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return path;
-    };
-
-    let mut out = match prefix.kind() {
-        Prefix::VerbatimDisk(letter) => {
-            std::path::PathBuf::from(format!("{}:", char::from(letter)))
-        }
-        Prefix::VerbatimUNC(server, share) => {
-            let mut out = std::path::PathBuf::from(r"\\");
-            out.push(server);
-            out.push(share);
-            out
-        }
-        Prefix::Verbatim(raw) => std::path::PathBuf::from(raw),
-        _ => return path,
-    };
-
-    for component in components {
-        out.push(component.as_os_str());
-    }
-    out
-}
-
-#[cfg(not(windows))]
-pub(super) fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
-    path
+    canonicalize_or_original(path)
 }
 
 pub(super) fn focused_mergetool_bootstrap_action(
@@ -2376,46 +2665,52 @@ pub(super) fn titlebar_workspace_actions_enabled(
     !repository_entry_interstitial_active(view_mode, has_repo_tabs)
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) enum ThemeMode {
     #[default]
     Automatic,
-    Light,
-    Dark,
+    Named(String),
 }
 
 impl ThemeMode {
-    pub(super) const fn key(self) -> &'static str {
+    pub(super) fn key(&self) -> &str {
         match self {
             Self::Automatic => "automatic",
-            Self::Light => "light",
-            Self::Dark => "dark",
+            Self::Named(key) => key,
         }
     }
 
     pub(super) fn from_key(raw: &str) -> Option<Self> {
         match raw {
             "automatic" => Some(Self::Automatic),
-            "light" => Some(Self::Light),
-            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Named(
+                crate::theme::DEFAULT_LIGHT_THEME_KEY.to_string(),
+            )),
+            "dark" => Some(Self::Named(
+                crate::theme::DEFAULT_DARK_THEME_KEY.to_string(),
+            )),
+            _ if crate::theme::has_theme_key(raw) => Some(Self::Named(raw.to_string())),
             _ => None,
         }
     }
 
-    pub(super) const fn label(self) -> &'static str {
+    pub(super) fn label(&self) -> String {
         match self {
-            Self::Automatic => "Automatic",
-            Self::Light => "Light",
-            Self::Dark => "Dark",
+            Self::Automatic => "Automatic".to_string(),
+            Self::Named(key) => crate::theme::theme_label(key).unwrap_or_else(|| key.clone()),
         }
     }
 
-    pub(super) fn resolve_theme(self, appearance: gpui::WindowAppearance) -> AppTheme {
+    pub(super) fn resolve_theme(&self, appearance: gpui::WindowAppearance) -> AppTheme {
         match self {
             Self::Automatic => AppTheme::default_for_window_appearance(appearance),
-            Self::Light => AppTheme::zed_one_light(),
-            Self::Dark => AppTheme::zed_ayu_dark(),
+            Self::Named(key) => crate::theme::AppTheme::from_key(key)
+                .unwrap_or_else(|| AppTheme::default_for_window_appearance(appearance)),
         }
+    }
+
+    pub(super) const fn is_automatic(&self) -> bool {
+        matches!(self, Self::Automatic)
     }
 }
 
@@ -2464,6 +2759,53 @@ impl ChangeTrackingView {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DiffScrollSync {
+    Vertical,
+    Horizontal,
+    None,
+    #[default]
+    Both,
+}
+
+impl DiffScrollSync {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Vertical => "vertical",
+            Self::Horizontal => "horizontal",
+            Self::None => "none",
+            Self::Both => "both",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "vertical" => Some(Self::Vertical),
+            "horizontal" => Some(Self::Horizontal),
+            "none" => Some(Self::None),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Vertical => "Vertical",
+            Self::Horizontal => "Horizontal",
+            Self::None => "None",
+            Self::Both => "Both",
+        }
+    }
+
+    pub(super) const fn includes_vertical(self) -> bool {
+        matches!(self, Self::Vertical | Self::Both)
+    }
+
+    pub(super) const fn includes_horizontal(self) -> bool {
+        matches!(self, Self::Horizontal | Self::Both)
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2486,6 +2828,7 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
+    pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Arc<gpui::Image>,
 
@@ -2497,6 +2840,7 @@ pub struct GitCometView {
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
+    pub(super) diff_scroll_sync: DiffScrollSync,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,
@@ -2518,7 +2862,11 @@ pub struct GitCometView {
     pub(super) last_mouse_pos: Point<Pixels>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
-    pub(super) pending_force_remove_worktree_prompt: Option<(RepoId, std::path::PathBuf)>,
+    pub(super) pending_force_remove_worktree_prompt:
+        Option<(RepoId, std::path::PathBuf, Option<String>)>,
+    pub(super) pending_submodule_trust_prompt:
+        Option<gitcomet_state::model::SubmoduleTrustPromptState>,
+    pub(super) pending_worktree_branch_removals: HashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]
     pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,

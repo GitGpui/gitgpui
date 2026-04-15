@@ -1,6 +1,8 @@
 use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
+use crate::view::branch_sidebar::BranchSection;
+use gitcomet_core::domain::LogScope;
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
@@ -170,7 +172,6 @@ struct ResolvedOutlineIncrementalBase<'a> {
     line_starts: &'a Arc<[usize]>,
     marker_segments: &'a [conflict_resolver::ConflictSegment],
     view_mode: ConflictResolverViewMode,
-    outline: &'a ResolvedOutlineData,
 }
 
 fn compute_resolved_outline_computation(
@@ -508,6 +509,91 @@ fn compute_synced_scroll_offsets<const N: usize>(
     std::array::from_fn(|ix| clamp_raw_scroll_y(master_y, max_scrolls[ix]))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyncedScrollAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl SyncedScrollAxis {
+    const fn includes(self, mode: DiffScrollSync) -> bool {
+        match self {
+            Self::Horizontal => mode.includes_horizontal(),
+            Self::Vertical => mode.includes_vertical(),
+        }
+    }
+
+    const fn offset_component(self, offset: Point<Pixels>) -> Pixels {
+        match self {
+            Self::Horizontal => offset.x,
+            Self::Vertical => offset.y,
+        }
+    }
+
+    const fn max_scroll_component(self, max_offset: Size<Pixels>) -> Pixels {
+        match self {
+            Self::Horizontal => max_offset.width,
+            Self::Vertical => max_offset.height,
+        }
+    }
+
+    fn with_offset_component(self, offset: Point<Pixels>, value: Pixels) -> Point<Pixels> {
+        match self {
+            Self::Horizontal => point(value, offset.y),
+            Self::Vertical => point(offset.x, value),
+        }
+    }
+}
+
+fn uniform_list_base_handle(handle: &UniformListScrollHandle) -> ScrollHandle {
+    handle.0.borrow().base_handle.clone()
+}
+
+fn snapshot_synced_scroll_offsets<const N: usize>(
+    handles: &[ScrollHandle; N],
+    axis: SyncedScrollAxis,
+) -> [Pixels; N] {
+    std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()))
+}
+
+fn sync_synced_scroll_offsets<const N: usize>(
+    handles: &[ScrollHandle; N],
+    last_synced: &mut [Pixels; N],
+    axis: SyncedScrollAxis,
+) {
+    let offsets: [Point<Pixels>; N] = std::array::from_fn(|ix| handles[ix].offset());
+    let max_scrolls = std::array::from_fn(|ix| {
+        axis.max_scroll_component(handles[ix].max_offset().into())
+            .max(px(0.0))
+    });
+    let targets = compute_synced_scroll_offsets(
+        std::array::from_fn(|ix| axis.offset_component(offsets[ix])),
+        max_scrolls,
+        *last_synced,
+        preferred_scroll_master_index(max_scrolls),
+    );
+
+    for ix in 0..N {
+        if axis.offset_component(offsets[ix]) != targets[ix] {
+            handles[ix].set_offset(axis.with_offset_component(offsets[ix], targets[ix]));
+        }
+    }
+    *last_synced = targets;
+}
+
+fn maybe_sync_synced_scroll_offsets<const N: usize>(
+    handles: &[ScrollHandle; N],
+    last_synced: &mut [Pixels; N],
+    axis: SyncedScrollAxis,
+    mode: DiffScrollSync,
+) {
+    if axis.includes(mode) {
+        sync_synced_scroll_offsets(handles, last_synced, axis);
+    } else {
+        *last_synced = snapshot_synced_scroll_offsets(handles, axis);
+    }
+}
+
 impl MainPaneView {
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -518,6 +604,24 @@ impl MainPaneView {
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
+            match repo.diff_state.diff_target.as_ref() {
+                Some(DiffTarget::WorkingTree { path, area }) => {
+                    0u8.hash(&mut hasher);
+                    path.hash(&mut hasher);
+                    match area {
+                        DiffArea::Staged => 0u8.hash(&mut hasher),
+                        DiffArea::Unstaged => 1u8.hash(&mut hasher),
+                    }
+                }
+                Some(DiffTarget::Commit { commit_id, path }) => {
+                    1u8.hash(&mut hasher);
+                    commit_id.hash(&mut hasher);
+                    path.hash(&mut hasher);
+                }
+                None => {
+                    2u8.hash(&mut hasher);
+                }
+            }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
             repo.conflict_state.conflict_rev.hash(&mut hasher);
 
@@ -526,11 +630,20 @@ impl MainPaneView {
                 repo.diff_state.diff_target,
                 Some(DiffTarget::WorkingTree { .. })
             ) {
-                repo.status_rev
+                repo.status_cache_rev()
             } else {
                 0
             };
             status_rev.hash(&mut hasher);
+            let commit_details_rev = if matches!(
+                repo.diff_state.diff_target,
+                Some(DiffTarget::Commit { path: Some(_), .. })
+            ) {
+                repo.history_state.commit_details_rev
+            } else {
+                0
+            };
+            commit_details_rev.hash(&mut hasher);
         }
 
         hasher.finish()
@@ -550,6 +663,44 @@ impl MainPaneView {
                 cx.quit();
             }
         }
+    }
+
+    pub(in crate::view) fn reveal_history_commit(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        desired_scope: LogScope,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if matches!(
+            clear_diff_selection_action(self.view_mode),
+            ClearDiffSelectionAction::ExitFocusedMergetool
+        ) {
+            self.clear_diff_selection_or_exit(repo_id, cx);
+            return;
+        }
+
+        self.clear_diff_selection_or_exit(repo_id, cx);
+        self.history_view.update(cx, |view, cx| {
+            view.request_reveal_commit(repo_id, commit_id, desired_scope, cx);
+        });
+        cx.notify();
+    }
+
+    pub(in crate::view) fn reveal_history_branch_commit(
+        &mut self,
+        repo_id: RepoId,
+        section: BranchSection,
+        branch_name: &str,
+        commit_id: CommitId,
+        desired_scope: LogScope,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let branch_name = branch_name.to_string();
+        self.history_view.update(cx, |view, cx| {
+            view.set_selected_branch(repo_id, section, &branch_name, cx);
+        });
+        self.reveal_history_commit(repo_id, commit_id, desired_scope, cx);
     }
 
     pub(super) fn set_focused_mergetool_exit_code(&self, code: i32) {
@@ -638,9 +789,13 @@ impl MainPaneView {
         date_time_format: DateTimeFormat,
         timezone: Timezone,
         show_timezone: bool,
+        diff_scroll_sync: DiffScrollSync,
+        history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
+        history_show_tags: bool,
+        history_auto_fetch_tags_on_repo_activation: bool,
         view_mode: GitCometViewMode,
         focused_mergetool_labels: Option<FocusedMergetoolLabels>,
         focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
@@ -747,11 +902,12 @@ impl MainPaneView {
             }
             let next: SharedString = input.read(cx).text().to_string().into();
             if this.diff_search_query != next {
-                this.diff_search_query = next;
-                this.clear_diff_text_query_overlay_cache();
+                let previous_query = this.diff_search_query.clone();
+                this.diff_search_query = next.clone();
+                this.invalidate_diff_text_query_overlay_cache(next.as_ref());
                 this.clear_worktree_preview_segments_cache();
                 this.clear_conflict_diff_query_overlay_caches();
-                this.diff_search_recompute_matches();
+                this.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
                 cx.notify();
             }
         });
@@ -767,9 +923,12 @@ impl MainPaneView {
                 date_time_format,
                 timezone,
                 show_timezone,
+                history_show_graph,
                 history_show_author,
                 history_show_date,
                 history_show_sha,
+                history_show_tags,
+                history_auto_fetch_tags_on_repo_activation,
                 root_view.clone(),
                 tooltip_host.clone(),
                 last_window_size,
@@ -800,8 +959,10 @@ impl MainPaneView {
             diff_view: DiffViewMode::Split,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap: false,
+            diff_scroll_sync,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
+            diff_split_last_synced_x: [px(0.0); 2],
             diff_split_last_synced_y: [px(0.0); 2],
             diff_horizontal_min_width: px(0.0),
             diff_cache_repo_id: None,
@@ -812,6 +973,7 @@ impl MainPaneView {
             diff_split_row_provider: None,
             diff_file_for_src_ix: Vec::new(),
             diff_language_for_src_ix: Vec::new(),
+            diff_yaml_block_scalar_for_src_ix: Vec::new(),
             diff_click_kinds: Vec::new(),
             diff_line_kind_for_src_ix: Vec::new(),
             diff_hide_unified_header_for_src_ix: Vec::new(),
@@ -833,6 +995,7 @@ impl MainPaneView {
             diff_text_segments_cache: Vec::new(),
             diff_text_query_segments_cache: Vec::new(),
             diff_text_query_cache_query: SharedString::default(),
+            diff_text_query_cache_generation: 0,
             diff_selection_anchor: None,
             diff_selection_range: None,
             diff_text_selecting: false,
@@ -849,6 +1012,7 @@ impl MainPaneView {
             diff_search_active: false,
             diff_search_query: "".into(),
             diff_search_matches: Vec::new(),
+            diff_search_inline_patch_trigram_index: None,
             diff_search_match_ix: None,
             diff_search_input,
             _diff_search_subscription: diff_search_subscription,
@@ -897,9 +1061,13 @@ impl MainPaneView {
             file_image_diff_cache_old_svg_path: None,
             file_image_diff_cache_new_svg_path: None,
             worktree_preview_path: None,
+            worktree_preview_source_path: None,
             worktree_preview: Loadable::NotLoaded,
+            worktree_preview_source_len: 0,
             worktree_preview_text: SharedString::default(),
             worktree_preview_line_starts: Arc::default(),
+            worktree_preview_line_flags: Arc::default(),
+            worktree_preview_search_trigram_index: None,
             worktree_preview_content_rev: 0,
             worktree_markdown_preview_path: None,
             worktree_markdown_preview_source_rev: 0,
@@ -909,6 +1077,7 @@ impl MainPaneView {
             worktree_preview_segments_cache_path: None,
             worktree_preview_syntax_language: None,
             worktree_preview_style_cache_epoch: 0,
+            worktree_preview_cache_write_blocked_until_rev: None,
             worktree_preview_segments_cache: HashMap::default(),
             diff_preview_is_new_file: false,
             conflict_resolver_input,
@@ -923,8 +1092,10 @@ impl MainPaneView {
             conflict_diff_split_resize: None,
             conflict_diff_split_col_widths: [px(0.0); 2],
             conflict_canvas_rows_enabled: conflict_canvas_rows_enabled_from_env(),
-            conflict_diff_segments_cache_split: HashMap::default(),
-            conflict_diff_query_segments_cache_split: HashMap::default(),
+            conflict_diff_segments_cache_split:
+                conflict_resolver::ConflictSplitStyledTextCache::default(),
+            conflict_diff_query_segments_cache_split:
+                conflict_resolver::ConflictSplitStyledTextCache::default(),
             conflict_diff_query_cache_query: SharedString::default(),
             conflict_three_way_segments_cache: HashMap::default(),
             conflict_three_way_prepared_syntax_documents: ThreeWaySides::default(),
@@ -951,10 +1122,13 @@ impl MainPaneView {
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
             conflict_preview_ours_scroll: UniformListScrollHandle::default(),
             conflict_preview_theirs_scroll: UniformListScrollHandle::default(),
-            conflict_preview_last_synced_y: [px(0.0); 3],
+            conflict_preview_last_synced_x: [px(0.0); 4],
+            conflict_preview_last_synced_y: [px(0.0); 4],
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
+            conflict_resolved_preview_gutter_scroll: UniformListScrollHandle::default(),
+            conflict_resolved_preview_gutter_last_synced_y: [px(0.0); 2],
             worktree_preview_scroll: UniformListScrollHandle::default(),
-            path_display_cache: std::cell::RefCell::new(HashMap::default()),
+            path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
         };
 
         pane.set_theme(theme, cx);
@@ -1163,31 +1337,85 @@ impl MainPaneView {
             return;
         }
 
+        if !crate::ui_runtime::current().uses_background_compute() {
+            while self.apply_prepared_syntax_chunk_updates(cx) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            self.syntax_chunk_poll_task = None;
+            return;
+        }
+
         let task = cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
                 let should_continue = view
-                    .update(cx, |this, cx| {
-                        let applied = rows::drain_completed_prepared_diff_syntax_chunk_builds();
-                        if applied > 0 {
-                            cx.notify();
-                        }
-
-                        let pending = rows::has_pending_prepared_diff_syntax_chunk_builds();
-                        if !pending {
-                            this.syntax_chunk_poll_task = None;
-                        }
-                        pending
-                    })
+                    .update(cx, |this, cx| this.apply_prepared_syntax_chunk_updates(cx))
                     .unwrap_or(false);
 
                 if !should_continue {
                     break;
                 }
 
-                gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                smol::Timer::after(std::time::Duration::from_millis(16)).await;
             },
         );
         self.syntax_chunk_poll_task = Some(task);
+    }
+
+    fn apply_prepared_syntax_chunk_updates(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        let mut applied = false;
+
+        let split_left_applied = self
+            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+            .unwrap_or(0);
+        if split_left_applied > 0 {
+            self.file_diff_style_cache_epochs.bump_left();
+            applied = true;
+        }
+
+        let split_right_applied = self
+            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+            .unwrap_or(0);
+        if split_right_applied > 0 {
+            self.file_diff_style_cache_epochs.bump_right();
+            applied = true;
+        }
+
+        let worktree_preview_applied = self
+            .worktree_preview_prepared_syntax_document()
+            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+            .unwrap_or(0);
+        if worktree_preview_applied > 0 {
+            self.worktree_preview_style_cache_epoch =
+                self.worktree_preview_style_cache_epoch.wrapping_add(1);
+            applied = true;
+        }
+
+        let resolved_preview_applied = self
+            .conflict_resolved_preview_prepared_syntax_document
+            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+            .unwrap_or(0);
+        if resolved_preview_applied > 0 {
+            self.conflict_resolved_preview_style_cache_epoch = self
+                .conflict_resolved_preview_style_cache_epoch
+                .wrapping_add(1);
+            applied = true;
+        }
+
+        if rows::drain_completed_prepared_diff_syntax_chunk_builds() > 0 {
+            applied = true;
+        }
+
+        if applied {
+            cx.notify();
+        }
+
+        let pending = rows::has_pending_prepared_diff_syntax_chunk_builds();
+        if !pending {
+            self.syntax_chunk_poll_task = None;
+        }
+        pending
     }
 
     fn refresh_conflict_resolved_output_syntax(
@@ -1279,7 +1507,7 @@ impl MainPaneView {
         let old_reparse_seed = old_document.and_then(rows::prepared_diff_syntax_reparse_seed);
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let parsed_document = smol::unblock(move || {
+                let prepare_document = move || {
                     rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                         request_key.language,
                         rows::DiffSyntaxMode::Auto,
@@ -1288,8 +1516,12 @@ impl MainPaneView {
                         old_reparse_seed,
                         syntax_edit,
                     )
-                })
-                .await;
+                };
+                let parsed_document = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(prepare_document).await
+                } else {
+                    prepare_document()
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.conflict_resolved_preview_syntax_inflight != Some(request_key) {
@@ -1342,7 +1574,7 @@ impl MainPaneView {
         let expected_source_hash = source_hash;
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let parsed = smol::unblock(move || {
+                let prepare_document = move || {
                     rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                         language,
                         rows::DiffSyntaxMode::Auto,
@@ -1351,8 +1583,12 @@ impl MainPaneView {
                         None,
                         None,
                     )
-                })
-                .await;
+                };
+                let parsed = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(prepare_document).await
+                } else {
+                    prepare_document()
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     this.conflict_three_way_syntax_inflight[side] = false;
@@ -1382,13 +1618,20 @@ impl MainPaneView {
     pub(in crate::view) fn clear_diff_text_query_overlay_cache(&mut self) {
         self.diff_text_query_segments_cache.clear();
         self.diff_text_query_cache_query = SharedString::default();
+        self.diff_text_query_cache_generation =
+            self.diff_text_query_cache_generation.wrapping_add(1);
+    }
+
+    pub(in crate::view) fn invalidate_diff_text_query_overlay_cache(&mut self, query: &str) {
+        if self.diff_text_query_cache_query.as_ref() != query {
+            self.diff_text_query_cache_query = query.to_string().into();
+            self.diff_text_query_cache_generation =
+                self.diff_text_query_cache_generation.wrapping_add(1);
+        }
     }
 
     pub(in crate::view) fn sync_diff_text_query_overlay_cache(&mut self, query: &str) {
-        if self.diff_text_query_cache_query.as_ref() != query {
-            self.diff_text_query_cache_query = query.to_string().into();
-            self.diff_text_query_segments_cache.clear();
-        }
+        self.invalidate_diff_text_query_overlay_cache(query);
     }
 
     pub(in crate::view) fn clear_diff_text_style_caches(&mut self) {
@@ -1398,6 +1641,7 @@ impl MainPaneView {
 
     pub(in crate::view) fn clear_worktree_preview_segments_cache(&mut self) {
         self.worktree_preview_segments_cache.clear();
+        self.worktree_preview_cache_write_blocked_until_rev = None;
     }
 
     pub(in crate::view) fn clear_conflict_diff_query_overlay_caches(&mut self) {
@@ -1551,7 +1795,6 @@ impl MainPaneView {
                 line_starts: &stash.line_starts,
                 marker_segments: &stash.marker_segments,
                 view_mode: stash.view_mode,
-                outline: &stash.outline,
             });
         }
 
@@ -1568,7 +1811,6 @@ impl MainPaneView {
             line_starts: &self.conflict_resolved_preview_line_starts,
             marker_segments: &self.conflict_resolver.marker_segments,
             view_mode: self.conflict_resolver.view_mode,
-            outline: &self.conflict_resolver.resolved_outline,
         })
     }
 
@@ -1598,6 +1840,7 @@ impl MainPaneView {
 
         if clear_outline {
             self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
+            self.conflict_resolver.resolved_outline_gutter_rows.clear();
         }
     }
 
@@ -1609,6 +1852,7 @@ impl MainPaneView {
     ) {
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_outline = computed.outline;
+        self.conflict_resolver.resolved_outline_gutter_rows.clear();
         record_resolved_outline_trace(path, trace_started, self, computed.output_line_count);
     }
 
@@ -1662,7 +1906,8 @@ impl MainPaneView {
         let Some(base) = self.resolved_outline_incremental_base() else {
             return false;
         };
-        let old_text = base.text.as_ref();
+        let old_text_snapshot = base.text.clone();
+        let old_text = old_text_snapshot.as_ref();
         let output_snapshot = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
@@ -1761,67 +2006,83 @@ impl MainPaneView {
 
         let old_view_mode = base.view_mode;
         let new_view_mode = self.conflict_resolver.view_mode;
-        let mut source_lookup: HashMap<&str, (conflict_resolver::ResolvedLineSource, Option<u32>)> =
-            HashMap::default();
-        match new_view_mode {
-            ConflictResolverViewMode::ThreeWay => {
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::C,
-                    &self.conflict_resolver.three_way_text.theirs,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Theirs),
-                );
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::B,
-                    &self.conflict_resolver.three_way_text.ours,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Ours),
-                );
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::A,
-                    &self.conflict_resolver.three_way_text.base,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Base),
-                );
+        let middle_meta = {
+            let mut source_lookup: HashMap<
+                &str,
+                (conflict_resolver::ResolvedLineSource, Option<u32>),
+            > = HashMap::default();
+            match new_view_mode {
+                ConflictResolverViewMode::ThreeWay => {
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::C,
+                        &self.conflict_resolver.three_way_text.theirs,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Theirs),
+                    );
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::B,
+                        &self.conflict_resolver.three_way_text.ours,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Ours),
+                    );
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::A,
+                        &self.conflict_resolver.three_way_text.base,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Base),
+                    );
+                }
+                ConflictResolverViewMode::TwoWayDiff => {
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::B,
+                        &self.conflict_resolver.three_way_text.theirs,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Theirs),
+                    );
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::A,
+                        &self.conflict_resolver.three_way_text.ours,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Ours),
+                    );
+                }
             }
-            ConflictResolverViewMode::TwoWayDiff => {
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::B,
-                    &self.conflict_resolver.three_way_text.theirs,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Theirs),
-                );
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::A,
-                    &self.conflict_resolver.three_way_text.ours,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Ours),
-                );
+
+            let mut middle_meta = Vec::with_capacity(new_affected.len());
+            for line_ix in new_affected.clone() {
+                let output_line =
+                    rows::resolved_output_line_text(output_text, new_line_starts.as_ref(), line_ix);
+                let (source, input_line) = source_lookup
+                    .get(output_line)
+                    .copied()
+                    .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
+                middle_meta.push(conflict_resolver::ResolvedLineMeta {
+                    output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
+                    source,
+                    input_line,
+                });
             }
-        }
+            middle_meta
+        };
 
-        let old_meta = base.outline.meta.to_vec();
-        let mut middle_meta = Vec::with_capacity(new_affected.len());
-        for line_ix in new_affected.clone() {
-            let output_line =
-                rows::resolved_output_line_text(output_text, new_line_starts.as_ref(), line_ix);
-            let (source, input_line) = source_lookup
-                .get(output_line)
-                .copied()
-                .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
-            middle_meta.push(conflict_resolver::ResolvedLineMeta {
-                output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
-                source,
-                input_line,
-            });
-        }
-
+        let old_outline = if used_stash {
+            self.conflict_resolved_outline_stash
+                .as_ref()
+                .map(|stash| stash.outline.clone())
+                .unwrap_or_default()
+        } else {
+            std::mem::take(&mut self.conflict_resolver.resolved_outline)
+        };
+        let old_meta = old_outline.meta;
+        let old_markers = old_outline.markers;
+        let mut next_sources_index = old_outline.sources_index;
         let line_delta = new_affected.len() as isize - old_affected.len() as isize;
+
         let mut next_meta = Vec::with_capacity(new_line_count);
         next_meta.extend(
             old_meta
@@ -1837,9 +2098,6 @@ impl MainPaneView {
                     .unwrap_or(u32::MAX);
             next_meta.push(shifted);
         }
-        if next_meta.len() != new_line_count {
-            return false;
-        }
         apply_conflict_choice_provenance_hints(
             &mut next_meta,
             &self.conflict_resolver.marker_segments,
@@ -1847,7 +2105,6 @@ impl MainPaneView {
             new_view_mode,
         );
 
-        let old_markers = base.outline.markers.to_vec();
         let mut next_markers = vec![None; new_line_count];
         for (line_ix, marker) in old_markers
             .iter()
@@ -1883,12 +2140,8 @@ impl MainPaneView {
             })
             .collect();
         for conflict_ix in recompute_conflicts {
-            let Some(block) = blocks.get(conflict_ix).copied() else {
-                return false;
-            };
-            let Some(range) = new_block_ranges.get(conflict_ix).cloned() else {
-                return false;
-            };
+            let block = blocks[conflict_ix];
+            let range = new_block_ranges[conflict_ix].clone();
             let marker_ranges = conflict_marker_ranges_for_block(block, range);
             write_conflict_markers_for_ranges(
                 &mut next_markers,
@@ -1898,7 +2151,6 @@ impl MainPaneView {
             );
         }
 
-        let mut next_sources_index = base.outline.sources_index.clone();
         update_line_sources_index_for_range(
             &mut next_sources_index,
             old_view_mode,
@@ -1943,6 +2195,7 @@ impl MainPaneView {
             markers: next_markers,
             sources_index: next_sources_index,
         };
+        self.conflict_resolver.resolved_outline_gutter_rows.clear();
         self.conflict_resolved_preview_text = output_snapshot;
         true
     }
@@ -1988,88 +2241,142 @@ impl MainPaneView {
             .wrapping_add(1);
         let seq = self.conflict_resolver.resolver_pending_recompute_seq;
 
-        cx.spawn(
-            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS)).await;
-                let request = view.update(cx, |this, cx| {
-                    if this.conflict_resolver.resolver_pending_recompute_seq != seq {
-                        return None;
-                    }
-                    if this.conflict_resolved_preview_source_hash != Some(output_hash)
-                        || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
-                    {
-                        return None;
-                    }
-                    let did_incremental = delta.clone().is_some_and(|delta| {
-                        this.recompute_conflict_resolved_outline_and_provenance_incremental(
-                            path.as_ref(),
-                            delta,
-                            cx,
-                        )
+        #[cfg(test)]
+        {
+            let did_incremental = delta.clone().is_some_and(|delta| {
+                self.recompute_conflict_resolved_outline_and_provenance_incremental(
+                    path.as_ref(),
+                    delta,
+                    cx,
+                )
+            });
+            if did_incremental {
+                cx.notify();
+                return;
+            }
+
+            let trace_started = Instant::now();
+            let output_snapshot = self
+                .conflict_resolver_input
+                .read_with(cx, |input, _| input.text_snapshot());
+            let syntax_edit = delta.clone().map(diff_syntax_edit_from_outline_delta);
+            let request = self.background_resolved_outline_recompute_request(&output_snapshot);
+            let background_delay = self
+                .conflict_resolved_outline_background_delay_override
+                .unwrap_or_default();
+            self.sync_conflict_resolved_preview_snapshot(
+                &output_snapshot,
+                path.as_ref(),
+                syntax_edit,
+                true,
+                cx,
+            );
+
+            if background_delay.is_zero()
+                && self.conflict_resolver.resolver_pending_recompute_seq == seq
+                && self.conflict_resolved_preview_source_hash == Some(output_hash)
+                && self.conflict_resolved_preview_path.as_ref() == path.as_ref()
+            {
+                let computed = compute_resolved_outline_computation(
+                    request.output_text.as_ref(),
+                    request.output_line_count,
+                    &request.marker_segments,
+                    request.sources.as_view(),
+                );
+                self.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
+            }
+
+            cx.notify();
+        }
+
+        #[cfg(not(test))]
+        {
+            cx.spawn(
+                async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                    smol::Timer::after(Duration::from_millis(
+                        CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS,
+                    ))
+                    .await;
+                    let request = view.update(cx, |this, cx| {
+                        if this.conflict_resolver.resolver_pending_recompute_seq != seq {
+                            return None;
+                        }
+                        if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                            || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
+                        {
+                            return None;
+                        }
+                        let did_incremental = delta.clone().is_some_and(|delta| {
+                            this.recompute_conflict_resolved_outline_and_provenance_incremental(
+                                path.as_ref(),
+                                delta,
+                                cx,
+                            )
+                        });
+                        if !did_incremental {
+                            let trace_started = Instant::now();
+                            let output_snapshot = this
+                                .conflict_resolver_input
+                                .read_with(cx, |input, _| input.text_snapshot());
+                            let syntax_edit =
+                                delta.clone().map(diff_syntax_edit_from_outline_delta);
+                            let request = this
+                                .background_resolved_outline_recompute_request(&output_snapshot);
+                            let background_delay = Duration::default();
+                            this.sync_conflict_resolved_preview_snapshot(
+                                &output_snapshot,
+                                path.as_ref(),
+                                syntax_edit,
+                                true,
+                                cx,
+                            );
+                            cx.notify();
+                            return Some((request, trace_started, background_delay));
+                        }
+
+                        cx.notify();
+                        None
                     });
-                    if !did_incremental {
-                        let trace_started = Instant::now();
-                        let output_snapshot = this
-                            .conflict_resolver_input
-                            .read_with(cx, |input, _| input.text_snapshot());
-                        let syntax_edit = delta.clone().map(diff_syntax_edit_from_outline_delta);
-                        let request =
-                            this.background_resolved_outline_recompute_request(&output_snapshot);
-                        #[cfg(test)]
-                        let background_delay = this
-                            .conflict_resolved_outline_background_delay_override
-                            .unwrap_or_default();
-                        #[cfg(not(test))]
-                        let background_delay = Duration::default();
-                        this.sync_conflict_resolved_preview_snapshot(
-                            &output_snapshot,
+                    let Some((request, trace_started, background_delay)) = request.ok().flatten()
+                    else {
+                        return;
+                    };
+
+                    if !background_delay.is_zero() {
+                        smol::Timer::after(background_delay).await;
+                    }
+
+                    let compute_outline = move || {
+                        compute_resolved_outline_computation(
+                            request.output_text.as_ref(),
+                            request.output_line_count,
+                            &request.marker_segments,
+                            request.sources.as_view(),
+                        )
+                    };
+                    let computed = smol::unblock(compute_outline).await;
+
+                    let _ = view.update(cx, |this, cx| {
+                        if this.conflict_resolver.resolver_pending_recompute_seq != seq {
+                            return;
+                        }
+                        if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                            || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
+                        {
+                            return;
+                        }
+
+                        this.apply_resolved_outline_computation(
                             path.as_ref(),
-                            syntax_edit,
-                            true,
-                            cx,
+                            trace_started,
+                            computed,
                         );
                         cx.notify();
-                        return Some((request, trace_started, background_delay));
-                    }
-
-                    cx.notify();
-                    None
-                });
-                let Some((request, trace_started, background_delay)) = request.ok().flatten()
-                else {
-                    return;
-                };
-
-                if !background_delay.is_zero() {
-                    Timer::after(background_delay).await;
-                }
-
-                let computed = smol::unblock(move || {
-                    compute_resolved_outline_computation(
-                        request.output_text.as_ref(),
-                        request.output_line_count,
-                        &request.marker_segments,
-                        request.sources.as_view(),
-                    )
-                })
-                .await;
-
-                let _ = view.update(cx, |this, cx| {
-                    if this.conflict_resolver.resolver_pending_recompute_seq != seq {
-                        return;
-                    }
-                    if this.conflict_resolved_preview_source_hash != Some(output_hash)
-                        || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
-                    {
-                        return;
-                    }
-
-                    this.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
-                    cx.notify();
-                });
-            },
-        )
-        .detach();
+                    });
+                },
+            )
+            .detach();
+        }
     }
 
     #[cfg(test)]
@@ -2138,6 +2445,21 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_diff_scroll_sync(
+        &mut self,
+        next: DiffScrollSync,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_scroll_sync == next {
+            return;
+        }
+
+        self.diff_scroll_sync = next;
+        self.sync_diff_split_scroll();
+        self.sync_conflict_preview_scroll();
+        cx.notify();
+    }
+
     pub(in crate::view) fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
@@ -2150,10 +2472,48 @@ impl MainPaneView {
     pub(in crate::view) fn history_visible_column_preferences(
         &self,
         cx: &gpui::App,
-    ) -> (bool, bool, bool) {
+    ) -> (bool, bool, bool, bool) {
         self.history_view
             .read(cx)
             .history_visible_column_preferences()
+    }
+
+    pub(in crate::view) fn history_tag_preferences(&self, cx: &gpui::App) -> (bool, bool) {
+        self.history_view.read(cx).history_tag_preferences()
+    }
+
+    pub(in crate::view) fn set_history_column_preferences(
+        &mut self,
+        show_graph: bool,
+        show_author: bool,
+        show_date: bool,
+        show_sha: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view.update(cx, |view, cx| {
+            view.set_history_column_preferences(show_graph, show_author, show_date, show_sha, cx);
+        });
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_history_tag_preferences(
+        &mut self,
+        show_tags: bool,
+        auto_fetch_tags_on_repo_activation: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view.update(cx, |view, cx| {
+            view.set_history_tag_preferences(show_tags, auto_fetch_tags_on_repo_activation, cx);
+        });
+        cx.notify();
+    }
+
+    pub(in crate::view) fn reset_history_column_widths(&mut self, cx: &mut gpui::Context<Self>) {
+        self.history_view.update(cx, |view, cx| {
+            view.reset_history_column_widths();
+            cx.notify();
+        });
+        cx.notify();
     }
 
     pub(in crate::view) fn open_popover_at(
@@ -2454,23 +2814,50 @@ impl MainPaneView {
         });
     }
 
-    pub(in crate::view) fn scroll_status_list_to_ix(
+    pub(in crate::view) fn active_change_tracking_view(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> ChangeTrackingView {
+        self.root_view
+            .update(cx, |root, _cx| root.change_tracking_view)
+            .unwrap_or(ChangeTrackingView::Combined)
+    }
+
+    pub(in crate::view) fn scroll_status_section_to_ix(
         &mut self,
-        area: DiffArea,
+        section: StatusSection,
         ix: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
-                    match area {
-                        DiffArea::Unstaged => pane
+                    match section {
+                        StatusSection::CombinedUnstaged | StatusSection::Unstaged => pane
                             .unstaged_scroll
                             .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center),
-                        DiffArea::Staged => pane
+                        StatusSection::Untracked => pane
+                            .untracked_scroll
+                            .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center),
+                        StatusSection::Staged => pane
                             .staged_scroll
                             .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center),
                     }
+                    cx.notify();
+                });
+        });
+    }
+
+    pub(in crate::view) fn scroll_commit_details_file_to_ix(
+        &mut self,
+        ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.details_pane
+                .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    pane.commit_files_scroll
+                        .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center);
                     cx.notify();
                 });
         });
@@ -2555,7 +2942,7 @@ impl MainPaneView {
         // History caches are now managed by HistoryView.
     }
 
-    pub(in crate::view) fn cached_path_display(&self, path: &std::path::PathBuf) -> SharedString {
+    pub(in crate::view) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
         let mut cache = self.path_display_cache.borrow_mut();
         path_display::cached_path_display(&mut cache, path)
     }
@@ -2651,6 +3038,7 @@ impl MainPaneView {
         }
         self.diff_text_segments_cache[key] = Some(VersionedCachedDiffStyledText {
             syntax_epoch,
+            query_generation: 0,
             styled: value,
         });
         if self.diff_text_query_segments_cache.len() > key {
@@ -2718,6 +3106,7 @@ impl MainPaneView {
             key,
             VersionedCachedDiffStyledText {
                 syntax_epoch: self.worktree_preview_style_cache_epoch,
+                query_generation: 0,
                 styled: value,
             },
         );
@@ -2742,6 +3131,7 @@ impl MainPaneView {
             key,
             VersionedCachedDiffStyledText {
                 syntax_epoch: self.conflict_resolved_preview_style_cache_epoch,
+                query_generation: 0,
                 styled: value,
             },
         );
@@ -2876,7 +3266,7 @@ impl MainPaneView {
                 }
             };
             let end_visible_ix = count - 1;
-            let end_text = self.diff_text_line_for_region(end_visible_ix, region);
+            let end_offset = self.diff_text_line_len_for_region(end_visible_ix, region);
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
@@ -2887,7 +3277,7 @@ impl MainPaneView {
             self.diff_text_head = Some(DiffTextPos {
                 visible_ix: end_visible_ix,
                 region,
-                offset: end_text.len(),
+                offset: end_offset,
             });
             return;
         }
@@ -2900,7 +3290,8 @@ impl MainPaneView {
                 return;
             }
             let end_visible_ix = count - 1;
-            let end_text = self.diff_text_line_for_region(end_visible_ix, DiffTextRegion::Inline);
+            let end_offset =
+                self.diff_text_line_len_for_region(end_visible_ix, DiffTextRegion::Inline);
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
@@ -2911,7 +3302,7 @@ impl MainPaneView {
             self.diff_text_head = Some(DiffTextPos {
                 visible_ix: end_visible_ix,
                 region: DiffTextRegion::Inline,
-                offset: end_text.len(),
+                offset: end_offset,
             });
             return;
         }
@@ -2932,7 +3323,7 @@ impl MainPaneView {
 
         let end_visible_ix = self.diff_visible_len() - 1;
         let end_region = start_region;
-        let end_text = self.diff_text_line_for_region(end_visible_ix, end_region);
+        let end_offset = self.diff_text_line_len_for_region(end_visible_ix, end_region);
 
         self.diff_text_selecting = false;
         self.diff_text_anchor = Some(DiffTextPos {
@@ -2943,7 +3334,7 @@ impl MainPaneView {
         self.diff_text_head = Some(DiffTextPos {
             visible_ix: end_visible_ix,
             region: end_region,
-            offset: end_text.len(),
+            offset: end_offset,
         });
     }
 
@@ -2972,7 +3363,7 @@ impl MainPaneView {
         let start_region = region;
         let end_region = region;
 
-        let end_text = self.diff_text_line_for_region(b, end_region);
+        let end_offset = self.diff_text_line_len_for_region(b, end_region);
 
         self.diff_text_selecting = false;
         self.diff_text_anchor = Some(DiffTextPos {
@@ -2983,7 +3374,7 @@ impl MainPaneView {
         self.diff_text_head = Some(DiffTextPos {
             visible_ix: b,
             region: end_region,
-            offset: end_text.len(),
+            offset: end_offset,
         });
 
         // Double-click produces two click events; suppress both.
@@ -3010,7 +3401,7 @@ impl MainPaneView {
                 region
             };
             let visible_ix = visible_ix.min(count - 1);
-            let end_text = self.diff_text_line_for_region(visible_ix, effective_region);
+            let end_offset = self.diff_text_line_len_for_region(visible_ix, effective_region);
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
                 visible_ix,
@@ -3020,7 +3411,7 @@ impl MainPaneView {
             self.diff_text_head = Some(DiffTextPos {
                 visible_ix,
                 region: effective_region,
-                offset: end_text.len(),
+                offset: end_offset,
             });
             self.diff_suppress_clicks_remaining = 2;
             return;
@@ -3034,7 +3425,7 @@ impl MainPaneView {
                 return;
             }
             let visible_ix = visible_ix.min(count - 1);
-            let end_text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+            let end_offset = self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::Inline);
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
                 visible_ix,
@@ -3044,7 +3435,7 @@ impl MainPaneView {
             self.diff_text_head = Some(DiffTextPos {
                 visible_ix,
                 region: DiffTextRegion::Inline,
-                offset: end_text.len(),
+                offset: end_offset,
             });
 
             // Double-click produces two click events; suppress both.
@@ -3150,66 +3541,64 @@ impl MainPaneView {
         None
     }
 
-    pub(in crate::view) fn sync_diff_split_vertical_scroll(&mut self) {
-        let left_handle = self.diff_scroll.0.borrow().base_handle.clone();
-        let right_handle = self.diff_split_right_scroll.0.borrow().base_handle.clone();
-        let left_offset = left_handle.offset();
-        let right_offset = right_handle.offset();
-        let max_scrolls = [
-            left_handle.max_offset().height.max(px(0.0)),
-            right_handle.max_offset().height.max(px(0.0)),
-        ];
-        let targets = compute_synced_scroll_offsets(
-            [left_offset.y, right_offset.y],
-            max_scrolls,
-            self.diff_split_last_synced_y,
-            preferred_scroll_master_index(max_scrolls),
-        );
-
-        left_handle.set_offset(point(left_offset.x, targets[0]));
-        right_handle.set_offset(point(right_offset.x, targets[1]));
-        self.diff_split_last_synced_y = targets;
+    fn diff_split_scroll_handles(&self) -> [ScrollHandle; 2] {
+        [
+            uniform_list_base_handle(&self.diff_scroll),
+            uniform_list_base_handle(&self.diff_split_right_scroll),
+        ]
     }
 
-    pub(in crate::view) fn sync_conflict_preview_vertical_scroll(&mut self) {
-        let base_handle = self
-            .conflict_resolver_diff_scroll
-            .0
-            .borrow()
-            .base_handle
-            .clone();
-        let ours_handle = self
-            .conflict_preview_ours_scroll
-            .0
-            .borrow()
-            .base_handle
-            .clone();
-        let theirs_handle = self
-            .conflict_preview_theirs_scroll
-            .0
-            .borrow()
-            .base_handle
-            .clone();
+    fn conflict_preview_scroll_handles(&self) -> [ScrollHandle; 4] {
+        [
+            uniform_list_base_handle(&self.conflict_resolver_diff_scroll),
+            uniform_list_base_handle(&self.conflict_preview_ours_scroll),
+            uniform_list_base_handle(&self.conflict_preview_theirs_scroll),
+            uniform_list_base_handle(&self.conflict_resolved_preview_scroll),
+        ]
+    }
 
-        let base_offset = base_handle.offset();
-        let ours_offset = ours_handle.offset();
-        let theirs_offset = theirs_handle.offset();
-        let max_scrolls = [
-            base_handle.max_offset().height.max(px(0.0)),
-            ours_handle.max_offset().height.max(px(0.0)),
-            theirs_handle.max_offset().height.max(px(0.0)),
-        ];
-        let targets = compute_synced_scroll_offsets(
-            [base_offset.y, ours_offset.y, theirs_offset.y],
-            max_scrolls,
-            self.conflict_preview_last_synced_y,
-            preferred_scroll_master_index(max_scrolls),
+    pub(in crate::view) fn sync_diff_split_scroll(&mut self) {
+        let handles = self.diff_split_scroll_handles();
+        maybe_sync_synced_scroll_offsets(
+            &handles,
+            &mut self.diff_split_last_synced_y,
+            SyncedScrollAxis::Vertical,
+            self.diff_scroll_sync,
         );
+        maybe_sync_synced_scroll_offsets(
+            &handles,
+            &mut self.diff_split_last_synced_x,
+            SyncedScrollAxis::Horizontal,
+            self.diff_scroll_sync,
+        );
+    }
 
-        base_handle.set_offset(point(base_offset.x, targets[0]));
-        ours_handle.set_offset(point(ours_offset.x, targets[1]));
-        theirs_handle.set_offset(point(theirs_offset.x, targets[2]));
-        self.conflict_preview_last_synced_y = targets;
+    pub(in crate::view) fn sync_conflict_preview_scroll(&mut self) {
+        let handles = self.conflict_preview_scroll_handles();
+        maybe_sync_synced_scroll_offsets(
+            &handles,
+            &mut self.conflict_preview_last_synced_y,
+            SyncedScrollAxis::Vertical,
+            self.diff_scroll_sync,
+        );
+        maybe_sync_synced_scroll_offsets(
+            &handles,
+            &mut self.conflict_preview_last_synced_x,
+            SyncedScrollAxis::Horizontal,
+            self.diff_scroll_sync,
+        );
+    }
+
+    pub(in crate::view) fn sync_conflict_resolved_output_gutter_scroll(&mut self) {
+        let handles = [
+            uniform_list_base_handle(&self.conflict_resolved_preview_gutter_scroll),
+            uniform_list_base_handle(&self.conflict_resolved_preview_scroll),
+        ];
+        sync_synced_scroll_offsets(
+            &handles,
+            &mut self.conflict_resolved_preview_gutter_last_synced_y,
+            SyncedScrollAxis::Vertical,
+        );
     }
 
     pub(in crate::view) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {
@@ -3258,5 +3647,17 @@ mod tests {
         );
 
         assert_eq!(targets, [px(-100.0), px(-100.0)]);
+    }
+
+    #[test]
+    fn synced_scroll_offsets_support_four_panes_when_output_is_scrolled() {
+        let targets = compute_synced_scroll_offsets(
+            [px(-100.0), px(-100.0), px(-100.0), px(-320.0)],
+            [px(100.0), px(100.0), px(100.0), px(500.0)],
+            [px(-100.0), px(-100.0), px(-100.0), px(-80.0)],
+            3,
+        );
+
+        assert_eq!(targets, [px(-100.0), px(-100.0), px(-100.0), px(-320.0)]);
     }
 }

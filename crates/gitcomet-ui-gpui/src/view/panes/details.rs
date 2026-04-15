@@ -40,12 +40,14 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_programmatic_change: bool,
 
     pub(in super::super) status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
-    pub(in super::super) status_multi_selection_last_status: HashMap<RepoId, Arc<RepoStatus>>,
+    pub(in super::super) status_multi_selection_last_status: HashMap<RepoId, (u64, u64)>,
 
     pub(in super::super) commit_details_delay: Option<CommitDetailsDelayState>,
     pub(in super::super) commit_details_delay_seq: u64,
 
-    path_display_cache: std::cell::RefCell<HashMap<std::path::PathBuf, SharedString>>,
+    path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
+    commit_file_rows:
+        std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -158,7 +160,8 @@ impl DetailsPaneView {
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
-            repo.status_rev.hash(&mut hasher);
+            repo.worktree_status_cache_rev().hash(&mut hasher);
+            repo.staged_status_cache_rev().hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
@@ -323,7 +326,10 @@ impl DetailsPaneView {
             status_multi_selection_last_status: HashMap::default(),
             commit_details_delay: None,
             commit_details_delay_seq: 0,
-            path_display_cache: std::cell::RefCell::new(HashMap::default()),
+            path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
+            commit_file_rows: std::cell::RefCell::new(
+                crate::view::rows::CommitFileRowPresentationCache::default(),
+            ),
         };
         pane.set_theme(theme, cx);
         pane
@@ -399,9 +405,19 @@ impl DetailsPaneView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
-    pub(in super::super) fn cached_path_display(&self, path: &std::path::PathBuf) -> SharedString {
+    pub(in super::super) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
         let mut cache = self.path_display_cache.borrow_mut();
         path_display::cached_path_display(&mut cache, path)
+    }
+
+    pub(in super::super) fn cached_commit_file_rows(
+        &self,
+        repo_id: RepoId,
+        commit_details_rev: u64,
+        files: &[gitcomet_core::domain::CommitFileChange],
+    ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
+        let mut cache = self.commit_file_rows.borrow_mut();
+        cache.rows_for(&(repo_id, commit_details_rev), files)
     }
 
     fn apply_state_snapshot(&mut self, next: Arc<AppState>, cx: &mut gpui::Context<Self>) {
@@ -444,25 +460,25 @@ impl DetailsPaneView {
                 return false;
             };
 
-            if selection.unstaged.is_empty() && selection.staged.is_empty() {
+            if selection.is_empty() {
                 last_status.remove(repo_id);
                 return false;
             }
 
-            let Loadable::Ready(status) = &repo.status else {
-                return true;
-            };
-
+            let status_key = (
+                repo.worktree_status_cache_rev(),
+                repo.staged_status_cache_rev(),
+            );
             let status_changed = match last_status.get(repo_id) {
-                Some(prev) => !Arc::ptr_eq(prev, status),
+                Some(prev) => *prev != status_key,
                 None => true,
             };
             if status_changed {
-                last_status.insert(*repo_id, Arc::clone(status));
-                reconcile_status_multi_selection(selection, status);
+                last_status.insert(*repo_id, status_key);
+                reconcile_status_multi_selection_with_repo(selection, repo);
             }
 
-            if selection.unstaged.is_empty() && selection.staged.is_empty() {
+            if selection.is_empty() {
                 last_status.remove(repo_id);
                 return false;
             }
@@ -577,7 +593,7 @@ impl DetailsPaneView {
         let selected_id = selected_id.clone();
         cx.spawn(
             async move |view: WeakEntity<DetailsPaneView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(100)).await;
+                smol::Timer::after(Duration::from_millis(100)).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.commit_details_delay_seq != seq {
                         return;
@@ -680,7 +696,7 @@ impl DetailsPaneView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             let handle = root.main_pane.read(cx).diff_panel_focus_handle.clone();
-            window.focus(&handle);
+            window.focus(&handle, cx);
         });
     }
 }
@@ -691,5 +707,72 @@ impl Render for DetailsPaneView {
             .size_full()
             .child(self.commit_details_view(cx))
             .child(StatusSectionResizeTracker { view: cx.entity() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn repo_state(id: RepoId, path: &str) -> RepoState {
+        RepoState::new_opening(
+            id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        )
+    }
+
+    #[test]
+    fn notify_fingerprint_ignores_inactive_repo_revisions() {
+        let active = repo_state(RepoId(1), "/tmp/active");
+        let inactive = repo_state(RepoId(2), "/tmp/inactive");
+        let mut state = AppState {
+            repos: vec![active, inactive],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = DetailsPaneView::notify_fingerprint(&state);
+
+        state.repos[1].worktree_status_rev = 1;
+        state.repos[1].staged_status_rev = 1;
+        state.repos[1].ops_rev = 1;
+        state.repos[1].history_state.selected_commit_rev = 1;
+        state.repos[1].history_state.commit_details_rev = 1;
+        state.repos[1].merge_message_rev = 1;
+
+        assert_eq!(DetailsPaneView::notify_fingerprint(&state), initial);
+    }
+
+    #[test]
+    fn notify_fingerprint_tracks_active_repo_relevant_revisions() {
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = DetailsPaneView::notify_fingerprint(&state);
+
+        state.repos[0].worktree_status_rev = 1;
+        let after_status = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_status, initial);
+
+        state.repos[0].ops_rev = 1;
+        let after_ops = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_ops, after_status);
+
+        state.repos[0].history_state.selected_commit_rev = 1;
+        let after_selected = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_selected, after_ops);
+
+        state.repos[0].history_state.commit_details_rev = 1;
+        let after_details = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_details, after_selected);
+
+        state.repos[0].merge_message_rev = 1;
+        assert_ne!(DetailsPaneView::notify_fingerprint(&state), after_details);
     }
 }

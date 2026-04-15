@@ -72,6 +72,12 @@ sudo apt update
 sudo apt install gitcomet
 ```
 
+If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg instead of the official `apt` package, install the GUI runtime libraries separately:
+
+```bash
+sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0
+```
+
 ### Requirements
 
 GitComet requires a local Git installation of `2.50` or newer.
@@ -220,6 +226,14 @@ Also reads `LOCAL`/`REMOTE`/`MERGED`/`BASE` from environment. Base is optional f
 #### Compatibility
 
 KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional arguments), so GitComet can be a drop-in replacement.
+
+### Themes
+
+GitComet supports built-in themes and user-provided custom themes.
+
+Themes are loaded from JSON bundle files. GitComet ships with built-in themes and copies them into your per-user themes directory, and it also loads custom theme bundles from that same location.
+
+The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](THEMES.md).
 
 ### Crash logs
 

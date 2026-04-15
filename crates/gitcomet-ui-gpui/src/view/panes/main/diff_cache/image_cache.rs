@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::diff_utils::image_format_for_path;
+use crate::view::diff_utils::{fill_svg_viewport_white, image_format_for_path};
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,6 +12,8 @@ const IMAGE_DIFF_CACHE_CLEANUP_WRITE_INTERVAL: usize = 16;
 const IMAGE_DIFF_RASTER_PREVIEW_MAX_EDGE_PX: u32 = 1920;
 const IMAGE_DIFF_SVG_PREVIEW_TARGET_WIDTH_PX: f32 = 640.0;
 const IMAGE_DIFF_SVG_PREVIEW_MAX_EDGE_PX: f32 = 1024.0;
+static IMAGE_DIFF_SVG_USVG_OPTIONS: std::sync::LazyLock<resvg::usvg::Options<'static>> =
+    std::sync::LazyLock::new(resvg::usvg::Options::default);
 static IMAGE_DIFF_CACHE_STARTUP_CLEANUP: std::sync::Once = std::sync::Once::new();
 static IMAGE_DIFF_CACHE_WRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -147,6 +149,7 @@ fn image_rs_format_for_diff_preview(format: gpui::ImageFormat) -> Option<image::
         gpui::ImageFormat::Webp => Some(image::ImageFormat::WebP),
         gpui::ImageFormat::Bmp => Some(image::ImageFormat::Bmp),
         gpui::ImageFormat::Tiff => Some(image::ImageFormat::Tiff),
+        gpui::ImageFormat::Ico => Some(image::ImageFormat::Ico),
         gpui::ImageFormat::Svg => None,
     }
 }
@@ -169,8 +172,10 @@ fn render_image_from_bgra8(buffer: image::RgbaImage) -> Arc<gpui::RenderImage> {
     Arc::new(gpui::RenderImage::new(vec![image::Frame::new(buffer)]))
 }
 
-fn render_svg_image_diff_preview(svg_bytes: &[u8]) -> Option<Arc<gpui::RenderImage>> {
-    let tree = resvg::usvg::Tree::from_data(svg_bytes, &resvg::usvg::Options::default()).ok()?;
+pub(in crate::view) fn render_svg_image_diff_preview(
+    svg_bytes: &[u8],
+) -> Option<Arc<gpui::RenderImage>> {
+    let tree = resvg::usvg::Tree::from_data(svg_bytes, &IMAGE_DIFF_SVG_USVG_OPTIONS).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();
     let svg_height = svg_size.height();
@@ -195,6 +200,7 @@ fn render_svg_image_diff_preview(svg_bytes: &[u8]) -> Option<Arc<gpui::RenderIma
     let raster_width = raster_width.max(1.0) as u32;
     let raster_height = raster_height.max(1.0) as u32;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(raster_width, raster_height)?;
+    fill_svg_viewport_white(&mut pixmap);
     let transform = resvg::tiny_skia::Transform::from_scale(
         raster_width as f32 / svg_width,
         raster_height as f32 / svg_height,
@@ -362,7 +368,7 @@ fn build_file_image_diff_cache_rebuild(
         .and_then(|s| s.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"));
     let file_path = Some(if file.path.is_absolute() {
-        file.path.clone()
+        file.path.to_path_buf()
     } else {
         workdir.join(&file.path)
     });
@@ -474,6 +480,25 @@ impl MainPaneView {
         let seq = self.file_image_diff_cache_seq;
         self.file_image_diff_cache_inflight = Some(seq);
 
+        if !crate::ui_runtime::current().uses_background_compute() {
+            let rebuild = build_file_image_diff_cache_rebuild(file.as_ref(), &workdir);
+            if self.file_image_diff_cache_inflight == Some(seq)
+                && self.file_image_diff_cache_repo_id == Some(repo_id)
+                && self.file_image_diff_cache_rev == diff_file_rev
+                && self.file_image_diff_cache_target == diff_target_for_task
+            {
+                self.file_image_diff_cache_inflight = None;
+                self.file_image_diff_cache_content_signature = Some(content_signature);
+                self.file_image_diff_cache_path = rebuild.file_path;
+                self.file_image_diff_cache_old = rebuild.old;
+                self.file_image_diff_cache_new = rebuild.new;
+                self.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
+                self.file_image_diff_cache_new_svg_path = rebuild.new_svg_path;
+                cx.notify();
+            }
+            return;
+        }
+
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let rebuild = smol::unblock(move || {
@@ -519,6 +544,30 @@ mod tests {
 </svg>"##
         )
         .into_bytes()
+    }
+
+    fn inset_rect_svg(width: u32, height: u32, inset_x: u32, inset_y: u32) -> Vec<u8> {
+        let inner_width = width.saturating_sub(inset_x.saturating_mul(2));
+        let inner_height = height.saturating_sub(inset_y.saturating_mul(2));
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<rect x="{inset_x}" y="{inset_y}" width="{inner_width}" height="{inner_height}" fill="#00aaff"/>
+</svg>"##
+        )
+        .into_bytes()
+    }
+
+    fn render_pixel_bgra(render: &gpui::RenderImage, x: usize, y: usize) -> [u8; 4] {
+        let size = render.size(0);
+        let width = size.width.0 as usize;
+        let offset = (y.saturating_mul(width).saturating_add(x)).saturating_mul(4);
+        let bytes = render.as_bytes(0).expect("render bytes");
+        [
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]
     }
 
     fn write_test_file(dir: &Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
@@ -600,6 +649,23 @@ mod tests {
             (IMAGE_DIFF_SVG_PREVIEW_MAX_EDGE_PX / 2.0) as i32
         );
         assert!(preview.cached_path.is_none());
+    }
+
+    #[test]
+    fn render_svg_image_diff_preview_fills_transparent_viewport_white() {
+        let svg = inset_rect_svg(4, 4, 1, 1);
+        let render = render_svg_image_diff_preview(&svg).expect("svg render image");
+        let size = render.size(0);
+
+        assert_eq!(render_pixel_bgra(&render, 0, 0), [255, 255, 255, 255]);
+        assert_eq!(
+            render_pixel_bgra(
+                &render,
+                (size.width.0 as usize) / 2,
+                (size.height.0 as usize) / 2,
+            ),
+            [255, 170, 0, 255]
+        );
     }
 
     #[test]

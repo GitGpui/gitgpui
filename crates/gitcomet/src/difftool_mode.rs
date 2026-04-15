@@ -1,10 +1,9 @@
 use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
 use gitcomet_core::platform::host_tempdir;
-use gitcomet_core::process::configure_background_command;
+use gitcomet_core::process::git_command;
 use rustc_hash::FxHashSet as HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tempfile::TempDir;
 
 /// Format a `"Failed to {op} {path}: {err}"` message concisely.
@@ -45,8 +44,7 @@ pub struct DifftoolRunResult {
 pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String> {
     let prepared_inputs = prepare_diff_inputs(config)?;
 
-    let mut cmd = Command::new("git");
-    configure_background_command(&mut cmd);
+    let mut cmd = git_command();
     cmd.arg("diff").arg("--no-index").arg("--no-ext-diff");
     // When launched from `git difftool`, Git sets `GIT_EXTERNAL_DIFF` to its
     // helper. Remove it so this nested `git diff --no-index` cannot recurse.
@@ -924,9 +922,13 @@ mod tests {
         use std::os::unix::fs as unix_fs;
 
         let tmp = tempfile::tempdir().unwrap();
+        let outside_tmp = tempfile::Builder::new()
+            .prefix("gitcomet-difftool-outside-")
+            .tempdir()
+            .expect("create outside temp dir");
         let left = tmp.path().join("left");
         let right = tmp.path().join("right");
-        let outside = tmp.path().join("outside");
+        let outside = outside_tmp.path().join("outside");
         std::fs::create_dir_all(&left).unwrap();
         std::fs::create_dir_all(&right).unwrap();
         std::fs::create_dir_all(&outside).unwrap();

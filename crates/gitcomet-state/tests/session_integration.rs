@@ -294,15 +294,21 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             theme_mode: Some("light".to_string()),
             ui_font_family: Some(".SystemUIFont".to_string()),
             editor_font_family: Some("JetBrains Mono".to_string()),
+            use_font_ligatures: Some(false),
             date_time_format: Some("ymd_hm_utc".to_string()),
             timezone: Some("UTC".to_string()),
             show_timezone: Some(true),
             change_tracking_view: Some("split_untracked".to_string()),
+            diff_scroll_sync: Some("both".to_string()),
             change_tracking_height: Some(222),
             untracked_height: Some(111),
+            history_show_graph: Some(true),
             history_show_author: Some(false),
             history_show_date: Some(true),
             history_show_sha: Some(false),
+            history_show_tags: Some(false),
+            history_tag_fetch_mode: Some(gitcomet_state::model::GitLogTagFetchMode::Disabled),
+            git_executable_path: None,
         },
         &session_file,
     )
@@ -316,6 +322,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     assert_eq!(loaded.theme_mode.as_deref(), Some("light"));
     assert_eq!(loaded.ui_font_family.as_deref(), Some(".SystemUIFont"));
     assert_eq!(loaded.editor_font_family.as_deref(), Some("JetBrains Mono"));
+    assert_eq!(loaded.use_font_ligatures, Some(false));
     assert_eq!(loaded.date_time_format.as_deref(), Some("ymd_hm_utc"));
     assert_eq!(loaded.timezone.as_deref(), Some("UTC"));
     assert_eq!(loaded.show_timezone, Some(true));
@@ -323,11 +330,18 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
         loaded.change_tracking_view.as_deref(),
         Some("split_untracked")
     );
+    assert_eq!(loaded.diff_scroll_sync.as_deref(), Some("both"));
     assert_eq!(loaded.change_tracking_height, Some(222));
     assert_eq!(loaded.untracked_height, Some(111));
+    assert_eq!(loaded.history_show_graph, Some(true));
     assert_eq!(loaded.history_show_author, Some(false));
     assert_eq!(loaded.history_show_date, Some(true));
     assert_eq!(loaded.history_show_sha, Some(false));
+    assert_eq!(loaded.history_show_tags, Some(false));
+    assert_eq!(
+        loaded.history_tag_fetch_mode,
+        Some(gitcomet_state::model::GitLogTagFetchMode::Disabled)
+    );
 
     session::persist_ui_settings_to_path(
         UiSettings {

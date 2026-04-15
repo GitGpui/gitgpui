@@ -169,6 +169,7 @@ pub(in crate::view) struct ResolvedOutputSyntaxBackgroundKey {
 #[derive(Clone, Debug)]
 pub(in crate::view) struct VersionedCachedDiffStyledText {
     pub(in crate::view) syntax_epoch: u64,
+    pub(in crate::view) query_generation: u64,
     pub(in crate::view) styled: CachedDiffStyledText,
 }
 
@@ -228,6 +229,16 @@ pub(in crate::view) fn versioned_cached_diff_styled_text_is_current(
     (entry.syntax_epoch == syntax_epoch).then_some(&entry.styled)
 }
 
+pub(in crate::view) fn versioned_query_cached_diff_styled_text_is_current(
+    entry: Option<&VersionedCachedDiffStyledText>,
+    syntax_epoch: u64,
+    query_generation: u64,
+) -> Option<&CachedDiffStyledText> {
+    let entry = entry?;
+    (entry.syntax_epoch == syntax_epoch && entry.query_generation == query_generation)
+        .then_some(&entry.styled)
+}
+
 pub(super) fn split_text_lines_owned(text: &str) -> Vec<String> {
     if text.is_empty() {
         Vec::new()
@@ -269,6 +280,7 @@ pub(super) fn hash_text_bytes(text: &str) -> u64 {
     hasher.finish()
 }
 
+#[cfg(test)]
 pub(super) fn preview_source_text_from_lines(lines: &[String], source_len: usize) -> SharedString {
     let mut source = lines.join("\n");
     if source.len() < source_len {
@@ -286,9 +298,78 @@ pub(in crate::view) fn preview_source_text_and_line_starts_from_lines(
     lines: &[String],
     source_len: usize,
 ) -> (SharedString, Arc<[usize]>) {
-    let text = preview_source_text_from_lines(lines, source_len);
-    let line_starts = Arc::from(build_line_starts(text.as_ref()));
-    (text, line_starts)
+    if lines.is_empty() {
+        debug_assert_eq!(
+            source_len, 0,
+            "empty preview lines should only produce empty source text",
+        );
+        return (SharedString::default(), Arc::default());
+    }
+
+    let mut text = String::with_capacity(source_len);
+    let mut line_starts = Vec::with_capacity(lines.len().saturating_add(1));
+    line_starts.push(0);
+    for (ix, line) in lines.iter().enumerate() {
+        text.push_str(line);
+        let has_more_lines = ix + 1 < lines.len();
+        let needs_trailing_newline = !has_more_lines && text.len() < source_len;
+        if has_more_lines || needs_trailing_newline {
+            text.push('\n');
+            line_starts.push(text.len());
+        }
+    }
+    debug_assert_eq!(
+        text.len(),
+        source_len,
+        "preview lines/source length should only differ by an optional trailing newline",
+    );
+    (text.into(), Arc::from(line_starts))
+}
+
+const PREVIEW_LINE_FLAG_ASCII_ONLY: u8 = 0b01;
+const PREVIEW_LINE_FLAG_HAS_TABS: u8 = 0b10;
+
+#[inline]
+pub(in crate::view) fn preview_line_flags_for_text(text: &str) -> u8 {
+    preview_line_flags_from_bools(text.is_ascii(), text.contains('\t'))
+}
+
+#[inline]
+pub(in crate::view) fn preview_line_flags_from_bools(ascii_only: bool, has_tabs: bool) -> u8 {
+    let mut flags = 0u8;
+    if ascii_only {
+        flags |= PREVIEW_LINE_FLAG_ASCII_ONLY;
+    }
+    if has_tabs {
+        flags |= PREVIEW_LINE_FLAG_HAS_TABS;
+    }
+    flags
+}
+
+#[inline]
+pub(in crate::view) fn preview_line_is_ascii_without_loading(flags: u8) -> bool {
+    (flags & PREVIEW_LINE_FLAG_ASCII_ONLY) != 0
+}
+
+#[inline]
+pub(in crate::view) fn preview_line_has_tabs_without_loading(flags: u8) -> bool {
+    (flags & PREVIEW_LINE_FLAG_HAS_TABS) != 0
+}
+
+pub(in crate::view) fn preview_line_flags_from_source(
+    text: &str,
+    line_starts: &[usize],
+) -> Arc<[u8]> {
+    let line_count = indexed_line_count_from_len(text.len(), line_starts);
+    let mut flags = Vec::with_capacity(line_count);
+    for line_ix in 0..line_count {
+        let range = indexed_line_byte_range(line_starts, text.len(), line_ix)
+            .unwrap_or(text.len()..text.len());
+        flags.push(preview_line_flags_for_text(
+            text.get(range).unwrap_or_default(),
+        ));
+    }
+    Arc::from(flags)
 }
 
 pub(super) fn line_start_offset_for_index(
@@ -311,12 +392,44 @@ pub(super) fn source_line_count(text: &str) -> usize {
 ///
 /// Uses `split('\n')` row semantics for non-empty text, so a trailing newline
 /// preserves a final empty row.
-pub(super) fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
-    if text.is_empty() {
+pub(in crate::view) fn indexed_line_count_from_len(
+    source_len: usize,
+    line_starts: &[usize],
+) -> usize {
+    if source_len == 0 {
         0
     } else {
         line_starts.len().max(1)
     }
+}
+
+pub(super) fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
+    indexed_line_count_from_len(text.len(), line_starts)
+}
+
+pub(in crate::view) fn indexed_line_byte_range(
+    line_starts: &[usize],
+    source_len: usize,
+    line_ix: usize,
+) -> Option<Range<usize>> {
+    let line_count = indexed_line_count_from_len(source_len, line_starts);
+    if line_ix >= line_count {
+        return None;
+    }
+
+    let start = line_starts
+        .get(line_ix)
+        .copied()
+        .unwrap_or(source_len)
+        .min(source_len);
+    let end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .map(|next| next.saturating_sub(1))
+        .unwrap_or(source_len)
+        .min(source_len)
+        .max(start);
+    Some(start..end)
 }
 
 /// Number of logical rows produced by `split('\n')` (always at least 1).
@@ -908,7 +1021,7 @@ pub(super) fn resolved_output_markers_for_text(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
-    let output_line_count = conflict_resolver::split_output_lines_for_outline(output_text).len();
+    let output_line_count = conflict_resolver::resolved_output_outline_line_count(output_text);
     build_resolved_output_conflict_markers(marker_segments, output_text, output_line_count)
 }
 
@@ -2054,8 +2167,10 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
+    pub(in crate::view) diff_scroll_sync: DiffScrollSync,
     pub(in crate::view) diff_split_ratio: f32,
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
+    pub(in crate::view) diff_split_last_synced_x: [Pixels; 2],
     pub(in crate::view) diff_split_last_synced_y: [Pixels; 2],
     pub(in crate::view) diff_horizontal_min_width: Pixels,
     pub(in crate::view) diff_cache_repo_id: Option<RepoId>,
@@ -2067,6 +2182,7 @@ pub(in crate::view) struct MainPaneView {
         Option<Arc<super::diff_cache::PagedPatchSplitRows>>,
     pub(in crate::view) diff_file_for_src_ix: Vec<Option<Arc<str>>>,
     pub(in crate::view) diff_language_for_src_ix: Vec<Option<rows::DiffSyntaxLanguage>>,
+    pub(in crate::view) diff_yaml_block_scalar_for_src_ix: Vec<bool>,
     pub(in crate::view) diff_click_kinds: Vec<DiffClickKind>,
     pub(in crate::view) diff_line_kind_for_src_ix: Vec<gitcomet_core::domain::DiffLineKind>,
     pub(in crate::view) diff_hide_unified_header_for_src_ix: Vec<bool>,
@@ -2088,6 +2204,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_text_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_cache_query: SharedString,
+    pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
     pub(in crate::view) diff_text_selecting: bool,
@@ -2104,6 +2221,8 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_search_active: bool,
     pub(in crate::view) diff_search_query: SharedString,
     pub(in crate::view) diff_search_matches: Vec<usize>,
+    pub(in crate::view) diff_search_inline_patch_trigram_index:
+        Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) diff_search_match_ix: Option<usize>,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(super) _diff_search_subscription: gpui::Subscription,
@@ -2160,9 +2279,14 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_image_diff_cache_new_svg_path: Option<std::path::PathBuf>,
 
     pub(in crate::view) worktree_preview_path: Option<std::path::PathBuf>,
+    pub(in crate::view) worktree_preview_source_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview: Loadable<usize>,
+    pub(in crate::view) worktree_preview_source_len: usize,
     pub(in crate::view) worktree_preview_text: SharedString,
     pub(in crate::view) worktree_preview_line_starts: Arc<[usize]>,
+    pub(in crate::view) worktree_preview_line_flags: Arc<[u8]>,
+    pub(in crate::view) worktree_preview_search_trigram_index:
+        Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) worktree_preview_content_rev: u64,
     pub(in crate::view) worktree_markdown_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_markdown_preview_source_rev: u64,
@@ -2172,6 +2296,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) worktree_preview_style_cache_epoch: u64,
+    pub(in crate::view) worktree_preview_cache_write_blocked_until_rev: Option<u64>,
     pub(in crate::view) worktree_preview_segments_cache:
         HashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,
@@ -2189,9 +2314,9 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_diff_split_col_widths: [Pixels; 2],
     pub(in crate::view) conflict_canvas_rows_enabled: bool,
     pub(in crate::view) conflict_diff_segments_cache_split:
-        HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        crate::view::conflict_resolver::ConflictSplitStyledTextCache,
     pub(in crate::view) conflict_diff_query_segments_cache_split:
-        HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        crate::view::conflict_resolver::ConflictSplitStyledTextCache,
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
     pub(in crate::view) conflict_three_way_segments_cache:
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
@@ -2229,11 +2354,14 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_resolver_diff_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_ours_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_theirs_scroll: UniformListScrollHandle,
-    pub(in crate::view) conflict_preview_last_synced_y: [Pixels; 3],
+    pub(in crate::view) conflict_preview_last_synced_x: [Pixels; 4],
+    pub(in crate::view) conflict_preview_last_synced_y: [Pixels; 4],
     pub(in crate::view) conflict_resolved_preview_scroll: UniformListScrollHandle,
+    pub(in crate::view) conflict_resolved_preview_gutter_scroll: UniformListScrollHandle,
+    pub(in crate::view) conflict_resolved_preview_gutter_last_synced_y: [Pixels; 2],
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,
 
-    pub(super) path_display_cache: std::cell::RefCell<HashMap<std::path::PathBuf, SharedString>>,
+    pub(super) path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,7 +1,7 @@
 use crate::model::{
     AppNotification, AppNotificationKind, AppState, AuthPromptKind, CommandLogEntry,
-    ConflictFileLoadMode, DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight,
-    RepoState,
+    ConflictFileLoadMode, DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId,
+    RepoLoadsInFlight, RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 #[cfg(test)]
@@ -11,59 +11,260 @@ use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
+use smallvec::{Array, SmallVec};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
+const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
+const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
+const PRIMARY_REFRESH_MAX_EFFECTS: usize = 6;
+const FULL_REFRESH_MAX_EFFECTS: usize = 11;
 
-fn is_supported_image_path(path: &Path) -> bool {
+pub(super) trait EffectAccumulator {
+    fn push_effect(&mut self, effect: Effect);
+}
+
+impl EffectAccumulator for Vec<Effect> {
+    fn push_effect(&mut self, effect: Effect) {
+        self.push(effect);
+    }
+}
+
+impl<A> EffectAccumulator for SmallVec<A>
+where
+    A: Array<Item = Effect>,
+{
+    fn push_effect(&mut self, effect: Effect) {
+        self.push(effect);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct DiffTargetPreviewFlags {
+    pub wants_image: bool,
+    pub is_svg: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct SelectedDiffLoadPlan {
+    pub load_patch_diff: bool,
+    pub load_file_text: bool,
+    pub preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
+    pub load_file_image: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SelectedConflictTarget<'a> {
+    Current,
+    Path(&'a Path),
+}
+
+fn path_preview_flags(path: &Path) -> DiffTargetPreviewFlags {
     let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-        return false;
+        return DiffTargetPreviewFlags::default();
     };
-    ext.eq_ignore_ascii_case("png")
-        || ext.eq_ignore_ascii_case("jpg")
-        || ext.eq_ignore_ascii_case("jpeg")
-        || ext.eq_ignore_ascii_case("gif")
-        || ext.eq_ignore_ascii_case("webp")
-        || ext.eq_ignore_ascii_case("bmp")
-        || ext.eq_ignore_ascii_case("ico")
-        || ext.eq_ignore_ascii_case("svg")
-        || ext.eq_ignore_ascii_case("tif")
-        || ext.eq_ignore_ascii_case("tiff")
+
+    match ext.as_bytes() {
+        [a, b, c] => match (
+            a.to_ascii_lowercase(),
+            b.to_ascii_lowercase(),
+            c.to_ascii_lowercase(),
+        ) {
+            (b's', b'v', b'g') => DiffTargetPreviewFlags {
+                wants_image: true,
+                is_svg: true,
+            },
+            (b'p', b'n', b'g')
+            | (b'j', b'p', b'g')
+            | (b'g', b'i', b'f')
+            | (b'b', b'm', b'p')
+            | (b'i', b'c', b'o')
+            | (b't', b'i', b'f') => DiffTargetPreviewFlags {
+                wants_image: true,
+                is_svg: false,
+            },
+            _ => DiffTargetPreviewFlags::default(),
+        },
+        [a, b, c, d] => match (
+            a.to_ascii_lowercase(),
+            b.to_ascii_lowercase(),
+            c.to_ascii_lowercase(),
+            d.to_ascii_lowercase(),
+        ) {
+            (b'j', b'p', b'e', b'g') | (b'w', b'e', b'b', b'p') => DiffTargetPreviewFlags {
+                wants_image: true,
+                is_svg: false,
+            },
+            (b't', b'i', b'f', b'f') => DiffTargetPreviewFlags {
+                wants_image: true,
+                is_svg: false,
+            },
+            _ => DiffTargetPreviewFlags::default(),
+        },
+        _ => DiffTargetPreviewFlags::default(),
+    }
 }
 
-fn is_svg_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
+pub(super) fn diff_target_preview_flags(target: &DiffTarget) -> DiffTargetPreviewFlags {
+    match target {
+        DiffTarget::WorkingTree { path, .. } => path_preview_flags(path),
+        DiffTarget::Commit {
+            path: Some(path), ..
+        } => path_preview_flags(path),
+        _ => DiffTargetPreviewFlags::default(),
+    }
 }
 
+#[cfg(test)]
 pub(super) fn diff_target_wants_image_preview(target: &DiffTarget) -> bool {
-    match target {
-        DiffTarget::WorkingTree { path, .. } => is_supported_image_path(path),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        } => is_supported_image_path(path),
-        _ => false,
-    }
+    diff_target_preview_flags(target).wants_image
 }
 
+#[cfg(test)]
 pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
+    diff_target_preview_flags(target).is_svg
+}
+
+fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> bool {
     match target {
-        DiffTarget::WorkingTree { path, .. } => is_svg_path(path),
+        DiffTarget::WorkingTree { path, area } => {
+            let Some(entries) = repo_state.status_entries_for_area(*area) else {
+                return false;
+            };
+
+            entries.iter().any(|entry| {
+                entry.path == *path
+                    && matches!(
+                        entry.kind,
+                        FileStatusKind::Untracked | FileStatusKind::Added | FileStatusKind::Deleted
+                    )
+            })
+        }
         DiffTarget::Commit {
-            path: Some(path), ..
-        } => is_svg_path(path),
-        _ => false,
+            commit_id,
+            path: Some(path),
+        } => {
+            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
+                return false;
+            };
+            if &details.id != commit_id {
+                return false;
+            }
+
+            details.files.iter().any(|file| {
+                file.path == *path
+                    && matches!(file.kind, FileStatusKind::Added | FileStatusKind::Deleted)
+            })
+        }
+        DiffTarget::Commit { path: None, .. } => false,
     }
 }
 
-pub(super) fn selected_conflict_target_path(
+fn diff_target_preview_text_side(
     repo_state: &RepoState,
     target: &DiffTarget,
-) -> Option<PathBuf> {
+) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
+    match target {
+        DiffTarget::WorkingTree { path, area } => {
+            let entries = repo_state.status_entries_for_area(*area)?;
+
+            entries.iter().find_map(|entry| {
+                (entry.path == *path).then_some(match entry.kind {
+                    FileStatusKind::Untracked | FileStatusKind::Added => {
+                        Some(gitcomet_core::domain::DiffPreviewTextSide::New)
+                    }
+                    FileStatusKind::Deleted => {
+                        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
+                    }
+                    FileStatusKind::Modified
+                    | FileStatusKind::Renamed
+                    | FileStatusKind::Conflicted => None,
+                })?
+            })
+        }
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => {
+            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
+                return None;
+            };
+            if &details.id != commit_id {
+                return None;
+            }
+
+            details.files.iter().find_map(|file| {
+                (file.path == *path).then_some(match file.kind {
+                    FileStatusKind::Added => Some(gitcomet_core::domain::DiffPreviewTextSide::New),
+                    FileStatusKind::Deleted => {
+                        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
+                    }
+                    FileStatusKind::Modified
+                    | FileStatusKind::Renamed
+                    | FileStatusKind::Conflicted
+                    | FileStatusKind::Untracked => None,
+                })?
+            })
+        }
+        DiffTarget::Commit { path: None, .. } => None,
+    }
+}
+
+pub(super) fn selected_diff_load_plan(
+    repo_state: &RepoState,
+    target: &DiffTarget,
+) -> SelectedDiffLoadPlan {
+    let supports_file = matches!(
+        target,
+        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+    );
+    let preview = diff_target_preview_flags(target);
+    let preview_only = diff_target_is_preview_only(repo_state, target);
+    let preview_text_side = (supports_file && (!preview.wants_image || preview.is_svg))
+        .then(|| diff_target_preview_text_side(repo_state, target))
+        .flatten();
+
+    SelectedDiffLoadPlan {
+        load_patch_diff: !preview_only,
+        load_file_text: supports_file && !preview_only && (!preview.wants_image || preview.is_svg),
+        preview_text_side,
+        load_file_image: supports_file && preview.wants_image,
+    }
+}
+
+pub(super) fn apply_selected_diff_load_plan_state(
+    repo_state: &mut RepoState,
+    load_plan: SelectedDiffLoadPlan,
+) {
+    repo_state.diff_state.diff = if load_plan.load_patch_diff {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    repo_state.diff_state.diff_file = if load_plan.load_file_text {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    repo_state.diff_state.diff_preview_text_file = if load_plan.preview_text_side.is_some() {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    repo_state.diff_state.diff_file_image = if load_plan.load_file_image {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+}
+
+pub(super) fn selected_conflict_target<'a>(
+    repo_state: &RepoState,
+    target: &'a DiffTarget,
+) -> Option<SelectedConflictTarget<'a>> {
     let DiffTarget::WorkingTree { path, area } = target else {
         return None;
     };
@@ -72,131 +273,294 @@ pub(super) fn selected_conflict_target_path(
     }
 
     if repo_state.conflict_state.conflict_file_path.as_deref() == Some(path.as_path()) {
-        return Some(path.clone());
+        return Some(SelectedConflictTarget::Current);
     }
 
-    let Loadable::Ready(status) = &repo_state.status else {
+    // Fast path: skip the full scan when status has no unstaged conflicts.
+    if !repo_state.has_unstaged_conflicts {
         return None;
-    };
-    status
-        .unstaged
+    }
+
+    repo_state
+        .worktree_status_entries()?
         .iter()
         .find(|entry| entry.path == *path && entry.kind == FileStatusKind::Conflicted)
-        .map(|_| path.clone())
+        .map(|_| SelectedConflictTarget::Path(path.as_path()))
 }
 
 pub(super) fn current_conflict_load_mode(repo_state: &RepoState) -> ConflictFileLoadMode {
     repo_state.conflict_state.conflict_file_load_mode
 }
 
-pub(super) fn start_conflict_target_reload(
+pub(super) fn start_current_conflict_target_reload(repo_state: &mut RepoState) -> Vec<Effect> {
+    let mode = current_conflict_load_mode(repo_state);
+    let mut effects = Vec::with_capacity(CONFLICT_RELOAD_EFFECT_COUNT);
+    append_start_current_conflict_target_reload_with_mode(&mut effects, repo_state, mode);
+    effects
+}
+
+pub(super) fn append_start_current_conflict_target_reload(
+    effects: &mut impl EffectAccumulator,
     repo_state: &mut RepoState,
-    path: PathBuf,
-) -> Vec<Effect> {
+) {
+    let mode = current_conflict_load_mode(repo_state);
+    append_start_current_conflict_target_reload_with_mode(effects, repo_state, mode);
+}
+
+pub(super) fn start_conflict_target_reload(repo_state: &mut RepoState, path: &Path) -> Vec<Effect> {
     let mode = current_conflict_load_mode(repo_state);
     start_conflict_target_reload_with_mode(repo_state, path, mode)
 }
 
-pub(super) fn start_conflict_target_reload_with_mode(
+pub(super) fn append_start_conflict_target_reload(
+    effects: &mut impl EffectAccumulator,
     repo_state: &mut RepoState,
-    path: PathBuf,
-    mode: ConflictFileLoadMode,
-) -> Vec<Effect> {
-    repo_state.set_conflict_file_path(Some(path.clone()));
-    repo_state.set_conflict_file_load_mode(mode);
-    repo_state.set_conflict_file(Loadable::Loading);
-    repo_state.set_conflict_session(None);
-    repo_state.set_conflict_hide_resolved(false);
-    vec![Effect::LoadConflictFile {
-        repo_id: repo_state.id,
-        path,
-        mode,
-    }]
+    path: &Path,
+) {
+    let mode = current_conflict_load_mode(repo_state);
+    append_start_conflict_target_reload_with_mode(effects, repo_state, path, mode);
 }
 
-pub(super) fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Effect> {
-    let supports_file = matches!(
-        &target,
-        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-    );
-    let wants_image = diff_target_wants_image_preview(&target);
-    let is_svg = diff_target_is_svg(&target);
-
-    let mut effects = vec![Effect::LoadDiff {
-        repo_id,
-        target: target.clone(),
-    }];
-    if supports_file {
-        if wants_image {
-            effects.push(Effect::LoadDiffFileImage {
-                repo_id,
-                target: target.clone(),
-            });
-        }
-        if !wants_image || is_svg {
-            effects.push(Effect::LoadDiffFile { repo_id, target });
-        }
-    }
-
+pub(super) fn start_conflict_target_reload_with_mode(
+    repo_state: &mut RepoState,
+    path: &Path,
+    mode: ConflictFileLoadMode,
+) -> Vec<Effect> {
+    let mut effects = Vec::with_capacity(CONFLICT_RELOAD_EFFECT_COUNT);
+    append_start_conflict_target_reload_with_mode(&mut effects, repo_state, path, mode);
     effects
 }
 
-pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect> {
+fn reset_conflict_target_reload_state(repo_state: &mut RepoState, mode: ConflictFileLoadMode) {
+    repo_state.set_conflict_file_load_mode(mode);
+    repo_state.set_conflict_file(Loadable::Loading);
+    if repo_state.conflict_state.conflict_session.is_some() {
+        repo_state.set_conflict_session(None);
+    }
+    repo_state.set_conflict_hide_resolved(false);
+}
+
+fn append_start_current_conflict_target_reload_with_mode(
+    effects: &mut impl EffectAccumulator,
+    repo_state: &mut RepoState,
+    mode: ConflictFileLoadMode,
+) {
+    debug_assert!(repo_state.conflict_state.conflict_file_path.is_some());
+    reset_conflict_target_reload_state(repo_state, mode);
+    effects.push_effect(Effect::LoadSelectedConflictFile {
+        repo_id: repo_state.id,
+        mode,
+    });
+}
+
+fn append_start_conflict_target_reload_with_mode(
+    effects: &mut impl EffectAccumulator,
+    repo_state: &mut RepoState,
+    path: &Path,
+    mode: ConflictFileLoadMode,
+) {
+    if repo_state.conflict_state.conflict_file_path.as_deref() == Some(path) {
+        append_start_current_conflict_target_reload_with_mode(effects, repo_state, mode);
+        return;
+    }
+
+    repo_state.set_conflict_file_path(Some(path.to_path_buf()));
+    reset_conflict_target_reload_state(repo_state, mode);
+    effects.push_effect(Effect::LoadSelectedConflictFile {
+        repo_id: repo_state.id,
+        mode,
+    });
+}
+
+pub(super) fn diff_reload_effect_count(repo_state: &RepoState, target: &DiffTarget) -> usize {
+    let plan = selected_diff_load_plan(repo_state, target);
+
+    let mut count = usize::from(plan.load_patch_diff);
+    if plan.load_file_image {
+        count += 1;
+    }
+    if plan.load_file_text {
+        count += 1;
+    }
+    if plan.preview_text_side.is_some() {
+        count += 1;
+    }
+
+    debug_assert!(count <= DIFF_RELOAD_MAX_EFFECTS);
+    count
+}
+
+pub(super) fn diff_reload_effects(
+    repo_state: &RepoState,
+    repo_id: RepoId,
+    target: DiffTarget,
+) -> Vec<Effect> {
+    let mut effects = Vec::with_capacity(diff_reload_effect_count(repo_state, &target));
+    append_diff_reload_effects(&mut effects, repo_state, repo_id, target);
+    effects
+}
+
+pub(super) fn append_diff_reload_effects(
+    effects: &mut impl EffectAccumulator,
+    repo_state: &RepoState,
+    repo_id: RepoId,
+    target: DiffTarget,
+) {
+    let plan = selected_diff_load_plan(repo_state, &target);
+
+    if plan.load_patch_diff {
+        effects.push_effect(Effect::LoadDiff {
+            repo_id,
+            target: target.clone(),
+        });
+    }
+    if plan.load_file_image {
+        effects.push_effect(Effect::LoadDiffFileImage {
+            repo_id,
+            target: target.clone(),
+        });
+    }
+    if let Some(side) = plan.preview_text_side {
+        effects.push_effect(Effect::LoadDiffPreviewTextFile {
+            repo_id,
+            target: target.clone(),
+            side,
+        });
+    }
+    if plan.load_file_text {
+        effects.push_effect(Effect::LoadDiffFile { repo_id, target });
+    }
+}
+
+pub(super) fn refresh_primary_effect_capacity() -> usize {
+    PRIMARY_REFRESH_MAX_EFFECTS
+}
+
+fn should_auto_fetch_history_tags(git_log_settings: GitLogSettings) -> bool {
+    git_log_settings.show_history_tags && git_log_settings.auto_fetch_tags_on_repo_activation()
+}
+
+pub(super) fn append_requested_status_refresh_effects(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
     let repo_id = repo_state.id;
-    let mut effects = Vec::new();
+    let load_worktree = repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+    let load_staged = repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STAGED_STATUS);
+
+    match (load_worktree, load_staged) {
+        (true, true) => effects.push_effect(Effect::LoadStatus { repo_id }),
+        (true, false) => effects.push_effect(Effect::LoadWorktreeStatus { repo_id }),
+        (false, true) => effects.push_effect(Effect::LoadStagedStatus { repo_id }),
+        (false, false) => {}
+    }
+}
+
+fn push_rebase_and_merge_refresh_effect(effects: &mut impl EffectAccumulator, repo_id: RepoId) {
+    effects.push_effect(Effect::LoadRebaseAndMergeState { repo_id });
+}
+
+fn append_requested_rebase_and_merge_refresh_effects(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
+    let repo_id = repo_state.id;
+    let load_rebase = repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REBASE_STATE);
+    let load_merge_commit_message = repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE);
+
+    match (load_rebase, load_merge_commit_message) {
+        (true, true) => push_rebase_and_merge_refresh_effect(effects, repo_id),
+        (true, false) => effects.push_effect(Effect::LoadRebaseState { repo_id }),
+        (false, true) => effects.push_effect(Effect::LoadMergeCommitMessage { repo_id }),
+        (false, false) => {}
+    }
+}
+
+pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect> {
+    let mut effects = Vec::with_capacity(refresh_primary_effect_capacity());
+    append_refresh_primary_effects(repo_state, &mut effects);
+    effects
+}
+
+pub(super) fn append_refresh_primary_effects(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
+    let repo_id = repo_state.id;
+    let scope = repo_state.history_state.history_scope;
+
+    if repo_state.loads_in_flight.request_primary_refresh_batch() {
+        repo_state.set_log_loading_more(false);
+        effects.push_effect(Effect::LoadHeadBranch { repo_id });
+        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
+        push_rebase_and_merge_refresh_effect(effects, repo_id);
+        effects.push_effect(Effect::LoadStatus { repo_id });
+        effects.push_effect(Effect::LoadLog {
+            repo_id,
+            scope,
+            limit: DEFAULT_LOG_PAGE_SIZE,
+            cursor: None,
+        });
+        return;
+    }
 
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::HEAD_BRANCH)
     {
-        effects.push(Effect::LoadHeadBranch { repo_id });
+        effects.push_effect(Effect::LoadHeadBranch { repo_id });
     }
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
     {
-        effects.push(Effect::LoadUpstreamDivergence { repo_id });
+        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
+    append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
+    append_requested_status_refresh_effects(repo_state, effects);
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::REBASE_STATE)
+        .request_log(scope, DEFAULT_LOG_PAGE_SIZE, None)
     {
-        effects.push(Effect::LoadRebaseState { repo_id });
-    }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
-    {
-        effects.push(Effect::LoadMergeCommitMessage { repo_id });
-    }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::STATUS)
-    {
-        effects.push(Effect::LoadStatus { repo_id });
-    }
-    if repo_state.loads_in_flight.request_log(
-        repo_state.history_state.history_scope,
-        DEFAULT_LOG_PAGE_SIZE,
-        None,
-    ) {
         // Block pagination while a refresh log load is in flight, to avoid concurrent LogLoaded
         // merges with different cursors.
         repo_state.set_log_loading_more(false);
-        effects.push(Effect::LoadLog {
+        effects.push_effect(Effect::LoadLog {
             repo_id,
-            scope: repo_state.history_state.history_scope,
+            scope,
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
     }
+}
 
+pub(super) fn refresh_full_effect_capacity() -> usize {
+    FULL_REFRESH_MAX_EFFECTS
+}
+
+pub(super) fn refresh_full_effects(
+    repo_state: &mut RepoState,
+    git_log_settings: GitLogSettings,
+) -> Vec<Effect> {
+    let mut effects = Vec::with_capacity(refresh_full_effect_capacity());
+    append_refresh_full_effects(repo_state, git_log_settings, &mut effects);
     effects
 }
 
-pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
+pub(super) fn append_refresh_full_effects(
+    repo_state: &mut RepoState,
+    git_log_settings: GitLogSettings,
+    effects: &mut impl EffectAccumulator,
+) {
     let repo_id = repo_state.id;
-    let mut effects = Vec::new();
 
     // Prioritize UI-critical loads (status + log) early. The executor is a FIFO queue, so this
     // ordering can materially impact perceived responsiveness when switching repositories.
@@ -204,27 +568,22 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
         .loads_in_flight
         .request(RepoLoadsInFlight::HEAD_BRANCH)
     {
-        effects.push(Effect::LoadHeadBranch { repo_id });
+        effects.push_effect(Effect::LoadHeadBranch { repo_id });
     }
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
     {
-        effects.push(Effect::LoadUpstreamDivergence { repo_id });
+        effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::STATUS)
-    {
-        effects.push(Effect::LoadStatus { repo_id });
-    }
+    append_requested_status_refresh_effects(repo_state, effects);
     if repo_state.loads_in_flight.request_log(
         repo_state.history_state.history_scope,
         DEFAULT_LOG_PAGE_SIZE,
         None,
     ) {
         repo_state.set_log_loading_more(false);
-        effects.push(Effect::LoadLog {
+        effects.push_effect(Effect::LoadLog {
             repo_id,
             scope: repo_state.history_state.history_scope,
             limit: DEFAULT_LOG_PAGE_SIZE,
@@ -235,43 +594,26 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
         .loads_in_flight
         .request(RepoLoadsInFlight::BRANCHES)
     {
-        effects.push(Effect::LoadBranches { repo_id });
+        effects.push_effect(Effect::LoadBranches { repo_id });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
-        effects.push(Effect::LoadTags { repo_id });
-    }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REMOTE_TAGS)
+    if should_auto_fetch_history_tags(git_log_settings)
+        && repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS)
     {
-        effects.push(Effect::LoadRemoteTags { repo_id });
+        effects.push_effect(Effect::LoadTags { repo_id });
     }
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::REMOTES)
     {
-        effects.push(Effect::LoadRemotes { repo_id });
+        effects.push_effect(Effect::LoadRemotes { repo_id });
     }
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::REMOTE_BRANCHES)
     {
-        effects.push(Effect::LoadRemoteBranches { repo_id });
+        effects.push_effect(Effect::LoadRemoteBranches { repo_id });
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REBASE_STATE)
-    {
-        effects.push(Effect::LoadRebaseState { repo_id });
-    }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
-    {
-        effects.push(Effect::LoadMergeCommitMessage { repo_id });
-    }
-
-    effects
+    append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
 }
 
 pub(super) fn dedup_paths_in_order(paths: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -520,7 +862,7 @@ fn summarize_command(
             | RepoCommandKind::RemoveWorktree { .. }
             | RepoCommandKind::ForceRemoveWorktree { .. } => "Worktree",
             RepoCommandKind::AddSubmodule { .. }
-            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::UpdateSubmodules { .. }
             | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
             RepoCommandKind::ApplyWorktreePatch { reverse } => {
@@ -712,7 +1054,7 @@ fn summarize_command(
         RepoCommandKind::AddSubmodule { path, .. } => {
             format!("Submodule added → {}", path.display())
         }
-        RepoCommandKind::UpdateSubmodules => "Submodules: Updated".to_string(),
+        RepoCommandKind::UpdateSubmodules { .. } => "Submodules: Updated".to_string(),
         RepoCommandKind::RemoveSubmodule { path } => {
             format!("Submodule removed → {}", path.display())
         }
@@ -982,11 +1324,12 @@ mod tests {
     #[test]
     fn diff_reload_effects_cover_image_svg_and_non_file_targets() {
         let repo_id = RepoId(7);
+        let repo_state = repo_state(repo_id.0);
         let png = DiffTarget::WorkingTree {
             path: PathBuf::from("img.PNG"),
             area: DiffArea::Unstaged,
         };
-        let png_effects = diff_reload_effects(repo_id, png.clone());
+        let png_effects = diff_reload_effects(&repo_state, repo_id, png.clone());
         assert!(diff_target_wants_image_preview(&png));
         assert!(!diff_target_is_svg(&png));
         assert_eq!(png_effects.len(), 2);
@@ -997,7 +1340,7 @@ mod tests {
             path: PathBuf::from("diagram.svg"),
             area: DiffArea::Unstaged,
         };
-        let svg_effects = diff_reload_effects(repo_id, svg.clone());
+        let svg_effects = diff_reload_effects(&repo_state, repo_id, svg.clone());
         assert!(diff_target_wants_image_preview(&svg));
         assert!(diff_target_is_svg(&svg));
         assert_eq!(svg_effects.len(), 3);
@@ -1008,7 +1351,10 @@ mod tests {
             area: DiffArea::Unstaged,
         };
         assert!(!diff_target_wants_image_preview(&text_no_ext));
-        assert_eq!(diff_reload_effects(repo_id, text_no_ext).len(), 2);
+        assert_eq!(
+            diff_reload_effects(&repo_state, repo_id, text_no_ext).len(),
+            2
+        );
 
         let commit_without_path = DiffTarget::Commit {
             commit_id: CommitId("abc123".into()),
@@ -1016,7 +1362,10 @@ mod tests {
         };
         assert!(!diff_target_wants_image_preview(&commit_without_path));
         assert!(!diff_target_is_svg(&commit_without_path));
-        assert_eq!(diff_reload_effects(repo_id, commit_without_path).len(), 1);
+        assert_eq!(
+            diff_reload_effects(&repo_state, repo_id, commit_without_path).len(),
+            1
+        );
     }
 
     #[test]
@@ -1024,26 +1373,65 @@ mod tests {
         let mut primary = repo_state(1);
         primary.set_log_loading_more(true);
         let primary_effects = refresh_primary_effects(&mut primary);
-        assert_eq!(primary_effects.len(), 6);
+        assert_eq!(primary_effects.len(), 5);
         assert!(!primary.log_loading_more);
         assert!(matches!(primary_effects[0], Effect::LoadHeadBranch { .. }));
+        assert!(
+            primary_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+        );
         assert!(matches!(
-            primary_effects[5],
+            primary_effects[4],
             Effect::LoadLog {
                 limit: DEFAULT_LOG_PAGE_SIZE,
                 ..
             }
         ));
+        assert!(
+            !primary_effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::LoadWorktreeStatus { .. } | Effect::LoadStagedStatus { .. }
+                )
+            }),
+            "primary refresh should coalesce staged and worktree status into LoadStatus"
+        );
+        assert!(
+            primary_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadRebaseAndMergeState { .. }))
+        );
 
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
-        let full_effects = refresh_full_effects(&mut full);
-        assert_eq!(full_effects.len(), 11);
+        let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
+        assert_eq!(full_effects.len(), 9);
         assert!(!full.log_loading_more);
         assert!(
             full_effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. }))
+                .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+        );
+        assert!(
+            !full_effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::LoadWorktreeStatus { .. } | Effect::LoadStagedStatus { .. }
+                )
+            }),
+            "full refresh should coalesce staged and worktree status into LoadStatus"
+        );
+        assert!(
+            full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadTags { .. }))
+        );
+        assert!(
+            !full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. })),
+            "remote tags should lazy-load from tag-specific UI instead of refresh_full_effects"
         );
         assert!(
             !full_effects
@@ -1054,7 +1442,7 @@ mod tests {
         assert!(
             full_effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadMergeCommitMessage { .. }))
+                .any(|effect| matches!(effect, Effect::LoadRebaseAndMergeState { .. }))
         );
     }
 

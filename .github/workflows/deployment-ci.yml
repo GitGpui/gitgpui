@@ -16,6 +16,7 @@ on:
       - "scripts/generate-flatpak-cargo-sources.py"
       - "scripts/render-flathub-manifest.sh"
       - "scripts/update-aur.sh"
+      - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
@@ -37,6 +38,7 @@ on:
       - "scripts/generate-flatpak-cargo-sources.py"
       - "scripts/render-flathub-manifest.sh"
       - "scripts/update-aur.sh"
+      - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
@@ -61,8 +63,10 @@ jobs:
 
       - name: Validate shell scripts syntax
         run: |
+          bash -n scripts/cargo-flatten-dupes.sh
           bash -n scripts/update-aur.sh
           bash -n scripts/package-macos.sh
+          bash -n scripts/notarize-macos.sh
           bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/generate-homebrew-cask.sh

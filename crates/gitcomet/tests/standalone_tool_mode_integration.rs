@@ -1,3 +1,4 @@
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::background_command as no_window_command;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -8,10 +9,10 @@ use std::sync::OnceLock;
 
 fn gitcomet_bin() -> PathBuf {
     for env_key in ["CARGO_BIN_EXE_gitcomet"] {
-        if let Some(path) = std::env::var_os(env_key).map(PathBuf::from) {
-            if path.is_file() {
-                return path;
-            }
+        if let Some(path) = std::env::var_os(env_key).map(PathBuf::from)
+            && path.is_file()
+        {
+            return path;
         }
     }
 
@@ -25,15 +26,16 @@ fn gitcomet_bin() -> PathBuf {
 }
 
 fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
-    let test_exe = std::env::current_exe().ok()?;
+    let test_exe = canonicalize_or_original(std::env::current_exe().ok()?);
     let deps_dir = test_exe.parent()?;
     let profile_dir = deps_dir.parent()?;
     let exe_suffix = std::env::consts::EXE_SUFFIX;
 
-    for bin_name in ["gitcomet"] {
+    {
+        let bin_name = "gitcomet";
         let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
         if candidate.is_file() {
-            return Some(candidate);
+            return Some(canonicalize_or_original(candidate));
         }
     }
 

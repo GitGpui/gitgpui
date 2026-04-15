@@ -1,5 +1,14 @@
-use std::collections::HashMap;
+use crate::domain::SharedLineText;
+use rustc_hash::FxHasher;
+use std::borrow::Cow;
+use std::cell::OnceCell;
+use std::fs::File;
+use std::hash::{Hash, Hasher};
+use std::io::{Read, Seek, SeekFrom};
+use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffRowKind {
@@ -15,8 +24,15 @@ const REPLACEMENT_PAIR_BASE_COST: u32 = 80;
 const REPLACEMENT_PAIR_SCALE_COST: u32 = 120;
 const REPLACEMENT_DISSIMILAR_PENALTY_COST: u32 = 40;
 const REPLACEMENT_DISSIMILAR_PENALTY_MIN_LEN: usize = 4;
-const SIDE_BY_SIDE_HISTOGRAM_LINE_THRESHOLD: usize = 4_096;
+const ASCII_BITPARALLEL_MAX_PATTERN_LEN: usize = 128;
+const SIDE_BY_SIDE_HISTOGRAM_LINE_THRESHOLD: usize = 1_024;
 const SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD: usize = 100_000;
+const PATIENCE_POSITIONAL_FALLBACK_LINE_THRESHOLD: usize = 2_048;
+const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_CHANGED_RATIO_DENOMINATOR: usize = 4;
+const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_BLOCK_LEN: usize = 1;
+// UTF-8 code points are at most 4 bytes wide, so 3 bytes of lookaround is
+// enough to recover the nearest character boundary around any requested slice.
+const UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffEofNewline {
@@ -24,13 +40,467 @@ pub enum FileDiffEofNewline {
     MissingInNew,
 }
 
+#[derive(Clone, Debug)]
+enum FileDiffLineTextStorage {
+    Owned(Arc<str>),
+    SharedSlice { text: Arc<str>, range: Range<usize> },
+    SharedLine(SharedLineText),
+    FileSlice(Arc<FileDiffLineFileSlice>),
+}
+
+#[derive(Clone, Debug)]
+pub struct FileDiffLineText {
+    storage: FileDiffLineTextStorage,
+}
+
+#[derive(Debug)]
+struct FileDiffLineFileSlice {
+    path: Arc<PathBuf>,
+    range: Range<usize>,
+    ascii_only: bool,
+    has_tabs: bool,
+    text: OnceLock<Arc<str>>,
+}
+
+fn read_file_bytes(path: &PathBuf, range: Range<usize>) -> Option<Vec<u8>> {
+    if range.start > range.end {
+        return None;
+    }
+
+    let mut file = File::open(path).ok()?;
+    file.seek(SeekFrom::Start(u64::try_from(range.start).ok()?))
+        .ok()?;
+    let mut bytes = vec![0u8; range.end.saturating_sub(range.start)];
+    file.read_exact(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+fn read_utf8_file_slice(path: &PathBuf, range: Range<usize>) -> Option<Arc<str>> {
+    let bytes = read_file_bytes(path, range)?;
+    let text = String::from_utf8(bytes).ok()?;
+    Some(Arc::from(text))
+}
+
+fn read_utf8_file_subslice(
+    path: &PathBuf,
+    base_range: &Range<usize>,
+    subrange: Range<usize>,
+    ascii_only: bool,
+) -> Option<Arc<str>> {
+    read_utf8_file_subslice_with_range(path, base_range, subrange, ascii_only).map(|(text, _)| text)
+}
+
+fn clamp_byte_up_to_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset < text.len() && !text.is_char_boundary(offset) {
+        offset += 1;
+    }
+    offset
+}
+
+fn clamp_byte_down_to_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+fn resolved_utf8_text_subslice_range(text: &str, range: Range<usize>) -> Option<Range<usize>> {
+    if range.start > range.end || range.end > text.len() {
+        return None;
+    }
+
+    let start = clamp_byte_up_to_char_boundary(text, range.start);
+    let end = clamp_byte_down_to_char_boundary(text, range.end).max(start);
+    Some(start..end)
+}
+
+fn read_utf8_file_subslice_with_range(
+    path: &PathBuf,
+    base_range: &Range<usize>,
+    subrange: Range<usize>,
+    ascii_only: bool,
+) -> Option<(Arc<str>, Range<usize>)> {
+    if subrange.start > subrange.end
+        || subrange.end > base_range.end.saturating_sub(base_range.start)
+    {
+        return None;
+    }
+
+    let start = base_range.start.saturating_add(subrange.start);
+    let end = base_range.start.saturating_add(subrange.end);
+    if ascii_only {
+        return read_utf8_file_slice(path, start..end).map(|text| (text, subrange));
+    }
+
+    let read_start = start
+        .saturating_sub(UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES)
+        .max(base_range.start);
+    let read_end = end
+        .saturating_add(UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES)
+        .min(base_range.end);
+    let bytes = read_file_bytes(path, read_start..read_end)?;
+    let requested_start = start.saturating_sub(read_start).min(bytes.len());
+    let requested_end = end.saturating_sub(read_start).min(bytes.len());
+
+    let mut local_start = requested_start;
+    while local_start < bytes.len() && (bytes[local_start] & 0b1100_0000) == 0b1000_0000 {
+        local_start += 1;
+    }
+
+    let mut local_end = requested_end.max(local_start).min(bytes.len());
+    while local_end > local_start && std::str::from_utf8(&bytes[local_start..local_end]).is_err() {
+        local_end -= 1;
+    }
+
+    let resolved_range = read_start
+        .saturating_add(local_start)
+        .saturating_sub(base_range.start)
+        ..read_start
+            .saturating_add(local_end)
+            .saturating_sub(base_range.start);
+    if local_end <= local_start {
+        return Some((Arc::from(""), resolved_range));
+    }
+
+    String::from_utf8(bytes[local_start..local_end].to_vec())
+        .ok()
+        .map(Arc::from)
+        .map(|text| (text, resolved_range))
+}
+
+impl FileDiffLineText {
+    pub fn shared(text: Arc<str>) -> Self {
+        Self {
+            storage: FileDiffLineTextStorage::Owned(text),
+        }
+    }
+
+    pub fn shared_slice(text: Arc<str>, range: Range<usize>) -> Self {
+        debug_assert!(
+            text.get(range.clone()).is_some(),
+            "shared file-diff line range should stay within bounds"
+        );
+        Self {
+            storage: FileDiffLineTextStorage::SharedSlice { text, range },
+        }
+    }
+
+    pub fn shared_line(text: SharedLineText) -> Self {
+        Self {
+            storage: FileDiffLineTextStorage::SharedLine(text),
+        }
+    }
+
+    pub fn file_slice(
+        path: Arc<PathBuf>,
+        range: Range<usize>,
+        ascii_only: bool,
+        has_tabs: bool,
+    ) -> Self {
+        Self {
+            storage: FileDiffLineTextStorage::FileSlice(Arc::new(FileDiffLineFileSlice {
+                path,
+                range,
+                ascii_only,
+                has_tabs,
+                text: OnceLock::new(),
+            })),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.as_ref(),
+            FileDiffLineTextStorage::SharedSlice { text, range } => text
+                .get(range.clone())
+                .expect("shared file-diff line range should stay valid"),
+            FileDiffLineTextStorage::SharedLine(text) => text.as_ref(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice
+                .text
+                .get_or_init(|| {
+                    read_utf8_file_slice(slice.path.as_ref(), slice.range.clone())
+                        .unwrap_or_else(|| Arc::<str>::from(""))
+                })
+                .as_ref(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_str().is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.len(),
+            FileDiffLineTextStorage::SharedSlice { range, .. } => {
+                range.end.saturating_sub(range.start)
+            }
+            FileDiffLineTextStorage::SharedLine(text) => text.len(),
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                slice.range.end.saturating_sub(slice.range.start)
+            }
+        }
+    }
+
+    pub fn is_ascii_without_loading(&self) -> bool {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.is_ascii(),
+            FileDiffLineTextStorage::SharedSlice { text, range } => text
+                .as_bytes()
+                .get(range.clone())
+                .is_some_and(|bytes| bytes.is_ascii()),
+            FileDiffLineTextStorage::SharedLine(text) => text.as_ref().is_ascii(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice.ascii_only,
+        }
+    }
+
+    pub fn has_tabs_without_loading(&self) -> bool {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.contains('\t'),
+            FileDiffLineTextStorage::SharedSlice { text, range } => text
+                .as_bytes()
+                .get(range.clone())
+                .is_some_and(|bytes| bytes.contains(&b'\t')),
+            FileDiffLineTextStorage::SharedLine(text) => text.as_ref().contains('\t'),
+            FileDiffLineTextStorage::FileSlice(slice) => slice.has_tabs,
+        }
+    }
+
+    pub fn slice_bytes(&self, range: Range<usize>) -> Option<Cow<'_, [u8]>> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => Some(Cow::Borrowed(
+                text.as_bytes().get(range).unwrap_or_default(),
+            )),
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                Some(Cow::Borrowed(
+                    text.as_bytes().get(start..end).unwrap_or_default(),
+                ))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => Some(Cow::Borrowed(
+                text.as_ref().as_bytes().get(range).unwrap_or_default(),
+            )),
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                let start = slice.range.start.saturating_add(range.start);
+                let end = slice.range.start.saturating_add(range.end);
+                read_file_bytes(slice.path.as_ref(), start..end).map(Cow::Owned)
+            }
+        }
+    }
+
+    pub fn slice_text(&self, range: Range<usize>) -> Option<Cow<'_, str>> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                Some(Cow::Borrowed(text.get(range).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                Some(Cow::Borrowed(text.get(start..end).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                Some(Cow::Borrowed(text.as_ref().get(range).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                read_utf8_file_subslice(slice.path.as_ref(), &slice.range, range, slice.ascii_only)
+                    .map(|text| Cow::Owned(text.as_ref().to_string()))
+            }
+        }
+    }
+
+    pub fn slice_text_resolved(&self, range: Range<usize>) -> Option<(Cow<'_, str>, Range<usize>)> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                let resolved_range = resolved_utf8_text_subslice_range(text.as_ref(), range)?;
+                Some((
+                    Cow::Borrowed(text.get(resolved_range.clone()).unwrap_or_default()),
+                    resolved_range,
+                ))
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                let resolved_absolute =
+                    resolved_utf8_text_subslice_range(text.as_ref(), start..end)?;
+                let resolved_relative = resolved_absolute.start.saturating_sub(base.start)
+                    ..resolved_absolute.end.saturating_sub(base.start);
+                Some((
+                    Cow::Borrowed(text.get(resolved_absolute).unwrap_or_default()),
+                    resolved_relative,
+                ))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                let resolved_range = resolved_utf8_text_subslice_range(text.as_ref(), range)?;
+                Some((
+                    Cow::Borrowed(
+                        text.as_ref()
+                            .get(resolved_range.clone())
+                            .unwrap_or_default(),
+                    ),
+                    resolved_range,
+                ))
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => read_utf8_file_subslice_with_range(
+                slice.path.as_ref(),
+                &slice.range,
+                range,
+                slice.ascii_only,
+            )
+            .map(|(text, resolved_range)| (Cow::Owned(text.as_ref().to_string()), resolved_range)),
+        }
+    }
+
+    pub fn shares_backing_with(&self, other: &Self) -> bool {
+        match (&self.storage, &other.storage) {
+            (FileDiffLineTextStorage::Owned(a), FileDiffLineTextStorage::Owned(b))
+            | (
+                FileDiffLineTextStorage::Owned(a),
+                FileDiffLineTextStorage::SharedSlice { text: b, .. },
+            )
+            | (
+                FileDiffLineTextStorage::SharedSlice { text: a, .. },
+                FileDiffLineTextStorage::Owned(b),
+            )
+            | (
+                FileDiffLineTextStorage::SharedSlice { text: a, .. },
+                FileDiffLineTextStorage::SharedSlice { text: b, .. },
+            ) => Arc::ptr_eq(a, b),
+            (FileDiffLineTextStorage::SharedLine(a), FileDiffLineTextStorage::SharedLine(b)) => {
+                a.shares_storage_with(b)
+            }
+            (FileDiffLineTextStorage::FileSlice(a), FileDiffLineTextStorage::FileSlice(b)) => {
+                Arc::ptr_eq(a, b)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn identity_hash_without_loading(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                0u8.hash(&mut hasher);
+                (text.as_ptr() as usize).hash(&mut hasher);
+                text.len().hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range } => {
+                1u8.hash(&mut hasher);
+                (text.as_ptr() as usize).hash(&mut hasher);
+                text.len().hash(&mut hasher);
+                range.start.hash(&mut hasher);
+                range.end.hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                2u8.hash(&mut hasher);
+                text.as_ref().hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                3u8.hash(&mut hasher);
+                slice.path.hash(&mut hasher);
+                slice.range.start.hash(&mut hasher);
+                slice.range.end.hash(&mut hasher);
+                slice.ascii_only.hash(&mut hasher);
+                slice.has_tabs.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+}
+
+impl AsRef<str> for FileDiffLineText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::ops::Deref for FileDiffLineText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl PartialEq for FileDiffLineText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for FileDiffLineText {}
+
+impl Hash for FileDiffLineText {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl From<&str> for FileDiffLineText {
+    fn from(value: &str) -> Self {
+        Self::shared(Arc::from(value))
+    }
+}
+
+impl From<String> for FileDiffLineText {
+    fn from(value: String) -> Self {
+        Self::shared(value.into())
+    }
+}
+
+impl From<Arc<str>> for FileDiffLineText {
+    fn from(value: Arc<str>) -> Self {
+        Self::shared(value)
+    }
+}
+
+impl From<SharedLineText> for FileDiffLineText {
+    fn from(value: SharedLineText) -> Self {
+        Self::shared_line(value)
+    }
+}
+
+impl From<FileDiffLineText> for Arc<str> {
+    fn from(value: FileDiffLineText) -> Self {
+        match value.storage {
+            FileDiffLineTextStorage::Owned(text) => text,
+            FileDiffLineTextStorage::SharedSlice { text, range } => Arc::from(
+                text.get(range)
+                    .expect("shared file-diff line range should stay valid"),
+            ),
+            FileDiffLineTextStorage::SharedLine(text) => text.to_arc(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice
+                .text
+                .get_or_init(|| {
+                    read_utf8_file_slice(slice.path.as_ref(), slice.range.clone())
+                        .unwrap_or_else(|| Arc::<str>::from(""))
+                })
+                .clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffRow {
     pub kind: FileDiffRowKind,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
-    pub old: Option<Arc<str>>,
-    pub new: Option<Arc<str>>,
+    pub old: Option<FileDiffLineText>,
+    pub new: Option<FileDiffLineText>,
     pub eof_newline: Option<FileDiffEofNewline>,
 }
 
@@ -248,11 +718,26 @@ pub enum BenchmarkReplacementDistanceBackend {
 pub fn side_by_side_plan(old: &str, new: &str) -> FileDiffPlan {
     let old_lines = split_lines(old);
     let new_lines = split_lines(new);
+    side_by_side_plan_from_lines(old, new, old_lines.as_slice(), new_lines.as_slice())
+}
+
+/// Build a side-by-side diff plan from precomputed `str::lines()` slices.
+///
+/// Callers must ensure `old_lines` and `new_lines` were derived from
+/// `old_text`/`new_text` using the same line-splitting semantics as
+/// [`str::lines`], because EOF newline handling still comes from the full
+/// source texts.
+pub fn side_by_side_plan_from_lines(
+    old_text: &str,
+    new_text: &str,
+    old_lines: &[&str],
+    new_lines: &[&str],
+) -> FileDiffPlan {
     build_side_by_side_plan_with_pair_cost(
-        old,
-        new,
-        old_lines.as_slice(),
-        new_lines.as_slice(),
+        old_text,
+        new_text,
+        old_lines,
+        new_lines,
         replacement_pair_cost,
     )
 }
@@ -278,22 +763,60 @@ pub fn benchmark_side_by_side_plan_with_replacement_backend(
             new,
             old_lines.as_slice(),
             new_lines.as_slice(),
-            replacement_pair_cost,
+            replacement_pair_cost_with_strsim,
         ),
     }
 }
 
 pub fn side_by_side_rows(old: &str, new: &str) -> Vec<FileDiffRow> {
-    let old_lines = split_lines(old);
-    let new_lines = split_lines(new);
+    let old_text: Arc<str> = Arc::from(old);
+    let new_text: Arc<str> = Arc::from(new);
+    let old_lines = split_lines(old_text.as_ref());
+    let new_lines = split_lines(new_text.as_ref());
     let plan = build_side_by_side_plan_with_pair_cost(
-        old,
-        new,
+        old_text.as_ref(),
+        new_text.as_ref(),
         old_lines.as_slice(),
         new_lines.as_slice(),
         replacement_pair_cost,
     );
-    materialize_rows_from_plan(&plan, old_lines.as_slice(), new_lines.as_slice())
+    materialize_rows_from_plan(
+        &plan,
+        &old_text,
+        old_lines.as_slice(),
+        &new_text,
+        new_lines.as_slice(),
+    )
+}
+
+pub fn append_side_by_side_rows_with_offsets(
+    rows: &mut Vec<FileDiffRow>,
+    old: &str,
+    new: &str,
+    old_line_offset: u32,
+    new_line_offset: u32,
+) {
+    let old_text: Arc<str> = Arc::from(old);
+    let new_text: Arc<str> = Arc::from(new);
+    let old_lines = split_lines(old_text.as_ref());
+    let new_lines = split_lines(new_text.as_ref());
+    let plan = build_side_by_side_plan_with_pair_cost(
+        old_text.as_ref(),
+        new_text.as_ref(),
+        old_lines.as_slice(),
+        new_lines.as_slice(),
+        replacement_pair_cost,
+    );
+    materialize_rows_from_plan_into(
+        rows,
+        &plan,
+        &old_text,
+        old_lines.as_slice(),
+        &new_text,
+        new_lines.as_slice(),
+        old_line_offset,
+        new_line_offset,
+    )
 }
 
 pub fn side_by_side_rows_with_anchors(old: &str, new: &str) -> FileDiffRowsWithAnchors {
@@ -644,20 +1167,48 @@ enum PlannedReplacementOp {
 
 struct PreparedReplacementLine<'a> {
     text: &'a str,
-    chars: Vec<char>,
+    ascii_bytes: Option<&'a [u8]>,
+    chars: OnceCell<Box<[char]>>,
 }
 
 impl<'a> PreparedReplacementLine<'a> {
     fn new(text: &'a str) -> Self {
-        Self {
-            text,
-            chars: text.chars().collect(),
+        if text.is_ascii() {
+            Self {
+                text,
+                ascii_bytes: Some(text.as_bytes()),
+                chars: OnceCell::new(),
+            }
+        } else {
+            let prepared_chars = text.chars().collect::<Vec<_>>().into_boxed_slice();
+            let chars = OnceCell::new();
+            assert!(
+                chars.set(prepared_chars).is_ok(),
+                "fresh OnceCell should accept prepared chars"
+            );
+            Self {
+                text,
+                ascii_bytes: None,
+                chars,
+            }
         }
+    }
+
+    fn ascii_bytes(&self) -> Option<&[u8]> {
+        self.ascii_bytes
+    }
+
+    fn chars(&self) -> &[char] {
+        self.chars
+            .get_or_init(|| self.text.chars().collect::<Vec<_>>().into_boxed_slice())
+            .as_ref()
     }
 }
 
+#[cfg(feature = "benchmarks")]
 struct CharSlice<'a>(&'a [char]);
 
+#[cfg(feature = "benchmarks")]
 impl<'b> IntoIterator for &CharSlice<'b> {
     type Item = char;
     type IntoIter = std::iter::Copied<std::slice::Iter<'b, char>>;
@@ -667,21 +1218,26 @@ impl<'b> IntoIterator for &CharSlice<'b> {
     }
 }
 
-#[cfg(feature = "benchmarks")]
-#[derive(Default)]
-struct LevenshteinScratch {
-    prev: Vec<usize>,
-    curr: Vec<usize>,
+#[cfg(all(feature = "benchmarks", test))]
+struct ByteSlice<'a>(&'a [u8]);
+
+#[cfg(all(feature = "benchmarks", test))]
+impl<'b> IntoIterator for &ByteSlice<'b> {
+    type Item = u8;
+    type IntoIter = std::iter::Copied<std::slice::Iter<'b, u8>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter().copied()
+    }
 }
 
-#[cfg(not(feature = "benchmarks"))]
 #[derive(Default)]
-struct LevenshteinScratch;
+struct LevenshteinScratch {
+    cache: Vec<usize>,
+}
 
-#[cfg(feature = "benchmarks")]
 impl LevenshteinScratch {
-    fn distance(&mut self, a: &[char], b: &[char]) -> usize {
-        let (a, b) = if b.len() > a.len() { (b, a) } else { (a, b) };
+    fn distance<T: Eq>(&mut self, a: &[T], b: &[T]) -> usize {
         if a == b {
             return 0;
         }
@@ -692,26 +1248,107 @@ impl LevenshteinScratch {
             return a.len();
         }
 
-        let width = b.len() + 1;
-        self.prev.resize(width, 0);
-        for (ix, slot) in self.prev.iter_mut().enumerate() {
-            *slot = ix;
-        }
-        self.curr.resize(width, 0);
-
-        for (i, a_ch) in a.iter().enumerate() {
-            self.curr[0] = i + 1;
-            for (j, b_ch) in b.iter().enumerate() {
-                let subst = self.prev[j] + usize::from(a_ch != b_ch);
-                let insert = self.curr[j] + 1;
-                let delete = self.prev[j + 1] + 1;
-                self.curr[j + 1] = subst.min(insert).min(delete);
-            }
-            std::mem::swap(&mut self.prev, &mut self.curr);
-        }
-
-        self.prev[b.len()]
+        self.distance_non_empty_unequal(a, b)
     }
+
+    fn distance_non_empty_unequal<T: Eq>(&mut self, a: &[T], b: &[T]) -> usize {
+        distance_non_empty_unequal_with_cache(&mut self.cache, a, b)
+    }
+
+    fn distance_bytes(&mut self, a: &[u8], b: &[u8]) -> usize {
+        if a == b {
+            return 0;
+        }
+        if a.is_empty() {
+            return b.len();
+        }
+        if b.is_empty() {
+            return a.len();
+        }
+
+        if let Some(distance) = bitparallel_levenshtein_bytes(a, b) {
+            return distance;
+        }
+
+        distance_non_empty_unequal_with_cache(&mut self.cache, a, b)
+    }
+}
+
+fn distance_non_empty_unequal_with_cache<T: Eq>(cache: &mut Vec<usize>, a: &[T], b: &[T]) -> usize {
+    debug_assert!(!a.is_empty());
+    debug_assert!(!b.is_empty());
+
+    let (a, b) = if b.len() > a.len() { (a, b) } else { (b, a) };
+    debug_assert!(a != b);
+
+    let b_len = b.len();
+    cache.resize(b_len, 0);
+    let cache = &mut cache[..b_len];
+    for (ix, slot) in cache.iter_mut().enumerate() {
+        *slot = ix + 1;
+    }
+
+    let mut result = b_len;
+    for (i, a_ch) in a.iter().enumerate() {
+        result = i + 1;
+        let mut distance_b = i;
+        for (j, b_ch) in b.iter().enumerate() {
+            let cost = usize::from(a_ch != b_ch);
+            let distance_a = distance_b + cost;
+            distance_b = cache[j];
+            result = (result + 1).min(distance_a).min(distance_b + 1);
+            cache[j] = result;
+        }
+    }
+
+    result
+}
+
+fn bitparallel_levenshtein_bytes(a: &[u8], b: &[u8]) -> Option<usize> {
+    let (pattern, text) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    let pattern_len = pattern.len();
+    if pattern_len == 0 {
+        return Some(text.len());
+    }
+    if pattern_len > ASCII_BITPARALLEL_MAX_PATTERN_LEN {
+        return None;
+    }
+
+    let mut eq_masks = [0u128; 256];
+    for (ix, &byte) in pattern.iter().enumerate() {
+        eq_masks[byte as usize] |= 1u128 << ix;
+    }
+
+    let mask = if pattern_len == ASCII_BITPARALLEL_MAX_PATTERN_LEN {
+        u128::MAX
+    } else {
+        (1u128 << pattern_len) - 1
+    };
+    let high_bit = 1u128 << (pattern_len - 1);
+    let mut positive = mask;
+    let mut negative = 0u128;
+    let mut distance = pattern_len;
+
+    for &byte in text {
+        let eq = eq_masks[byte as usize];
+        let xv = eq | negative;
+        let xh = (((eq & positive).wrapping_add(positive)) ^ positive) | eq;
+        let mut positive_h = negative | !(xh | positive);
+        let mut negative_h = positive & xh;
+
+        if (positive_h & high_bit) != 0 {
+            distance += 1;
+        } else if (negative_h & high_bit) != 0 {
+            distance -= 1;
+        }
+
+        positive_h = ((positive_h << 1) | 1) & mask;
+        negative_h = (negative_h << 1) & mask;
+        positive = (negative_h | !(xv | positive_h)) & mask;
+        negative = positive_h & xv;
+    }
+
+    Some(distance)
 }
 
 fn prepare_replacement_lines<'a>(lines: &[&'a str]) -> Vec<PreparedReplacementLine<'a>> {
@@ -719,6 +1356,35 @@ fn prepare_replacement_lines<'a>(lines: &[&'a str]) -> Vec<PreparedReplacementLi
         .iter()
         .map(|line| PreparedReplacementLine::new(line))
         .collect()
+}
+
+struct ReplacementTextCacheIds {
+    ids: Vec<usize>,
+    unique_texts: usize,
+    has_duplicates: bool,
+}
+
+fn prepare_replacement_text_cache_ids(
+    lines: &[PreparedReplacementLine<'_>],
+) -> ReplacementTextCacheIds {
+    use rustc_hash::FxHashMap;
+
+    let mut text_ids = FxHashMap::default();
+    text_ids.reserve(lines.len());
+    let mut ids = Vec::with_capacity(lines.len());
+
+    for line in lines {
+        let next_id = text_ids.len();
+        let id = *text_ids.entry(line.text).or_insert(next_id);
+        ids.push(id);
+    }
+
+    let unique_texts = text_ids.len();
+    ReplacementTextCacheIds {
+        ids,
+        unique_texts,
+        has_duplicates: unique_texts < lines.len(),
+    }
 }
 
 #[cfg(test)]
@@ -729,14 +1395,14 @@ fn replacement_alignment_ops(
     replacement_alignment_ops_with_pair_cost(deletes, inserts, replacement_pair_cost)
 }
 
-fn replacement_alignment_ops_with_pair_cost<F>(
-    deletes: &[PreparedReplacementLine<'_>],
-    inserts: &[PreparedReplacementLine<'_>],
+fn replacement_alignment_ops_with_pair_cost<'a, F>(
+    deletes: &[PreparedReplacementLine<'a>],
+    inserts: &[PreparedReplacementLine<'a>],
     pair_cost_fn: F,
 ) -> Vec<PlannedReplacementOp>
 where
     F: Copy
-        + for<'a> Fn(
+        + Fn(
             &PreparedReplacementLine<'a>,
             &PreparedReplacementLine<'a>,
             &mut LevenshteinScratch,
@@ -745,38 +1411,45 @@ where
     let n = deletes.len();
     let m = inserts.len();
     let width = m + 1;
-    let mut cost = vec![u32::MAX / 4; (n + 1) * width];
+    let mut prev_costs = vec![0; width];
+    let mut curr_costs = vec![0; width];
     let mut step = vec![ReplacementAlignStep::None; (n + 1) * width];
     #[allow(clippy::default_constructed_unit_structs)]
     let mut scratch = LevenshteinScratch::default();
-    // Cache pair costs by (old_text, new_text) to avoid redundant Levenshtein
-    // computations for duplicate line pairs within the same replacement block.
-    let mut pair_cost_cache: HashMap<(&str, &str), u32> = HashMap::new();
-    cost[0] = 0;
-
-    for i in 1..=n {
-        let idx = i * width;
-        cost[idx] = (i as u32) * REPLACEMENT_GAP_COST;
-        step[idx] = ReplacementAlignStep::Delete;
-    }
+    let delete_text_ids = prepare_replacement_text_cache_ids(deletes);
+    let insert_text_ids = prepare_replacement_text_cache_ids(inserts);
+    // Cache pair costs only when either side actually repeats line text within
+    // this replacement block; otherwise every pair is unique and the cache
+    // adds extra hashing/allocation work without any reuse.
+    let mut pair_cost_cache = (delete_text_ids.has_duplicates || insert_text_ids.has_duplicates)
+        .then(|| vec![u32::MAX; delete_text_ids.unique_texts * insert_text_ids.unique_texts]);
     for j in 1..=m {
-        cost[j] = (j as u32) * REPLACEMENT_GAP_COST;
+        prev_costs[j] = (j as u32) * REPLACEMENT_GAP_COST;
         step[j] = ReplacementAlignStep::Insert;
     }
 
     for i in 1..=n {
+        curr_costs[0] = (i as u32) * REPLACEMENT_GAP_COST;
+        step[i * width] = ReplacementAlignStep::Delete;
         for j in 1..=m {
             let idx = i * width + j;
-            let del_idx = (i - 1) * width + j;
-            let ins_idx = i * width + (j - 1);
-            let pair_idx = (i - 1) * width + (j - 1);
-
-            let cached_pair_cost = *pair_cost_cache
-                .entry((deletes[i - 1].text, inserts[j - 1].text))
-                .or_insert_with(|| pair_cost_fn(&deletes[i - 1], &inserts[j - 1], &mut scratch));
-            let pair_cost = cost[pair_idx].saturating_add(cached_pair_cost);
-            let insert_cost = cost[ins_idx].saturating_add(REPLACEMENT_GAP_COST);
-            let delete_cost = cost[del_idx].saturating_add(REPLACEMENT_GAP_COST);
+            let pair_cost_value = if let Some(pair_cost_cache) = pair_cost_cache.as_mut() {
+                let pair_cache_idx = delete_text_ids.ids[i - 1] * insert_text_ids.unique_texts
+                    + insert_text_ids.ids[j - 1];
+                let cached_pair_cost = &mut pair_cost_cache[pair_cache_idx];
+                if *cached_pair_cost == u32::MAX {
+                    let computed = pair_cost_fn(&deletes[i - 1], &inserts[j - 1], &mut scratch);
+                    *cached_pair_cost = computed;
+                    computed
+                } else {
+                    *cached_pair_cost
+                }
+            } else {
+                pair_cost_fn(&deletes[i - 1], &inserts[j - 1], &mut scratch)
+            };
+            let pair_cost = prev_costs[j - 1].saturating_add(pair_cost_value);
+            let insert_cost = curr_costs[j - 1].saturating_add(REPLACEMENT_GAP_COST);
+            let delete_cost = prev_costs[j].saturating_add(REPLACEMENT_GAP_COST);
 
             let mut best_cost = pair_cost;
             let mut best_step = ReplacementAlignStep::Pair;
@@ -790,9 +1463,10 @@ where
                 best_step = ReplacementAlignStep::Delete;
             }
 
-            cost[idx] = best_cost;
+            curr_costs[j] = best_cost;
             step[idx] = best_step;
         }
+        std::mem::swap(&mut prev_costs, &mut curr_costs);
     }
 
     let mut i = n;
@@ -910,16 +1584,31 @@ fn push_plan_run(runs: &mut Vec<FileDiffPlanRun>, run: FileDiffPlanRun) {
     }
 }
 
+fn push_plan_run_with_counts(
+    runs: &mut Vec<FileDiffPlanRun>,
+    row_count: &mut usize,
+    inline_row_count: &mut usize,
+    run: FileDiffPlanRun,
+) {
+    let len = run.row_len();
+    if len == 0 {
+        return;
+    }
+    *row_count = row_count.saturating_add(len);
+    *inline_row_count = inline_row_count.saturating_add(run.inline_row_len());
+    push_plan_run(runs, run);
+}
+
 fn apply_eof_newline_to_plan(
     runs: &mut Vec<FileDiffPlanRun>,
     eof_newline: Option<FileDiffEofNewline>,
-) {
+) -> bool {
     if eof_newline.is_none() {
-        return;
+        return false;
     }
 
     let Some(last_run) = runs.pop() else {
-        return;
+        return false;
     };
     match last_run {
         FileDiffPlanRun::Context {
@@ -937,6 +1626,7 @@ fn apply_eof_newline_to_plan(
                 new_start: new_start.saturating_add(len.saturating_sub(1)),
                 len: 1,
             });
+            true
         }
         FileDiffPlanRun::Context {
             old_start,
@@ -948,9 +1638,95 @@ fn apply_eof_newline_to_plan(
                 new_start,
                 len: 1,
             });
+            true
         }
-        other => runs.push(other),
+        other => {
+            runs.push(other);
+            false
+        }
     }
+}
+
+fn build_sparse_positional_side_by_side_plan(
+    old_text: &str,
+    new_text: &str,
+    old_lines: &[&str],
+    new_lines: &[&str],
+) -> Option<FileDiffPlan> {
+    if old_lines.len() != new_lines.len() {
+        return None;
+    }
+    let line_count = old_lines.len();
+    if line_count == 0
+        || line_count.saturating_add(line_count) < SIDE_BY_SIDE_HISTOGRAM_LINE_THRESHOLD
+    {
+        return None;
+    }
+
+    let mut runs = Vec::with_capacity(line_count / 8 + 1);
+    let mut row_count = 0usize;
+    let mut inline_row_count = 0usize;
+    let mut changed_lines = 0usize;
+    let mut ix = 0usize;
+
+    while ix < line_count {
+        if old_lines[ix] == new_lines[ix] {
+            let start = ix;
+            ix += 1;
+            while ix < line_count && old_lines[ix] == new_lines[ix] {
+                ix += 1;
+            }
+            push_plan_run_with_counts(
+                &mut runs,
+                &mut row_count,
+                &mut inline_row_count,
+                FileDiffPlanRun::Context {
+                    old_start: start,
+                    new_start: start,
+                    len: ix.saturating_sub(start),
+                },
+            );
+            continue;
+        }
+
+        let block_start = ix;
+        ix += 1;
+        while ix < line_count && old_lines[ix] != new_lines[ix] {
+            ix += 1;
+        }
+        let block_len = ix.saturating_sub(block_start);
+        changed_lines = changed_lines.saturating_add(block_len);
+        if block_len > SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_BLOCK_LEN
+            || changed_lines
+                .saturating_mul(SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_CHANGED_RATIO_DENOMINATOR)
+                > line_count
+        {
+            return None;
+        }
+
+        push_plan_run_with_counts(
+            &mut runs,
+            &mut row_count,
+            &mut inline_row_count,
+            FileDiffPlanRun::Modify {
+                old_start: block_start,
+                new_start: block_start,
+                len: block_len,
+            },
+        );
+    }
+
+    let eof_newline = eof_newline_delta(old_text, new_text);
+    if apply_eof_newline_to_plan(&mut runs, eof_newline) {
+        inline_row_count = inline_row_count.saturating_add(1);
+    }
+
+    Some(FileDiffPlan {
+        runs,
+        row_count,
+        inline_row_count,
+        eof_newline,
+    })
 }
 
 fn push_paired_replacement_runs_by_position_to_plan(
@@ -959,11 +1735,15 @@ fn push_paired_replacement_runs_by_position_to_plan(
     new_start: usize,
     new_len: usize,
     runs: &mut Vec<FileDiffPlanRun>,
+    row_count: &mut usize,
+    inline_row_count: &mut usize,
 ) {
     let paired = old_len.min(new_len);
     if paired > 0 {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Modify {
                 old_start,
                 new_start,
@@ -972,8 +1752,10 @@ fn push_paired_replacement_runs_by_position_to_plan(
         );
     }
     if old_len > paired {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Remove {
                 old_start: old_start.saturating_add(paired),
                 len: old_len.saturating_sub(paired),
@@ -981,8 +1763,10 @@ fn push_paired_replacement_runs_by_position_to_plan(
         );
     }
     if new_len > paired {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Add {
                 new_start: new_start.saturating_add(paired),
                 len: new_len.saturating_sub(paired),
@@ -997,6 +1781,8 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
     old_range: std::ops::Range<usize>,
     new_range: std::ops::Range<usize>,
     runs: &mut Vec<FileDiffPlanRun>,
+    row_count: &mut usize,
+    inline_row_count: &mut usize,
     pair_cost_fn: F,
 ) where
     F: Copy
@@ -1012,8 +1798,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
     let inserts = &new_lines[new_range.start..new_range.end];
 
     if deletes.is_empty() {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Add {
                 new_start,
                 len: inserts.len(),
@@ -1022,8 +1810,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
         return;
     }
     if inserts.is_empty() {
-        push_plan_run(
+        push_plan_run_with_counts(
             runs,
+            row_count,
+            inline_row_count,
             FileDiffPlanRun::Remove {
                 old_start,
                 len: deletes.len(),
@@ -1039,6 +1829,8 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
             new_start,
             inserts.len(),
             runs,
+            row_count,
+            inline_row_count,
         );
         return;
     }
@@ -1051,8 +1843,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
     for op in replacement_alignment_ops_with_pair_cost(&deletes, &inserts, pair_cost_fn) {
         match op {
             PlannedReplacementOp::Pair => {
-                push_plan_run(
+                push_plan_run_with_counts(
                     runs,
+                    row_count,
+                    inline_row_count,
                     FileDiffPlanRun::Modify {
                         old_start: old_start.saturating_add(local_old),
                         new_start: new_start.saturating_add(local_new),
@@ -1063,8 +1857,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
                 local_new += 1;
             }
             PlannedReplacementOp::Delete => {
-                push_plan_run(
+                push_plan_run_with_counts(
                     runs,
+                    row_count,
+                    inline_row_count,
                     FileDiffPlanRun::Remove {
                         old_start: old_start.saturating_add(local_old),
                         len: 1,
@@ -1073,8 +1869,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
                 local_old += 1;
             }
             PlannedReplacementOp::Insert => {
-                push_plan_run(
+                push_plan_run_with_counts(
                     runs,
+                    row_count,
+                    inline_row_count,
                     FileDiffPlanRun::Add {
                         new_start: new_start.saturating_add(local_new),
                         len: 1,
@@ -1083,6 +1881,88 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
                 local_new += 1;
             }
         }
+    }
+}
+
+fn build_linear_fallback_side_by_side_plan_with_pair_cost<F>(
+    old_text: &str,
+    new_text: &str,
+    old_lines: &[&str],
+    new_lines: &[&str],
+    pair_cost_fn: F,
+) -> FileDiffPlan
+where
+    F: Copy
+        + for<'a> Fn(
+            &PreparedReplacementLine<'a>,
+            &PreparedReplacementLine<'a>,
+            &mut LevenshteinScratch,
+        ) -> u32,
+{
+    let mut prefix = 0usize;
+    while prefix < old_lines.len()
+        && prefix < new_lines.len()
+        && old_lines[prefix] == new_lines[prefix]
+    {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while prefix + suffix < old_lines.len()
+        && prefix + suffix < new_lines.len()
+        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let old_mid_end = old_lines.len().saturating_sub(suffix);
+    let new_mid_end = new_lines.len().saturating_sub(suffix);
+    let mut runs = Vec::with_capacity(3);
+    let mut row_count = 0usize;
+    let mut inline_row_count = 0usize;
+
+    push_plan_run_with_counts(
+        &mut runs,
+        &mut row_count,
+        &mut inline_row_count,
+        FileDiffPlanRun::Context {
+            old_start: 0,
+            new_start: 0,
+            len: prefix,
+        },
+    );
+
+    push_aligned_replacement_runs_to_plan_with_pair_cost(
+        old_lines,
+        new_lines,
+        prefix..old_mid_end,
+        prefix..new_mid_end,
+        &mut runs,
+        &mut row_count,
+        &mut inline_row_count,
+        pair_cost_fn,
+    );
+
+    push_plan_run_with_counts(
+        &mut runs,
+        &mut row_count,
+        &mut inline_row_count,
+        FileDiffPlanRun::Context {
+            old_start: old_mid_end,
+            new_start: new_mid_end,
+            len: suffix,
+        },
+    );
+
+    let eof_newline = eof_newline_delta(old_text, new_text);
+    if apply_eof_newline_to_plan(&mut runs, eof_newline) {
+        inline_row_count = inline_row_count.saturating_add(1);
+    }
+    FileDiffPlan {
+        runs,
+        row_count,
+        inline_row_count,
+        eof_newline,
     }
 }
 
@@ -1101,8 +1981,27 @@ where
             &mut LevenshteinScratch,
         ) -> u32,
 {
+    if old_lines.len().saturating_add(new_lines.len())
+        >= SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD
+    {
+        return build_linear_fallback_side_by_side_plan_with_pair_cost(
+            old_text,
+            new_text,
+            old_lines,
+            new_lines,
+            pair_cost_fn,
+        );
+    }
+    if let Some(plan) =
+        build_sparse_positional_side_by_side_plan(old_text, new_text, old_lines, new_lines)
+    {
+        return plan;
+    }
+
     let edits = select_side_by_side_edits(old_lines, new_lines);
-    let mut runs = Vec::new();
+    let mut runs = Vec::with_capacity(edits.len());
+    let mut row_count = 0usize;
+    let mut inline_row_count = 0usize;
     let mut old_ix = 0usize;
     let mut new_ix = 0usize;
     let mut i = 0usize;
@@ -1117,8 +2016,10 @@ where
                     new_ix += 1;
                     i += 1;
                 }
-                push_plan_run(
+                push_plan_run_with_counts(
                     &mut runs,
+                    &mut row_count,
+                    &mut inline_row_count,
                     FileDiffPlanRun::Context {
                         old_start: run_old_start,
                         new_start: run_new_start,
@@ -1140,8 +2041,10 @@ where
                 }
 
                 if insert_start == new_ix {
-                    push_plan_run(
+                    push_plan_run_with_counts(
                         &mut runs,
+                        &mut row_count,
+                        &mut inline_row_count,
                         FileDiffPlanRun::Remove {
                             old_start: delete_start,
                             len: old_ix.saturating_sub(delete_start),
@@ -1154,6 +2057,8 @@ where
                         delete_start..old_ix,
                         insert_start..new_ix,
                         &mut runs,
+                        &mut row_count,
+                        &mut inline_row_count,
                         pair_cost_fn,
                     );
                 }
@@ -1164,8 +2069,10 @@ where
                     new_ix += 1;
                     i += 1;
                 }
-                push_plan_run(
+                push_plan_run_with_counts(
                     &mut runs,
+                    &mut row_count,
+                    &mut inline_row_count,
                     FileDiffPlanRun::Add {
                         new_start: insert_start,
                         len: new_ix.saturating_sub(insert_start),
@@ -1176,10 +2083,9 @@ where
     }
 
     let eof_newline = eof_newline_delta(old_text, new_text);
-    apply_eof_newline_to_plan(&mut runs, eof_newline);
-
-    let row_count = runs.iter().map(FileDiffPlanRun::row_len).sum();
-    let inline_row_count = runs.iter().map(FileDiffPlanRun::inline_row_len).sum();
+    if apply_eof_newline_to_plan(&mut runs, eof_newline) {
+        inline_row_count = inline_row_count.saturating_add(1);
+    }
     FileDiffPlan {
         runs,
         row_count,
@@ -1293,10 +2199,41 @@ fn for_each_plan_row_meta(plan: &FileDiffPlan, mut f: impl FnMut(usize, DiffRowM
 
 fn materialize_rows_from_plan(
     plan: &FileDiffPlan,
+    old_text: &Arc<str>,
     old_lines: &[&str],
+    new_text: &Arc<str>,
     new_lines: &[&str],
 ) -> Vec<FileDiffRow> {
     let mut rows = Vec::with_capacity(plan.row_count);
+    materialize_rows_from_plan_into(
+        &mut rows, plan, old_text, old_lines, new_text, new_lines, 0, 0,
+    );
+    rows
+}
+
+fn shared_line_text(text: &Arc<str>, line: &str) -> FileDiffLineText {
+    let base_ptr = text.as_ptr() as usize;
+    let line_ptr = line.as_ptr() as usize;
+    let start = line_ptr.saturating_sub(base_ptr);
+    let end = start.saturating_add(line.len());
+    debug_assert_eq!(text.get(start..end), Some(line));
+    FileDiffLineText::shared_slice(Arc::clone(text), start..end)
+}
+
+fn materialize_rows_from_plan_into(
+    rows: &mut Vec<FileDiffRow>,
+    plan: &FileDiffPlan,
+    old_text: &Arc<str>,
+    old_lines: &[&str],
+    new_text: &Arc<str>,
+    new_lines: &[&str],
+    old_line_offset: u32,
+    new_line_offset: u32,
+) {
+    let old_line_delta = old_line_offset.saturating_sub(1);
+    let new_line_delta = new_line_offset.saturating_sub(1);
+    rows.reserve(plan.row_count);
+    let row_start = rows.len();
 
     for run in &plan.runs {
         match run {
@@ -1308,12 +2245,17 @@ fn materialize_rows_from_plan(
                 for offset in 0..*len {
                     let old_ix = old_start.saturating_add(offset);
                     let new_ix = new_start.saturating_add(offset);
-                    let text: Arc<str> = old_lines.get(old_ix).copied().unwrap_or_default().into();
+                    let text = shared_line_text(
+                        old_text,
+                        old_lines.get(old_ix).copied().unwrap_or_default(),
+                    );
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Context,
-                        old_line: one_based_line_number(old_ix),
-                        new_line: one_based_line_number(new_ix),
-                        old: Some(Arc::clone(&text)),
+                        old_line: one_based_line_number(old_ix)
+                            .map(|line| line.saturating_add(old_line_delta)),
+                        new_line: one_based_line_number(new_ix)
+                            .map(|line| line.saturating_add(new_line_delta)),
+                        old: Some(text.clone()),
                         new: Some(text),
                         eof_newline: None,
                     });
@@ -1324,9 +2266,13 @@ fn materialize_rows_from_plan(
                     let old_ix = old_start.saturating_add(offset);
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Remove,
-                        old_line: one_based_line_number(old_ix),
+                        old_line: one_based_line_number(old_ix)
+                            .map(|line| line.saturating_add(old_line_delta)),
                         new_line: None,
-                        old: Some(old_lines.get(old_ix).copied().unwrap_or_default().into()),
+                        old: Some(shared_line_text(
+                            old_text,
+                            old_lines.get(old_ix).copied().unwrap_or_default(),
+                        )),
                         new: None,
                         eof_newline: None,
                     });
@@ -1338,9 +2284,13 @@ fn materialize_rows_from_plan(
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Add,
                         old_line: None,
-                        new_line: one_based_line_number(new_ix),
+                        new_line: one_based_line_number(new_ix)
+                            .map(|line| line.saturating_add(new_line_delta)),
                         old: None,
-                        new: Some(new_lines.get(new_ix).copied().unwrap_or_default().into()),
+                        new: Some(shared_line_text(
+                            new_text,
+                            new_lines.get(new_ix).copied().unwrap_or_default(),
+                        )),
                         eof_newline: None,
                     });
                 }
@@ -1355,10 +2305,18 @@ fn materialize_rows_from_plan(
                     let new_ix = new_start.saturating_add(offset);
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Modify,
-                        old_line: one_based_line_number(old_ix),
-                        new_line: one_based_line_number(new_ix),
-                        old: Some(old_lines.get(old_ix).copied().unwrap_or_default().into()),
-                        new: Some(new_lines.get(new_ix).copied().unwrap_or_default().into()),
+                        old_line: one_based_line_number(old_ix)
+                            .map(|line| line.saturating_add(old_line_delta)),
+                        new_line: one_based_line_number(new_ix)
+                            .map(|line| line.saturating_add(new_line_delta)),
+                        old: Some(shared_line_text(
+                            old_text,
+                            old_lines.get(old_ix).copied().unwrap_or_default(),
+                        )),
+                        new: Some(shared_line_text(
+                            new_text,
+                            new_lines.get(new_ix).copied().unwrap_or_default(),
+                        )),
                         eof_newline: None,
                     });
                 }
@@ -1367,7 +2325,7 @@ fn materialize_rows_from_plan(
     }
 
     if let Some(marker) = plan.eof_newline {
-        if let Some(last) = rows.last_mut() {
+        if let Some(last) = rows[row_start..].last_mut() {
             last.eof_newline = Some(marker);
         } else {
             rows.push(FileDiffRow {
@@ -1380,8 +2338,6 @@ fn materialize_rows_from_plan(
             });
         }
     }
-
-    rows
 }
 
 #[cfg(test)]
@@ -1503,9 +2459,61 @@ fn make_modify_row(delete: &FileDiffRow, insert: &FileDiffRow) -> FileDiffRow {
 fn replacement_pair_cost(
     old: &PreparedReplacementLine<'_>,
     new: &PreparedReplacementLine<'_>,
-    _scratch: &mut LevenshteinScratch,
+    scratch: &mut LevenshteinScratch,
 ) -> u32 {
-    replacement_pair_cost_with_distance(old, new, |old_trimmed, new_trimmed| {
+    if old.text == new.text {
+        return 0;
+    }
+
+    if let (Some(old_bytes), Some(new_bytes)) = (old.ascii_bytes(), new.ascii_bytes()) {
+        let (shared_prefix, shared_suffix) = shared_boundary_bytes(old_bytes, new_bytes);
+        return replacement_pair_cost_with_shared_boundary(
+            old_bytes,
+            new_bytes,
+            shared_prefix,
+            shared_suffix,
+            |old_trimmed, new_trimmed| scratch.distance_bytes(old_trimmed, new_trimmed) as u32,
+        );
+    }
+
+    replacement_pair_cost_with_distance(old.chars(), new.chars(), |old_trimmed, new_trimmed| {
+        scratch.distance(old_trimmed, new_trimmed) as u32
+    })
+}
+
+#[cfg(feature = "benchmarks")]
+fn replacement_pair_cost_with_scratch(
+    old: &PreparedReplacementLine<'_>,
+    new: &PreparedReplacementLine<'_>,
+    scratch: &mut LevenshteinScratch,
+) -> u32 {
+    replacement_pair_cost(old, new, scratch)
+}
+
+#[cfg(feature = "benchmarks")]
+fn replacement_pair_cost_with_strsim(
+    old: &PreparedReplacementLine<'_>,
+    new: &PreparedReplacementLine<'_>,
+    scratch: &mut LevenshteinScratch,
+) -> u32 {
+    if old.text == new.text {
+        return 0;
+    }
+
+    if let (Some(old_bytes), Some(new_bytes)) = (old.ascii_bytes(), new.ascii_bytes()) {
+        let (shared_prefix, shared_suffix) = shared_boundary_bytes(old_bytes, new_bytes);
+        return replacement_pair_cost_with_shared_boundary(
+            old_bytes,
+            new_bytes,
+            shared_prefix,
+            shared_suffix,
+            |old_trimmed, new_trimmed| {
+                u32::try_from(scratch.distance_bytes(old_trimmed, new_trimmed)).unwrap_or(u32::MAX)
+            },
+        );
+    }
+
+    replacement_pair_cost_with_distance(old.chars(), new.chars(), |old_trimmed, new_trimmed| {
         let old_trimmed_wrapper = CharSlice(old_trimmed);
         let new_trimmed_wrapper = CharSlice(new_trimmed);
         u32::try_from(strsim::generic_levenshtein(
@@ -1516,36 +2524,40 @@ fn replacement_pair_cost(
     })
 }
 
-#[cfg(feature = "benchmarks")]
-fn replacement_pair_cost_with_scratch(
-    old: &PreparedReplacementLine<'_>,
-    new: &PreparedReplacementLine<'_>,
-    scratch: &mut LevenshteinScratch,
+fn replacement_pair_cost_with_distance<T: Eq>(
+    old_units: &[T],
+    new_units: &[T],
+    distance_fn: impl FnOnce(&[T], &[T]) -> u32,
 ) -> u32 {
-    replacement_pair_cost_with_distance(old, new, |old_trimmed, new_trimmed| {
-        scratch.distance(old_trimmed, new_trimmed) as u32
-    })
+    let (shared_prefix, shared_suffix) = shared_boundary_units(old_units, new_units);
+    replacement_pair_cost_with_shared_boundary(
+        old_units,
+        new_units,
+        shared_prefix,
+        shared_suffix,
+        distance_fn,
+    )
 }
 
-fn replacement_pair_cost_with_distance(
-    old: &PreparedReplacementLine<'_>,
-    new: &PreparedReplacementLine<'_>,
-    distance_fn: impl FnOnce(&[char], &[char]) -> u32,
+fn replacement_pair_cost_with_shared_boundary<T: Eq>(
+    old_units: &[T],
+    new_units: &[T],
+    shared_prefix: usize,
+    shared_suffix: usize,
+    distance_fn: impl FnOnce(&[T], &[T]) -> u32,
 ) -> u32 {
-    if old.text == new.text {
-        return 0;
-    }
-
-    let max_len_usize = old.chars.len().max(new.chars.len()).max(1);
+    let max_len_usize = old_units.len().max(new_units.len()).max(1);
     let max_len = max_len_usize as u32;
-    let (shared_prefix, shared_suffix) = shared_boundary_chars(&old.chars, &new.chars);
-    let old_trimmed = &old.chars[shared_prefix..old.chars.len().saturating_sub(shared_suffix)];
-    let new_trimmed = &new.chars[shared_prefix..new.chars.len().saturating_sub(shared_suffix)];
+    let old_trimmed = &old_units[shared_prefix..old_units.len().saturating_sub(shared_suffix)];
+    let new_trimmed = &new_units[shared_prefix..new_units.len().saturating_sub(shared_suffix)];
+    let trimmed_cells = old_trimmed.len().saturating_mul(new_trimmed.len());
 
     // Fast path: if either trimmed side is empty, the distance is exactly
     // the length of the other side — skip the O(n*m) Levenshtein DP.
     let distance = if old_trimmed.is_empty() || new_trimmed.is_empty() {
         (old_trimmed.len() + new_trimmed.len()) as u32
+    } else if trimmed_cells > REPLACEMENT_ALIGN_CELL_BUDGET {
+        u32::try_from(old_trimmed.len().max(new_trimmed.len())).unwrap_or(u32::MAX)
     } else {
         distance_fn(old_trimmed, new_trimmed)
     };
@@ -1565,7 +2577,29 @@ fn replacement_pair_cost_with_distance(
     cost
 }
 
-fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
+fn shared_boundary_bytes(a: &[u8], b: &[u8]) -> (usize, usize) {
+    let min_len = a.len().min(b.len());
+    let word_bytes = std::mem::size_of::<usize>();
+    let mut prefix = 0usize;
+    while prefix.saturating_add(word_bytes) <= min_len
+        && a[prefix..prefix + word_bytes] == b[prefix..prefix + word_bytes]
+    {
+        prefix += word_bytes;
+    }
+    while prefix < min_len && a[prefix] == b[prefix] {
+        prefix += 1;
+    }
+
+    let max_suffix = min_len.saturating_sub(prefix);
+    let mut suffix = 0usize;
+    while suffix < max_suffix && a[a.len() - 1 - suffix] == b[b.len() - 1 - suffix] {
+        suffix += 1;
+    }
+
+    (prefix, suffix)
+}
+
+fn shared_boundary_units<T: Eq>(a: &[T], b: &[T]) -> (usize, usize) {
     let mut prefix = 0usize;
     while prefix < a.len() && prefix < b.len() && a[prefix] == b[prefix] {
         prefix += 1;
@@ -1578,6 +2612,11 @@ fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
     }
 
     (prefix, suffix)
+}
+
+#[cfg(test)]
+fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
+    shared_boundary_units(a, b)
 }
 
 /// Patience/histogram diff algorithm.
@@ -1675,11 +2714,17 @@ fn patience_recurse<'a>(
         );
 
         if anchors.is_empty() {
-            // No unique anchors — fall back to Myers for this region.
-            edits.extend(myers_edits(
-                &old[inner_old_start..inner_old_end],
-                &new[inner_new_start..inner_new_end],
-            ));
+            let old_inner = &old[inner_old_start..inner_old_end];
+            let new_inner = &new[inner_new_start..inner_new_end];
+            // Large anchorless regions with matching line counts tend to be
+            // structurally aligned already; preserve same-position context
+            // lines linearly instead of paying for a full Myers trace.
+            if should_use_patience_positional_fallback(old_inner, new_inner) {
+                edits.extend(positional_fallback_edits(old_inner, new_inner));
+            } else {
+                // No unique anchors — fall back to Myers for this region.
+                edits.extend(myers_edits(old_inner, new_inner));
+            }
         } else {
             // Recursively diff between anchors.
             let mut oi = inner_old_start;
@@ -1731,6 +2776,11 @@ fn patience_recurse<'a>(
     }
 
     edits
+}
+
+fn should_use_patience_positional_fallback(old: &[&str], new: &[&str]) -> bool {
+    old.len() == new.len()
+        && old.len().saturating_add(new.len()) >= PATIENCE_POSITIONAL_FALLBACK_LINE_THRESHOLD
 }
 
 /// Find lines that are unique in both old and new within the given ranges,
@@ -1894,12 +2944,91 @@ fn myers_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     edits
 }
 
+fn positional_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
+    let mut prefix = 0usize;
+    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while prefix + suffix < old.len()
+        && prefix + suffix < new.len()
+        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let old_mid_end = old.len().saturating_sub(suffix);
+    let new_mid_end = new.len().saturating_sub(suffix);
+    let old_mid = &old[prefix..old_mid_end];
+    let new_mid = &new[prefix..new_mid_end];
+    let paired = old_mid.len().min(new_mid.len());
+
+    let mut edits = Vec::new();
+    for i in 0..prefix {
+        edits.push(Edit {
+            kind: EditKind::Equal,
+            old: Some(old[i]),
+            new: Some(new[i]),
+        });
+    }
+
+    for i in 0..paired {
+        if old_mid[i] == new_mid[i] {
+            edits.push(Edit {
+                kind: EditKind::Equal,
+                old: Some(old_mid[i]),
+                new: Some(new_mid[i]),
+            });
+        } else {
+            edits.push(Edit {
+                kind: EditKind::Delete,
+                old: Some(old_mid[i]),
+                new: None,
+            });
+            edits.push(Edit {
+                kind: EditKind::Insert,
+                old: None,
+                new: Some(new_mid[i]),
+            });
+        }
+    }
+
+    for &line in &old_mid[paired..] {
+        edits.push(Edit {
+            kind: EditKind::Delete,
+            old: Some(line),
+            new: None,
+        });
+    }
+    for &line in &new_mid[paired..] {
+        edits.push(Edit {
+            kind: EditKind::Insert,
+            old: None,
+            new: Some(line),
+        });
+    }
+
+    for i in 0..suffix {
+        edits.push(Edit {
+            kind: EditKind::Equal,
+            old: Some(old[old_mid_end + i]),
+            new: Some(new[new_mid_end + i]),
+        });
+    }
+
+    edits
+}
+
 pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     // Guard against overflow: if n + m exceeds isize::MAX, use linear fallback.
     let Some(sum) = old.len().checked_add(new.len()) else {
         return myers_fallback_edits(old, new);
     };
     if sum > isize::MAX as usize {
+        return myers_fallback_edits(old, new);
+    }
+    if sum > u32::MAX as usize {
         return myers_fallback_edits(old, new);
     }
 
@@ -1911,8 +3040,15 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
     let Some(v_size) = max.checked_mul(2).and_then(|v| v.checked_add(1)) else {
         return myers_fallback_edits(old, new);
     };
-    let mut v = vec![0isize; v_size];
-    let mut trace: Vec<Vec<isize>> = Vec::with_capacity(max + 1);
+    let mut v = vec![0u32; v_size];
+
+    // Compact trace: store only active diagonals per depth.
+    // At depth d, active diagonals are -d, -d+2, ..., d (d+1 values).
+    // Depth d starts at flat index d*(d+1)/2.
+    // This eliminates per-depth Vec allocations and reduces trace memory from
+    // d * (2*(n+m)+1) to d*(d+1)/2 elements.
+    let mut trace = Vec::<u32>::new();
+
     {
         let mut x = 0isize;
         let mut y = 0isize;
@@ -1920,18 +3056,21 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
             x += 1;
             y += 1;
         }
-        v[offset as usize] = x;
+        v[offset as usize] = x as u32;
     }
-    trace.push(v.clone());
+    // Store depth 0: only diagonal 0
+    trace.push(v[offset as usize]);
 
     let mut last_d = 0usize;
-    if v[offset as usize] >= n && v[offset as usize] >= m {
+    if v[offset as usize] >= n as u32 && v[offset as usize] >= m as u32 {
         last_d = 0;
     } else {
         'outer: for d in 1..=max {
             let d_isize = d as isize;
-            let mut next = v.clone();
 
+            // Update v in-place: at depth d, writes go to diagonals with
+            // the same parity as d, reads come from the opposite parity
+            // (depth d-1 values), so there is no aliasing.
             for k in (-d_isize..=d_isize).step_by(2) {
                 let k_idx = (offset + k) as usize;
 
@@ -1943,24 +3082,26 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
                     v[(offset + k - 1) as usize] + 1
                 };
 
-                let mut x = x;
+                let mut x = x as isize;
                 let mut y = x - k;
                 while x < n && y < m && old[x as usize] == new[y as usize] {
                     x += 1;
                     y += 1;
                 }
-                next[k_idx] = x;
+                v[k_idx] = x as u32;
 
                 if x >= n && y >= m {
-                    v = next;
-                    trace.push(v.clone());
+                    for k2 in (-d_isize..=d_isize).step_by(2) {
+                        trace.push(v[(offset + k2) as usize]);
+                    }
                     last_d = d;
                     break 'outer;
                 }
             }
 
-            v = next;
-            trace.push(v.clone());
+            for k2 in (-d_isize..=d_isize).step_by(2) {
+                trace.push(v[(offset + k2) as usize]);
+            }
         }
     }
 
@@ -1968,7 +3109,7 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
         return Vec::new();
     }
 
-    if last_d == 0 && n == m && v[offset as usize] == n {
+    if last_d == 0 && n == m && v[offset as usize] == n as u32 {
         return old
             .iter()
             .map(|&s| Edit {
@@ -1984,19 +3125,21 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
     let mut rev: Vec<Edit<'a>> = Vec::with_capacity(last_d + (n + m) as usize);
 
     for d in (1..=last_d).rev() {
-        let v = &trace[d - 1];
+        let prev_depth = d - 1;
         let d_isize = d as isize;
         let k = x - y;
 
         let prev_k = if k == -d_isize
-            || (k != d_isize && v[(offset + k - 1) as usize] < v[(offset + k + 1) as usize])
+            || (k != d_isize
+                && compact_trace_get(&trace, prev_depth, k - 1)
+                    < compact_trace_get(&trace, prev_depth, k + 1))
         {
             k + 1
         } else {
             k - 1
         };
 
-        let prev_x = v[(offset + prev_k) as usize];
+        let prev_x = compact_trace_get(&trace, prev_depth, prev_k) as isize;
         let prev_y = prev_x - prev_k;
 
         while x > prev_x && y > prev_y {
@@ -2054,6 +3197,17 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
 
     rev.reverse();
     rev
+}
+
+/// Access diagonal `k` at `depth` in the compact trace buffer.
+/// At depth d, active diagonals are -d, -d+2, ..., d (d+1 values).
+/// Base offset = d*(d+1)/2, index within depth = (k+d)/2.
+#[inline]
+fn compact_trace_get(trace: &[u32], depth: usize, k: isize) -> u32 {
+    let d = depth as isize;
+    let base = depth * (depth + 1) / 2;
+    let idx = ((k + d) / 2) as usize;
+    trace[base + idx]
 }
 
 #[cfg(test)]
@@ -2119,6 +3273,68 @@ mod tests {
         }
 
         (old_line_to_row, new_line_to_row)
+    }
+
+    #[test]
+    fn file_slice_text_resolved_clamps_to_utf8_char_boundaries() {
+        let text = "aÄ日z";
+        let temp_path = std::env::temp_dir().join(format!(
+            "gitcomet_file_diff_utf8_slice_{}_{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be monotonic enough for test temp path")
+                .as_nanos()
+        ));
+        std::fs::write(&temp_path, text.as_bytes()).expect("write UTF-8 file slice fixture");
+
+        let raw_text =
+            FileDiffLineText::file_slice(Arc::new(temp_path.clone()), 0..text.len(), false, false);
+
+        let (slice_text, resolved_range) = raw_text
+            .slice_text_resolved(2..6)
+            .expect("UTF-8 file slice should resolve");
+        assert_eq!(slice_text.as_ref(), "日");
+        assert_eq!(resolved_range, 3..6);
+
+        let (empty_slice, empty_range) = raw_text
+            .slice_text_resolved(2..5)
+            .expect("partial UTF-8 slice should still resolve");
+        assert!(empty_slice.is_empty());
+        assert_eq!(empty_range, 3..3);
+
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn side_by_side_rows_share_backing_for_context_and_reuse_row_storage_on_clone() {
+        let rows = side_by_side_rows("alpha\nbeta\n", "alpha\nbeta changed\n");
+        assert_eq!(rows.len(), 2);
+
+        let context = &rows[0];
+        assert!(
+            context
+                .old
+                .as_ref()
+                .unwrap()
+                .shares_backing_with(context.new.as_ref().unwrap())
+        );
+
+        let cloned = rows[1].clone();
+        assert!(
+            rows[1]
+                .old
+                .as_ref()
+                .unwrap()
+                .shares_backing_with(cloned.old.as_ref().unwrap())
+        );
+        assert!(
+            rows[1]
+                .new
+                .as_ref()
+                .unwrap()
+                .shares_backing_with(cloned.new.as_ref().unwrap())
+        );
     }
 
     fn emitted_line_prefix_counts_from_rows(rows: &[FileDiffRow]) -> (Vec<usize>, Vec<usize>) {
@@ -2327,13 +3543,49 @@ mod tests {
     }
 
     #[test]
+    fn ascii_prepared_replacement_line_defers_char_allocation_until_needed() {
+        let line = PreparedReplacementLine::new("plain-ascii");
+
+        assert_eq!(line.ascii_bytes(), Some("plain-ascii".as_bytes()));
+        assert!(line.chars.get().is_none());
+
+        let chars = line.chars();
+        assert_eq!(
+            chars,
+            ['p', 'l', 'a', 'i', 'n', '-', 'a', 's', 'c', 'i', 'i']
+        );
+        assert!(line.chars.get().is_some());
+    }
+
+    #[test]
+    fn prepare_replacement_text_cache_ids_dedups_duplicate_texts() {
+        let lines = prepare_replacement_lines(&["alpha", "beta", "alpha", "gamma", "beta"]);
+        let cache_ids = prepare_replacement_text_cache_ids(&lines);
+
+        assert_eq!(cache_ids.ids, vec![0, 1, 0, 2, 1]);
+        assert_eq!(cache_ids.unique_texts, 3);
+        assert!(cache_ids.has_duplicates);
+    }
+
+    #[test]
     fn shared_boundary_counts_unicode_codepoints() {
         let old = PreparedReplacementLine::new("prefix-é-suffix");
         let new = PreparedReplacementLine::new("prefix-ê-suffix");
 
         assert_eq!(
-            shared_boundary_chars(&old.chars, &new.chars),
+            shared_boundary_chars(old.chars(), new.chars()),
             ("prefix-".chars().count(), "-suffix".chars().count())
+        );
+    }
+
+    #[test]
+    fn shared_boundary_bytes_matches_generic_ascii_boundaries() {
+        let old = b"prefix-before_source_001-suffix";
+        let new = b"prefix-after_source_002-suffix";
+
+        assert_eq!(
+            shared_boundary_bytes(old, new),
+            shared_boundary_units(old, new)
         );
     }
 
@@ -2493,16 +3745,63 @@ mod tests {
     }
 
     #[test]
+    fn append_side_by_side_rows_with_offsets_matches_materialized_rows() {
+        let old = "keep\nold-only\nchange-me\n";
+        let new = "keep\nchange-you\nnew-only\n";
+        let mut appended = vec![FileDiffRow {
+            kind: FileDiffRowKind::Context,
+            old_line: Some(1),
+            new_line: Some(1),
+            old: Some("prefix".into()),
+            new: Some("prefix".into()),
+            eof_newline: None,
+        }];
+
+        append_side_by_side_rows_with_offsets(&mut appended, old, new, 10, 20);
+
+        let mut expected = vec![FileDiffRow {
+            kind: FileDiffRowKind::Context,
+            old_line: Some(1),
+            new_line: Some(1),
+            old: Some("prefix".into()),
+            new: Some("prefix".into()),
+            eof_newline: None,
+        }];
+        expected.extend(side_by_side_rows(old, new).into_iter().map(|row| {
+            FileDiffRow {
+                kind: row.kind,
+                old_line: row
+                    .old_line
+                    .map(|line| line.saturating_add(10).saturating_sub(1)),
+                new_line: row
+                    .new_line
+                    .map(|line| line.saturating_add(20).saturating_sub(1)),
+                old: row.old,
+                new: row.new,
+                eof_newline: row.eof_newline,
+            }
+        }));
+
+        assert_eq!(appended, expected);
+    }
+
+    #[test]
     fn plan_metadata_helpers_match_materialized_rows() {
         let old = "keep\nremove only\nbefore change\nshared tail\n";
         let new = "keep\ninsert only\nafter change\nshared tail\nextra add\n";
 
         let plan = side_by_side_plan(old, new);
         let rows = side_by_side_rows(old, new);
+        let inline_row_count = rows.len()
+            + rows
+                .iter()
+                .filter(|row| row.kind == FileDiffRowKind::Modify)
+                .count();
         let old_line_count = old.lines().count();
         let new_line_count = new.lines().count();
 
         assert_eq!(plan.row_count, rows.len());
+        assert_eq!(plan.inline_row_count, inline_row_count);
         assert_eq!(
             plan_row_region_anchors(&plan),
             compute_row_region_anchors(&rows)
@@ -2634,6 +3933,67 @@ mod tests {
     }
 
     #[test]
+    fn positional_fallback_preserves_same_position_context_lines() {
+        let old = ["repeat", "old-a", "repeat", "old-b", "repeat"];
+        let new = ["repeat", "new-a", "repeat", "new-b", "repeat"];
+        let edits = positional_fallback_edits(&old, &new);
+
+        assert_eq!(
+            edits.iter().map(|edit| edit.kind).collect::<Vec<_>>(),
+            vec![
+                EditKind::Equal,
+                EditKind::Delete,
+                EditKind::Insert,
+                EditKind::Equal,
+                EditKind::Delete,
+                EditKind::Insert,
+                EditKind::Equal,
+            ]
+        );
+    }
+
+    #[test]
+    fn large_anchorless_repeated_regions_keep_context_localized() {
+        let line_count = 700usize;
+        let mut old_lines = Vec::with_capacity(line_count);
+        let mut new_lines = Vec::with_capacity(line_count);
+
+        for ix in 0..line_count {
+            if ix % 2 == 0 {
+                old_lines.push("repeat".to_string());
+                new_lines.push("repeat".to_string());
+            } else {
+                old_lines.push(format!("before-{ix:04}"));
+                new_lines.push(format!("after-{ix:04}"));
+            }
+        }
+
+        let old = format!("{}\n", old_lines.join("\n"));
+        let new = format!("{}\n", new_lines.join("\n"));
+        let rows = side_by_side_rows(&old, &new);
+
+        assert_eq!(rows.len(), line_count);
+        for (ix, row) in rows.iter().enumerate() {
+            let expected_kind = if ix % 2 == 0 {
+                FileDiffRowKind::Context
+            } else {
+                FileDiffRowKind::Modify
+            };
+            assert_eq!(row.kind, expected_kind, "unexpected row kind at index {ix}");
+        }
+    }
+
+    #[test]
+    fn patience_lis_handles_empty_and_descending_inputs_without_panicking() {
+        assert!(patience_lis(&[]).is_empty());
+
+        let descending = [(0usize, 3usize), (1, 2), (2, 1)];
+        let lis = patience_lis(&descending);
+        assert_eq!(lis.len(), 1);
+        assert!(descending.contains(&lis[0]));
+    }
+
+    #[test]
     fn side_by_side_large_files_keep_distant_changes_localized() {
         let line_count = 6_000;
         let mut old_lines: Vec<String> = (0..line_count).map(|i| format!("line-{i:05}")).collect();
@@ -2670,6 +4030,60 @@ mod tests {
         assert_eq!(changed[0].new_line, Some((first_change_ix + 1) as u32));
         assert_eq!(changed[1].old_line, Some((second_change_ix + 1) as u32));
         assert_eq!(changed[1].new_line, Some((second_change_ix + 1) as u32));
+    }
+
+    #[test]
+    fn plan_inline_row_count_tracks_eof_newline_rewrite() {
+        let old = "keep\nshared tail\n";
+        let new = "keep\nshared tail";
+
+        let plan = side_by_side_plan(old, new);
+        let rows = side_by_side_rows(old, new);
+        let inline_row_count = rows.len()
+            + rows
+                .iter()
+                .filter(|row| row.kind == FileDiffRowKind::Modify)
+                .count();
+
+        assert_eq!(plan.eof_newline, Some(FileDiffEofNewline::MissingInNew));
+        assert_eq!(plan.row_count, rows.len());
+        assert_eq!(plan.inline_row_count, inline_row_count);
+    }
+
+    #[test]
+    fn direct_linear_fallback_plan_merges_prefix_middle_and_suffix_runs() {
+        let old_text = "keep-1\nkeep-2\nold-a\nold-b\nkeep-3\n";
+        let new_text = "keep-1\nkeep-2\nnew-a\nnew-b\nkeep-3\n";
+        let old_lines = split_lines(old_text);
+        let new_lines = split_lines(new_text);
+        let plan = build_linear_fallback_side_by_side_plan_with_pair_cost(
+            old_text,
+            new_text,
+            old_lines.as_slice(),
+            new_lines.as_slice(),
+            replacement_pair_cost,
+        );
+
+        assert_eq!(
+            plan.runs,
+            vec![
+                FileDiffPlanRun::Context {
+                    old_start: 0,
+                    new_start: 0,
+                    len: 2,
+                },
+                FileDiffPlanRun::Modify {
+                    old_start: 2,
+                    new_start: 2,
+                    len: 2,
+                },
+                FileDiffPlanRun::Context {
+                    old_start: 4,
+                    new_start: 4,
+                    len: 1,
+                },
+            ]
+        );
     }
 
     #[cfg(feature = "benchmarks")]
@@ -2710,6 +4124,91 @@ mod tests {
                 current, strsim,
                 "backend parity mismatch for old={old:?} new={new:?}"
             );
+        }
+    }
+
+    #[cfg(feature = "benchmarks")]
+    #[test]
+    fn levenshtein_scratch_matches_strsim_generic() {
+        let mut scratch = LevenshteinScratch::default();
+
+        for (old, new) in [
+            ("before_source_001", "after_source_002"),
+            ("prefix-only-change", "prefix-only-change extended"),
+            ("short", "considerably-longer-string-for-levenshtein"),
+            ("", "abc"),
+        ] {
+            let old_bytes = old.as_bytes();
+            let new_bytes = new.as_bytes();
+            let old_wrapper = ByteSlice(old_bytes);
+            let new_wrapper = ByteSlice(new_bytes);
+            assert_eq!(
+                scratch.distance(old_bytes, new_bytes),
+                strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+                "ascii mismatch for old={old:?} new={new:?}"
+            );
+        }
+
+        for (old, new) in [("café", "caff"), ("prefix-é-suffix", "prefix-ê-suffix")] {
+            let old_chars = old.chars().collect::<Vec<_>>();
+            let new_chars = new.chars().collect::<Vec<_>>();
+            let old_wrapper = CharSlice(old_chars.as_slice());
+            let new_wrapper = CharSlice(new_chars.as_slice());
+            assert_eq!(
+                scratch.distance(old_chars.as_slice(), new_chars.as_slice()),
+                strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+                "unicode mismatch for old={old:?} new={new:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "benchmarks")]
+    #[test]
+    fn bitparallel_ascii_levenshtein_matches_strsim_generic() {
+        fn generate_cases(alphabet: &[u8], max_len: usize) -> Vec<Vec<u8>> {
+            let mut cases = vec![Vec::new()];
+            let mut frontier = vec![Vec::new()];
+
+            for _ in 0..max_len {
+                let mut next = Vec::new();
+                for prefix in &frontier {
+                    for &byte in alphabet {
+                        let mut candidate = prefix.clone();
+                        candidate.push(byte);
+                        next.push(candidate);
+                    }
+                }
+                cases.extend(next.iter().cloned());
+                frontier = next;
+            }
+
+            cases
+        }
+
+        let cases = generate_cases(b"ab_", 4);
+        let mut scratch = LevenshteinScratch::default();
+
+        for old in &cases {
+            for new in &cases {
+                let old_wrapper = ByteSlice(old.as_slice());
+                let new_wrapper = ByteSlice(new.as_slice());
+                let expected = strsim::generic_levenshtein(&old_wrapper, &new_wrapper);
+
+                assert_eq!(
+                    bitparallel_levenshtein_bytes(old.as_slice(), new.as_slice()),
+                    Some(expected),
+                    "bitparallel mismatch for old={:?} new={:?}",
+                    String::from_utf8_lossy(old),
+                    String::from_utf8_lossy(new)
+                );
+                assert_eq!(
+                    scratch.distance_bytes(old.as_slice(), new.as_slice()),
+                    expected,
+                    "scratch ascii mismatch for old={:?} new={:?}",
+                    String::from_utf8_lossy(old),
+                    String::from_utf8_lossy(new)
+                );
+            }
         }
     }
 }

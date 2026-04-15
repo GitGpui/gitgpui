@@ -109,7 +109,7 @@ pub fn context_menu_entry(
         .flex()
         .items_center()
         .gap_2()
-        .font_family("monospace")
+        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_xs()
         .text_color(theme.colors.text_muted);
 
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn context_menu_icon_color_preserves_destructive_and_warning_semantics() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         assert_eq!(
             context_menu_icon_color(theme, false, "Delete branch", Some("icons/trash.svg")),
             theme.colors.danger

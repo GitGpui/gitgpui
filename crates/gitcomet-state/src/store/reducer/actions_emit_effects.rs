@@ -1,13 +1,13 @@
 use super::util::{
-    clear_banner_error_for_repo, diff_reload_effects, diff_target_is_svg,
-    diff_target_wants_image_preview, format_failure_summary, push_action_log, push_command_log,
-    refresh_full_effects, refresh_primary_effects, selected_conflict_target_path,
-    start_conflict_target_reload,
+    SelectedConflictTarget, apply_selected_diff_load_plan_state, clear_banner_error_for_repo,
+    diff_reload_effects, format_failure_summary, push_action_log, push_command_log,
+    refresh_full_effects, refresh_primary_effects, selected_conflict_target,
+    selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{AppState, Loadable, RepoId, RepoState};
-use crate::msg::{Effect, RepoCommandKind};
+use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
-use gitcomet_core::domain::{DiffTarget, FileConflictKind};
+use gitcomet_core::domain::FileConflictKind;
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
 use rustc_hash::FxHashMap as HashMap;
@@ -117,18 +117,34 @@ pub(super) fn force_remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effec
     vec![Effect::ForceRemoveWorktree { repo_id, path }]
 }
 
-pub(super) fn add_submodule(repo_id: RepoId, url: String, path: PathBuf) -> Vec<Effect> {
+pub(super) fn add_submodule(
+    repo_id: RepoId,
+    url: String,
+    path: PathBuf,
+    branch: Option<String>,
+    name: Option<String>,
+    force: bool,
+    approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+) -> Vec<Effect> {
     vec![Effect::AddSubmodule {
         repo_id,
         url,
         path,
+        branch,
+        name,
+        force,
+        approved_sources,
         auth: None,
     }]
 }
 
-pub(super) fn update_submodules(repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn update_submodules(
+    repo_id: RepoId,
+    approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+) -> Vec<Effect> {
     vec![Effect::UpdateSubmodules {
         repo_id,
+        approved_sources,
         auth: None,
     }]
 }
@@ -141,7 +157,7 @@ pub(super) fn stage_path(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::StagePath { repo_id, path }]
 }
 
-pub(super) fn stage_paths(repo_id: RepoId, paths: Vec<PathBuf>) -> Vec<Effect> {
+pub(super) fn stage_paths(repo_id: RepoId, paths: RepoPathList) -> Vec<Effect> {
     vec![Effect::StagePaths { repo_id, paths }]
 }
 
@@ -149,7 +165,7 @@ pub(super) fn unstage_path(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::UnstagePath { repo_id, path }]
 }
 
-pub(super) fn unstage_paths(repo_id: RepoId, paths: Vec<PathBuf>) -> Vec<Effect> {
+pub(super) fn unstage_paths(repo_id: RepoId, paths: RepoPathList) -> Vec<Effect> {
     vec![Effect::UnstagePaths { repo_id, paths }]
 }
 
@@ -517,6 +533,7 @@ pub(super) fn commit_finished(
             repo_state.diff_state.diff_target = None;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             push_action_log(
@@ -566,6 +583,7 @@ pub(super) fn commit_amend_finished(
             repo_state.diff_state.diff_target = None;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             push_action_log(
@@ -621,7 +639,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::ExportPatch { .. }
             | RepoCommandKind::ApplyPatch { .. }
             | RepoCommandKind::AddSubmodule { .. }
-            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::UpdateSubmodules { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
             | RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
@@ -644,7 +662,7 @@ pub(super) fn repo_command_finished(
     let refresh_submodules = matches!(
         &command,
         RepoCommandKind::AddSubmodule { .. }
-            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::UpdateSubmodules { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
@@ -686,6 +704,10 @@ pub(super) fn repo_command_finished(
         _ => {}
     }
 
+    if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
+        repo_state.submodule_add_in_flight = None;
+    }
+
     match result {
         Ok(output) => {
             repo_state.last_error = None;
@@ -701,6 +723,7 @@ pub(super) fn repo_command_finished(
                 repo_state.diff_state.diff_target = None;
                 repo_state.diff_state.diff = Loadable::NotLoaded;
                 repo_state.diff_state.diff_file = Loadable::NotLoaded;
+                repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
                 repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
             }
@@ -739,35 +762,28 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::ApplyWorktreePatch { .. }
     ) && let Some(target) = repo_state.diff_state.diff_target.clone()
     {
-        if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
+        if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
-            extra_effects.extend(start_conflict_target_reload(repo_state, conflict_path));
+            match conflict_target {
+                SelectedConflictTarget::Current => {
+                    extra_effects.extend(start_current_conflict_target_reload(repo_state));
+                }
+                SelectedConflictTarget::Path(path) => {
+                    extra_effects.extend(start_conflict_target_reload(repo_state, path));
+                }
+            }
         } else {
-            repo_state.diff_state.diff = Loadable::Loading;
-            let supports_file = matches!(
-                &target,
-                DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-            );
-            let wants_image = diff_target_wants_image_preview(&target);
-            let is_svg = diff_target_is_svg(&target);
-            repo_state.diff_state.diff_file = if supports_file && (!wants_image || is_svg) {
-                Loadable::Loading
-            } else {
-                Loadable::NotLoaded
-            };
-            repo_state.diff_state.diff_file_image = if supports_file && wants_image {
-                Loadable::Loading
-            } else {
-                Loadable::NotLoaded
-            };
+            let load_plan = selected_diff_load_plan(repo_state, &target);
+            apply_selected_diff_load_plan_state(repo_state, load_plan);
             repo_state.bump_diff_state_rev();
-            extra_effects.extend(diff_reload_effects(repo_id, target));
+            extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
-    let mut effects = refresh_full_effects(repo_state);
+    let mut effects = refresh_full_effects(repo_state, state.git_log_settings);
     effects.extend(extra_effects);
     if clear_banner {
         clear_banner_error_for_repo(state, repo_id);
