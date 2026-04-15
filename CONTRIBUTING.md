@@ -86,7 +86,7 @@ The release workflow `.github/workflows/build-release-artifacts.yml` builds and 
 - Windows: portable ZIP + MSI
 - Linux: tar.gz + AppImage + .deb
 - macOS: DMG + tar.gz for `arm64` and `x86_64`
-- Homebrew cask asset: `gitcomet.rb` (generated from macOS DMG artifacts and their SHA256 values)
+- Homebrew cask asset: `gitcomet.rb` (generated from macOS DMG artifacts and Linux AppImages plus their SHA256 values)
 - Homebrew CLI formula asset: `gitcomet-cli.rb` (generated from macOS + Linux x86_64 tarballs and their SHA256 values)
 
 ### Homebrew deployment
