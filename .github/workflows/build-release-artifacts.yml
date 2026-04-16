@@ -68,7 +68,7 @@ env:
 jobs:
   prepare:
     name: Normalize release metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.norm.outputs.tag }}
@@ -348,10 +348,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Build Linux release artifacts on Ubuntu 22.04 so the linked
+          # system libraries stay compatible with Ubuntu 22.04+.
           - target_platform: x86_64-linux
             artifact_arch: x86_64
             deb_arch: amd64
-            runs_on: ubuntu-24.04
+            runs_on: ubuntu-22.04
             build_appimage: true
             appimagetool_asset: appimagetool-x86_64.AppImage
             appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
@@ -359,7 +361,7 @@ jobs:
           - target_platform: aarch64-linux
             artifact_arch: arm64
             deb_arch: arm64
-            runs_on: ubuntu-24.04-arm
+            runs_on: ubuntu-22.04-arm
             build_appimage: true
             appimagetool_asset: appimagetool-aarch64.AppImage
             appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
@@ -708,7 +710,7 @@ jobs:
 
   publish_release_assets:
     name: Attach assets and checksums to GitHub release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     needs: [prepare, build_windows, build_linux, build_macos]
     env:
