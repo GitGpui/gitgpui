@@ -20,20 +20,16 @@ Available for Linux, Windows, and macOS.
 
 Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
 
-#### Homebrew (macOs / Linux)
+#### Homebrew (macOS / Linux)
 
-install app from tap (recommended):
+App and `gitcomet` command from tap:
 
 ```bash
 brew tap auto-explore/gitcomet
 brew install --cask gitcomet
 ```
 
-optional CLI install:
-
-```bash
-brew install gitcomet-cli
-```
+On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, AUR package, release tarball, or `.deb` instead.
 
 #### AUR (Arch Linux)
 
