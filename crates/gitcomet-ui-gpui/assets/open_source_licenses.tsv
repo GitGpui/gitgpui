@@ -392,7 +392,7 @@ litrs	1.0.0	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
 log	0.4.29	MIT OR Apache-2.0
 loop9	0.1.5	MIT
-lru	0.16.4	MIT
+lru	0.17.0	MIT
 lru-slab	0.1.2	MIT OR Apache-2.0 OR Zlib
 lyon	1.0.19	MIT OR Apache-2.0
 lyon_algorithms	1.0.19	MIT OR Apache-2.0
@@ -686,7 +686,7 @@ tree-sitter-javascript	0.25.0	MIT
 tree-sitter-json	0.24.8	MIT
 tree-sitter-kotlin-sg	0.4.0	MIT
 tree-sitter-language	0.1.7	MIT
-tree-sitter-lua	0.4.1	MIT
+tree-sitter-lua	0.5.0	MIT
 tree-sitter-make	1.1.1	MIT
 tree-sitter-md	0.3.2	MIT
 tree-sitter-objc	3.0.2	MIT
@@ -696,7 +696,7 @@ tree-sitter-python	0.25.0	MIT
 tree-sitter-r	1.2.0	MIT
 tree-sitter-ruby	0.23.1	MIT
 tree-sitter-rust	0.24.2	MIT
-tree-sitter-scala	0.23.4	MIT
+tree-sitter-scala	0.25.0	MIT
 tree-sitter-sequel	0.3.11	MIT
 tree-sitter-swift	0.7.1	MIT
 tree-sitter-toml-ng	0.7.0	MIT
