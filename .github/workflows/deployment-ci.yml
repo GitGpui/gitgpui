@@ -121,8 +121,8 @@ jobs:
           grep -Fq 'storage_container: "$web"' .github/workflows/release-manual-main.yml
           grep -Fq 'storage_prefix: "windows"' .github/workflows/release-manual-main.yml
           grep -Fq 'package_base_url: "https://apt.gitcomet.dev/windows"' .github/workflows/release-manual-main.yml
-          grep -Fq 'product_id: ${{ vars.MICROSOFT_STORE_PRODUCT_ID }}' .github/workflows/release-manual-main.yml
-          grep -Fq 'package_languages: ${{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}' .github/workflows/release-manual-main.yml
+          grep -Fq 'product_id: $''{{ vars.MICROSOFT_STORE_PRODUCT_ID }}' .github/workflows/release-manual-main.yml
+          grep -Fq 'package_languages: $''{{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
