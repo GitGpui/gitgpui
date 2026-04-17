@@ -311,6 +311,66 @@ fn wait_for_extract_finished(
 }
 
 #[test]
+fn unavailable_git_effect_emits_synthetic_repo_command_error() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    let state = AppState {
+        git_runtime: gitcomet_core::process::GitRuntimeState {
+            preference: gitcomet_core::process::GitExecutablePreference::Custom(PathBuf::new()),
+            availability: gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                detail: "Custom Git executable is not configured. Choose an executable or switch back to System PATH.".to_string(),
+            },
+        },
+        ..AppState::default()
+    };
+
+    schedule_effect_with_state_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        state,
+        msg_tx,
+        Effect::FetchAll {
+            repo_id: RepoId(7),
+            prune: true,
+            auth: None,
+        },
+    );
+
+    let msg = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected synthetic unavailable-git message");
+    match msg {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command,
+            result,
+        }) => {
+            assert_eq!(repo_id, RepoId(7));
+            assert_eq!(command, RepoCommandKind::FetchAll);
+            let err = result.expect_err("expected unavailable-git failure");
+            assert!(
+                err.to_string()
+                    .contains("Custom Git executable is not configured"),
+                "unexpected error: {err}"
+            );
+        }
+        other => panic!("unexpected message: {other:?}"),
+    }
+}
+
+#[test]
 fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     if !super::require_git_shell_for_store_tests() {
         return;
@@ -4285,12 +4345,17 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 url: "https://example.com/repo.git".to_string(),
                 path: PathBuf::from("sub"),
+                branch: None,
+                name: None,
+                force: false,
+                approved_sources: Vec::new(),
                 auth: None,
             },
             1,
         ),
         (
             Effect::UpdateSubmodules {
+                approved_sources: Vec::new(),
                 repo_id,
                 auth: None,
             },

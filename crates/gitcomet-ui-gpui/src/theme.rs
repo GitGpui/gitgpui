@@ -1246,6 +1246,19 @@ mod tests {
     }
 
     #[test]
+    fn built_in_sunset_veil_theme_loads_from_embedded_json() {
+        let theme = AppTheme::from_key("sunset_veil").expect("Sunset Veil theme should load");
+
+        assert!(!theme.is_dark);
+        assert_eq!(theme.colors.window_bg, gpui::rgba(0xfcf6f0ff));
+        assert_eq!(theme.colors.accent, gpui::rgba(0xa6632cff));
+        assert_eq!(theme.colors.diff_add_text, gpui::rgba(0x2e7638ff));
+        assert_eq!(theme.syntax.keyword, gpui::rgba(0x2f7b93ff));
+        assert_eq!(theme.syntax.variable, Some(gpui::rgba(0x2b241dff)));
+        assert_eq!(theme_label("sunset_veil"), Some("Sunset Veil".to_string()));
+    }
+
+    #[test]
     fn bundled_theme_file_exposes_multiple_themes() {
         let json = r##"{
             "name": "Classic",

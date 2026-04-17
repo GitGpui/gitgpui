@@ -8,6 +8,7 @@ mod util;
 
 use crate::model::{
     AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
+    SubmoduleAddProgressState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
@@ -58,6 +59,118 @@ fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
         repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_add(1);
         repo_state.bump_ops_rev();
     }
+}
+
+fn start_submodule_add_progress(
+    state: &mut AppState,
+    repo_id: RepoId,
+    url: &str,
+    path: &std::path::Path,
+) {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.submodule_add_in_flight = Some(SubmoduleAddProgressState {
+            url: url.to_string(),
+            path: path.to_path_buf(),
+        });
+    }
+}
+
+pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::OpenRepo(_)
+            | Msg::RestoreSession { .. }
+            | Msg::ReloadRepo { .. }
+            | Msg::RepoExternallyChanged { .. }
+            | Msg::SetHistoryScope { .. }
+            | Msg::LoadMoreHistory { .. }
+            | Msg::SelectCommit { .. }
+            | Msg::SelectDiff { .. }
+            | Msg::SelectConflictDiff { .. }
+            | Msg::LoadStashes { .. }
+            | Msg::LoadConflictFile { .. }
+            | Msg::LoadReflog { .. }
+            | Msg::LoadFileHistory { .. }
+            | Msg::LoadBlame { .. }
+            | Msg::LoadWorktrees { .. }
+            | Msg::LoadSubmodules { .. }
+            | Msg::LoadSubtrees { .. }
+            | Msg::LoadTags { .. }
+            | Msg::LoadRemoteTags { .. }
+            | Msg::RefreshBranches { .. }
+            | Msg::StageHunk { .. }
+            | Msg::UnstageHunk { .. }
+            | Msg::ApplyWorktreePatch { .. }
+            | Msg::CheckoutBranch { .. }
+            | Msg::CheckoutRemoteBranch { .. }
+            | Msg::CheckoutCommit { .. }
+            | Msg::CherryPickCommit { .. }
+            | Msg::RevertCommit { .. }
+            | Msg::CreateBranch { .. }
+            | Msg::CreateBranchAndCheckout { .. }
+            | Msg::DeleteBranch { .. }
+            | Msg::ForceDeleteBranch { .. }
+            | Msg::CloneRepo { .. }
+            | Msg::ExportPatch { .. }
+            | Msg::ApplyPatch { .. }
+            | Msg::AddWorktree { .. }
+            | Msg::RemoveWorktree { .. }
+            | Msg::ForceRemoveWorktree { .. }
+            | Msg::AddSubmodule { .. }
+            | Msg::AddSubmoduleTrusted { .. }
+            | Msg::UpdateSubmodules { .. }
+            | Msg::UpdateSubmodulesTrusted { .. }
+            | Msg::ConfirmSubmoduleTrustPrompt
+            | Msg::RemoveSubmodule { .. }
+            | Msg::AddSubtree { .. }
+            | Msg::PullSubtree { .. }
+            | Msg::PushSubtree { .. }
+            | Msg::SplitSubtree { .. }
+            | Msg::ExtractSubtree { .. }
+            | Msg::RemoveSubtree { .. }
+            | Msg::StagePath { .. }
+            | Msg::StagePaths { .. }
+            | Msg::UnstagePath { .. }
+            | Msg::UnstagePaths { .. }
+            | Msg::DiscardWorktreeChangesPath { .. }
+            | Msg::DiscardWorktreeChangesPaths { .. }
+            | Msg::SaveWorktreeFile { .. }
+            | Msg::Commit { .. }
+            | Msg::CommitAmend { .. }
+            | Msg::FetchAll { .. }
+            | Msg::PruneMergedBranches { .. }
+            | Msg::PruneLocalTags { .. }
+            | Msg::Pull { .. }
+            | Msg::PullBranch { .. }
+            | Msg::MergeRef { .. }
+            | Msg::SquashRef { .. }
+            | Msg::Push { .. }
+            | Msg::ForcePush { .. }
+            | Msg::PushSetUpstream { .. }
+            | Msg::SetUpstreamBranch { .. }
+            | Msg::UnsetUpstreamBranch { .. }
+            | Msg::DeleteRemoteBranch { .. }
+            | Msg::Reset { .. }
+            | Msg::Rebase { .. }
+            | Msg::RebaseContinue { .. }
+            | Msg::RebaseAbort { .. }
+            | Msg::MergeAbort { .. }
+            | Msg::CreateTag { .. }
+            | Msg::DeleteTag { .. }
+            | Msg::PushTag { .. }
+            | Msg::DeleteRemoteTag { .. }
+            | Msg::AddRemote { .. }
+            | Msg::RemoveRemote { .. }
+            | Msg::SetRemoteUrl { .. }
+            | Msg::CheckoutConflictSide { .. }
+            | Msg::AcceptConflictDeletion { .. }
+            | Msg::CheckoutConflictBase { .. }
+            | Msg::LaunchMergetool { .. }
+            | Msg::Stash { .. }
+            | Msg::ApplyStash { .. }
+            | Msg::PopStash { .. }
+            | Msg::DropStash { .. }
+    )
 }
 
 #[cfg(test)]
@@ -182,10 +295,20 @@ fn clear_banner_error_for_auth_operation(state: &mut AppState, operation: &AuthR
         | AuthRetryOperation::Commit { repo_id, .. } => {
             util::clear_banner_error_for_repo(state, *repo_id);
         }
-        AuthRetryOperation::Clone { .. } => {}
+        AuthRetryOperation::Clone { .. } => clear_stale_clone_banner_error(state),
         AuthRetryOperation::ExtractSubtree { repo_id, .. } => {
             util::clear_banner_error_for_repo(state, *repo_id);
         }
+    }
+}
+
+fn clear_stale_clone_banner_error(state: &mut AppState) {
+    if state
+        .banner_error
+        .as_ref()
+        .is_some_and(|banner| banner.message.starts_with("Clone failed"))
+    {
+        state.banner_error = None;
     }
 }
 
@@ -280,8 +403,26 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         },
         RepoCommandKind::RemoveWorktree { path } => Msg::RemoveWorktree { repo_id, path },
         RepoCommandKind::ForceRemoveWorktree { path } => Msg::ForceRemoveWorktree { repo_id, path },
-        RepoCommandKind::AddSubmodule { url, path } => Msg::AddSubmodule { repo_id, url, path },
-        RepoCommandKind::UpdateSubmodules => Msg::UpdateSubmodules { repo_id },
+        RepoCommandKind::AddSubmodule {
+            url,
+            path,
+            branch,
+            name,
+            force,
+            approved_sources,
+        } => Msg::AddSubmoduleTrusted {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+            approved_sources,
+        },
+        RepoCommandKind::UpdateSubmodules { approved_sources } => Msg::UpdateSubmodulesTrusted {
+            repo_id,
+            approved_sources,
+        },
         RepoCommandKind::RemoveSubmodule { path } => Msg::RemoveSubmodule { repo_id, path },
         RepoCommandKind::AddSubtree {
             repository,
@@ -501,6 +642,10 @@ pub(super) fn reduce(
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
+    if msg_requires_available_git(&msg) && !state.git_runtime.is_available() {
+        return Vec::new();
+    }
+
     match msg {
         Msg::OpenRepo(path) => repo_management::open_repo(id_alloc, state, path),
         Msg::RestoreSession {
@@ -531,6 +676,18 @@ pub(super) fn reduce(
         Msg::CancelAuthPrompt => {
             state.auth_prompt = None;
             util::clear_staged_git_auth_env();
+            Vec::new()
+        }
+        Msg::SetGitRuntimeState(runtime) => {
+            state.git_runtime = runtime;
+            Vec::new()
+        }
+        Msg::SetGitLogSettings {
+            show_history_tags,
+            tag_fetch_mode,
+        } => {
+            state.git_log_settings.show_history_tags = show_history_tags;
+            state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
             Vec::new()
         }
         Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(state, repo_id),
@@ -592,6 +749,8 @@ pub(super) fn reduce(
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
         Msg::LoadSubtrees { repo_id } => effects::load_subtrees(state, repo_id),
+        Msg::LoadTags { repo_id } => effects::load_tags(state, repo_id),
+        Msg::LoadRemoteTags { repo_id } => effects::load_remote_tags(state, repo_id),
         Msg::RefreshBranches { repo_id } => effects::refresh_branches(state, repo_id),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
@@ -787,13 +946,89 @@ pub(super) fn reduce(
             };
             actions_emit_effects::force_remove_worktree(repo_id, normalized_path)
         }
-        Msg::AddSubmodule { repo_id, url, path } => {
+        Msg::AddSubmodule {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+        } => {
+            state.submodule_trust_prompt = None;
+            vec![Effect::CheckSubmoduleAddTrust {
+                repo_id,
+                url,
+                path,
+                branch,
+                name,
+                force,
+            }]
+        }
+        Msg::AddSubmoduleTrusted {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+            approved_sources,
+        } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::add_submodule(repo_id, url, path)
+            start_submodule_add_progress(state, repo_id, &url, &path);
+            actions_emit_effects::add_submodule(
+                repo_id,
+                url,
+                path,
+                branch,
+                name,
+                force,
+                approved_sources,
+            )
         }
         Msg::UpdateSubmodules { repo_id } => {
+            state.submodule_trust_prompt = None;
+            vec![Effect::CheckSubmoduleUpdateTrust { repo_id }]
+        }
+        Msg::UpdateSubmodulesTrusted {
+            repo_id,
+            approved_sources,
+        } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::update_submodules(repo_id)
+            actions_emit_effects::update_submodules(repo_id, approved_sources)
+        }
+        Msg::ConfirmSubmoduleTrustPrompt => {
+            let Some(prompt) = state.submodule_trust_prompt.take() else {
+                return Vec::new();
+            };
+            match prompt.operation {
+                SubmoduleTrustPromptOperation::Add {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                } => {
+                    begin_local_action(state, prompt.repo_id);
+                    start_submodule_add_progress(state, prompt.repo_id, &url, &path);
+                    actions_emit_effects::add_submodule(
+                        prompt.repo_id,
+                        url,
+                        path,
+                        branch,
+                        name,
+                        force,
+                        prompt.sources,
+                    )
+                }
+                SubmoduleTrustPromptOperation::Update => {
+                    begin_local_action(state, prompt.repo_id);
+                    actions_emit_effects::update_submodules(prompt.repo_id, prompt.sources)
+                }
+            }
+        }
+        Msg::CancelSubmoduleTrustPrompt => {
+            state.submodule_trust_prompt = None;
+            Vec::new()
         }
         Msg::RemoveSubmodule { repo_id, path } => {
             begin_local_action(state, repo_id);
@@ -1118,6 +1353,12 @@ pub(super) fn reduce(
         Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded { repo_id, result }) => {
             effects::remote_branches_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded { repo_id, result }) => {
+            effects::worktree_status_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
+            effects::staged_status_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }
@@ -1176,6 +1417,73 @@ pub(super) fn reduce(
         }
         Msg::Internal(crate::msg::InternalMsg::SubtreesLoaded { repo_id, result }) => {
             effects::subtrees_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+            result,
+        }) => match result {
+            Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
+                begin_local_action(state, repo_id);
+                start_submodule_add_progress(state, repo_id, &url, &path);
+                actions_emit_effects::add_submodule(
+                    repo_id,
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                    Vec::new(),
+                )
+            }
+            Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
+                state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
+                    repo_id,
+                    operation: SubmoduleTrustPromptOperation::Add {
+                        url,
+                        path,
+                        branch,
+                        name,
+                        force,
+                    },
+                    sources,
+                });
+                Vec::new()
+            }
+            Err(error) => {
+                state.banner_error = Some(BannerErrorState {
+                    repo_id: Some(repo_id),
+                    message: util::format_failure_summary("Submodule trust check", &error),
+                });
+                Vec::new()
+            }
+        },
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }) => {
+            match result {
+                Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
+                    begin_local_action(state, repo_id);
+                    actions_emit_effects::update_submodules(repo_id, Vec::new())
+                }
+                Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
+                    state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
+                        repo_id,
+                        operation: SubmoduleTrustPromptOperation::Update,
+                        sources,
+                    });
+                    Vec::new()
+                }
+                Err(error) => {
+                    state.banner_error = Some(BannerErrorState {
+                        repo_id: Some(repo_id),
+                        message: util::format_failure_summary("Submodule trust check", &error),
+                    });
+                    Vec::new()
+                }
+            }
         }
         Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
             repo_id,

@@ -6,7 +6,6 @@ use crate::model::{
 fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
     repo.branches = Loadable::Ready(Arc::new(Vec::new()));
     repo.tags = Loadable::Ready(Arc::new(Vec::new()));
-    repo.remote_tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.remotes = Loadable::Ready(Arc::new(Vec::new()));
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
@@ -19,7 +18,6 @@ fn has_full_refresh_only_effects(effects: &[Effect], repo_id: RepoId) -> bool {
         matches!(
             effect,
             Effect::LoadTags { repo_id: candidate }
-                | Effect::LoadRemoteTags { repo_id: candidate }
                 | Effect::LoadRemotes { repo_id: candidate }
                 | Effect::LoadRemoteBranches { repo_id: candidate }
                 if *candidate == repo_id
@@ -355,9 +353,7 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
     );
 
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        has_status_refresh_effects(&effects, RepoId(1)),
         "expected status refresh when focusing an already open repo"
     );
     assert_eq!(state.repos.len(), 2);
@@ -421,9 +417,7 @@ fn open_repo_allows_same_basename_in_different_folders() {
         Msg::OpenRepo(repo_a.clone()),
     );
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        has_status_refresh_effects(&effects, RepoId(1)),
         "expected status refresh when re-focusing repo by path"
     );
     assert_eq!(state.repos.len(), 2);
@@ -465,9 +459,7 @@ fn open_repo_refreshes_when_repo_is_already_active() {
     assert_eq!(state.repos.len(), 1);
     assert_eq!(state.active_repo, Some(RepoId(1)));
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        has_status_refresh_effects(&effects, RepoId(1)),
         "expected status refresh when re-opening active repo"
     );
 }
@@ -1261,7 +1253,8 @@ fn set_active_repo_waits_for_repo_open_before_refreshing() {
     assert!(
         !effects.iter().any(|effect| matches!(
             effect,
-            Effect::LoadStatus { .. }
+            Effect::LoadWorktreeStatus { .. }
+                | Effect::LoadStagedStatus { .. }
                 | Effect::LoadBranches { .. }
                 | Effect::LoadWorktrees { .. }
                 | Effect::LoadSelectedDiff { .. }
@@ -1638,9 +1631,7 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
 
     assert_eq!(state.active_repo, Some(repo1));
 
-    let has_status = effects
-        .iter()
-        .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == repo1));
+    let has_status = has_status_refresh_effects(&effects, repo1);
     let has_log = effects.iter().any(|e| {
         matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _ } if *repo_id == repo1)
     });
@@ -1912,11 +1903,7 @@ fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
         has_worktree_refresh_effect(&effects, repo1),
         "expected worktrees refresh on activation"
     );
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::LoadStatus { repo_id } if *repo_id == repo1))
-    );
+    assert!(has_status_refresh_effects(&effects, repo1));
     assert!(
         effects
             .iter()
@@ -2093,10 +2080,12 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
-    assert!(repo_state.remote_tags.is_loading());
+    assert!(matches!(repo_state.remote_tags, Loadable::NotLoaded));
     assert!(repo_state.remotes.is_loading());
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
+    assert!(repo_state.worktree_status_is_loading());
+    assert!(repo_state.staged_status_is_loading());
     assert!(repo_state.log.is_loading());
     assert!(matches!(repo_state.stashes, Loadable::NotLoaded));
     assert!(matches!(repo_state.reflog, Loadable::NotLoaded));
@@ -2131,13 +2120,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
             )
         }
     ));
-    assert!(has_effect_for_repo(
-        &effects,
-        RepoId(1),
-        |effect, repo_id| {
-            matches!(effect, Effect::LoadStatus { repo_id: candidate } if *candidate == repo_id)
-        }
-    ));
+    assert!(has_status_refresh_effects(&effects, RepoId(1)));
     assert!(has_effect_for_repo(
         &effects,
         RepoId(1),
@@ -2159,18 +2142,13 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
             matches!(effect, Effect::LoadTags { repo_id: candidate } if *candidate == repo_id)
         }
     ));
-    assert!(has_effect_for_repo(
-        &effects,
-        RepoId(1),
-        |effect, repo_id| {
-            matches!(
-                effect,
-                Effect::LoadRemoteTags {
-                    repo_id: candidate
-                } if *candidate == repo_id
-            )
-        }
-    ));
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
+        )),
+        "remote tags should lazy-load from tag UI, not repo open"
+    );
     assert!(has_effect_for_repo(
         &effects,
         RepoId(1),
@@ -2235,11 +2213,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
 
     assert!(state.repos[0].last_error.is_none());
     assert!(state.banner_error.is_none());
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) }))
-    );
+    assert!(has_status_refresh_effects(&effects, RepoId(1)));
 }
 
 #[test]

@@ -496,7 +496,7 @@ impl Render for TitleBarView {
             )
             .on_mouse_move(cx.listener(|this, _e, window, _cx| {
                 if this.title_drag_state.take_move_request() {
-                    window.start_window_move();
+                    crate::app::begin_window_move(window);
                 }
             }));
 

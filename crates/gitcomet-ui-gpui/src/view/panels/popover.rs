@@ -33,6 +33,7 @@ mod submodule_add_prompt;
 mod submodule_open_picker;
 mod submodule_remove_confirm;
 mod submodule_remove_picker;
+mod submodule_trust_confirm;
 mod subtree_add_prompt;
 mod subtree_open_picker;
 mod subtree_pull_picker;
@@ -107,6 +108,8 @@ pub(in super::super) struct PopoverHost {
     worktree_ref_input: Entity<components::TextInput>,
     submodule_url_input: Entity<components::TextInput>,
     submodule_path_input: Entity<components::TextInput>,
+    submodule_branch_input: Entity<components::TextInput>,
+    submodule_name_input: Entity<components::TextInput>,
     subtree_repository_input: Entity<components::TextInput>,
     subtree_reference_input: Entity<components::TextInput>,
     subtree_path_input: Entity<components::TextInput>,
@@ -123,6 +126,8 @@ pub(in super::super) struct PopoverHost {
     subtree_split_rejoin_enabled: bool,
     subtree_split_ignore_joins_enabled: bool,
     subtree_split_remote_enabled: bool,
+    submodule_add_advanced_expanded: bool,
+    submodule_force_enabled: bool,
 }
 
 impl PopoverHost {
@@ -488,6 +493,34 @@ impl PopoverHost {
             )
         });
 
+        let submodule_name_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "submodule-logical-name".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let submodule_branch_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "feature".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let subtree_repository_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -694,6 +727,8 @@ impl PopoverHost {
             worktree_ref_input,
             submodule_url_input,
             submodule_path_input,
+            submodule_branch_input,
+            submodule_name_input,
             subtree_repository_input,
             subtree_reference_input,
             subtree_path_input,
@@ -710,6 +745,8 @@ impl PopoverHost {
             subtree_split_rejoin_enabled: false,
             subtree_split_ignore_joins_enabled: false,
             subtree_split_remote_enabled: false,
+            submodule_add_advanced_expanded: false,
+            submodule_force_enabled: false,
         }
     }
 
@@ -743,6 +780,10 @@ impl PopoverHost {
         self.submodule_url_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.submodule_path_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_name_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.subtree_repository_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -999,6 +1040,26 @@ impl PopoverHost {
         self.open_popover(kind, PopoverAnchor::Bounds(anchor_bounds), window, cx);
     }
 
+    fn request_lazy_popover_repo_data(&self, kind: &PopoverKind) {
+        let repo_id = match kind {
+            PopoverKind::TagMenu { repo_id, .. } => Some(*repo_id),
+            _ => None,
+        };
+        let Some(repo_id) = repo_id else {
+            return;
+        };
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return;
+        };
+
+        if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
+            self.store.dispatch(Msg::LoadTags { repo_id });
+        }
+        if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
+            self.store.dispatch(Msg::LoadRemoteTags { repo_id });
+        }
+    }
+
     fn open_popover(
         &mut self,
         kind: PopoverKind,
@@ -1006,12 +1067,12 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.request_lazy_popover_repo_data(&kind);
         let is_context_menu = matches!(
             &kind,
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
-                | PopoverKind::HistoryColumnSettings
                 | PopoverKind::ChangeTrackingSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
@@ -1254,6 +1315,8 @@ impl PopoverHost {
                     ..
                 } => {
                     let theme = self.theme;
+                    self.submodule_add_advanced_expanded = false;
+                    self.submodule_force_enabled = false;
                     self.submodule_url_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
@@ -1264,11 +1327,25 @@ impl PopoverHost {
                         input.set_text("", cx);
                         cx.notify();
                     });
+                    self.submodule_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.submodule_name_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
                     let focus = self
                         .submodule_url_input
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
+                    ..
+                } => {}
                 PopoverKind::Repo {
                     repo_id,
                     kind:
@@ -1718,7 +1795,6 @@ impl PopoverHost {
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
-                | PopoverKind::HistoryColumnSettings
                 | PopoverKind::ChangeTrackingSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
@@ -1783,6 +1859,7 @@ impl PopoverHost {
                 kind:
                     RepoPopoverKind::Submodule(
                         SubmodulePopoverKind::AddPrompt
+                        | SubmodulePopoverKind::TrustConfirm
                         | SubmodulePopoverKind::OpenPicker
                         | SubmodulePopoverKind::RemovePicker
                         | SubmodulePopoverKind::RemoveConfirm { .. },
@@ -1813,7 +1890,6 @@ impl PopoverHost {
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
-            | PopoverKind::HistoryColumnSettings
             | PopoverKind::ChangeTrackingSettings => Corner::TopRight,
             _ => Corner::TopLeft,
         };
@@ -1947,6 +2023,9 @@ impl PopoverHost {
                     SubmodulePopoverKind::AddPrompt => {
                         submodule_add_prompt::panel(self, repo_id, cx)
                     }
+                    SubmodulePopoverKind::TrustConfirm => {
+                        submodule_trust_confirm::panel(self, repo_id, cx)
+                    }
                     SubmodulePopoverKind::OpenPicker => {
                         submodule_open_picker::panel(self, repo_id, cx)
                     }
@@ -2039,10 +2118,6 @@ impl PopoverHost {
             }
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
-                .min_w(px(160.0))
-                .max_w(px(220.0)),
-            PopoverKind::HistoryColumnSettings => self
-                .context_menu_view(PopoverKind::HistoryColumnSettings, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
             PopoverKind::ChangeTrackingSettings => self

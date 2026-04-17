@@ -117,18 +117,34 @@ pub(super) fn force_remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effec
     vec![Effect::ForceRemoveWorktree { repo_id, path }]
 }
 
-pub(super) fn add_submodule(repo_id: RepoId, url: String, path: PathBuf) -> Vec<Effect> {
+pub(super) fn add_submodule(
+    repo_id: RepoId,
+    url: String,
+    path: PathBuf,
+    branch: Option<String>,
+    name: Option<String>,
+    force: bool,
+    approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+) -> Vec<Effect> {
     vec![Effect::AddSubmodule {
         repo_id,
         url,
         path,
+        branch,
+        name,
+        force,
+        approved_sources,
         auth: None,
     }]
 }
 
-pub(super) fn update_submodules(repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn update_submodules(
+    repo_id: RepoId,
+    approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+) -> Vec<Effect> {
     vec![Effect::UpdateSubmodules {
         repo_id,
+        approved_sources,
         auth: None,
     }]
 }
@@ -667,7 +683,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::ExportPatch { .. }
             | RepoCommandKind::ApplyPatch { .. }
             | RepoCommandKind::AddSubmodule { .. }
-            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::UpdateSubmodules { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
             | RepoCommandKind::AddSubtree { .. }
             | RepoCommandKind::PullSubtree { .. }
@@ -699,7 +715,7 @@ pub(super) fn repo_command_finished(
     let refresh_submodules = matches!(
         &command,
         RepoCommandKind::AddSubmodule { .. }
-            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::UpdateSubmodules { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let refresh_subtrees = matches!(
@@ -746,6 +762,10 @@ pub(super) fn repo_command_finished(
             repo_state.bump_ops_rev();
         }
         _ => {}
+    }
+
+    if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
+        repo_state.submodule_add_in_flight = None;
     }
 
     match result {
@@ -827,7 +847,7 @@ pub(super) fn repo_command_finished(
             extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
-    let mut effects = refresh_full_effects(repo_state);
+    let mut effects = refresh_full_effects(repo_state, state.git_log_settings);
     effects.extend(extra_effects);
     if let Some(path) = finished_add_subtree_path
         && state

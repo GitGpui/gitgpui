@@ -245,17 +245,42 @@ pub(crate) struct WindowSystemMenuRequest {
 }
 
 #[cfg(target_os = "windows")]
-fn restore_maximized_window(window: &Window) -> bool {
+fn window_hwnd(window: &Window) -> Option<isize> {
     let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
-        return false;
+        return None;
     };
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return None;
+    };
+
+    Some(handle.hwnd.get())
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn begin_window_move(window: &Window) {
+    if let Some(hwnd) = window_hwnd(window)
+        && gitcomet_win32_window_utils::begin_window_move(hwnd)
+    {
+        return;
+    }
+
+    window.start_window_move();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn begin_window_move(window: &Window) {
+    window.start_window_move();
+}
+
+#[cfg(target_os = "windows")]
+fn restore_maximized_window(window: &Window) -> bool {
+    let Some(hwnd) = window_hwnd(window) else {
         return false;
     };
 
     // GPUI's Windows zoom path currently maps directly to SW_MAXIMIZE, so
     // restore must go through the native Win32 API until upstream toggles.
-    gitcomet_win32_window_utils::restore_window(handle.hwnd.get())
+    gitcomet_win32_window_utils::restore_window(hwnd)
 }
 
 #[cfg(target_os = "windows")]
@@ -273,19 +298,9 @@ pub(crate) fn window_system_menu_request(
     window: &Window,
     position: Point<Pixels>,
 ) -> Option<WindowSystemMenuRequest> {
-    let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
-        return None;
-    };
-    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return None;
-    };
-
     let (x, y) = window_menu_position(position, window.scale_factor());
-    Some(WindowSystemMenuRequest {
-        hwnd: handle.hwnd.get(),
-        x,
-        y,
-    })
+    let hwnd = window_hwnd(window)?;
+    Some(WindowSystemMenuRequest { hwnd, x, y })
 }
 
 fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
@@ -419,6 +434,9 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(move |_: &OpenRepository, cx| {
         let backend = Arc::clone(&repo_backend);
         cx.defer(move |cx| {
+            if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
+                return;
+            }
             prompt_open_repository(cx, backend);
         });
     });
@@ -642,7 +660,7 @@ fn register_macos_open_request_handler(
             }
 
             let backend = Arc::clone(&backend);
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 open_repositories_in_existing_or_new_window(cx, backend, paths);
             });
         }
@@ -1041,7 +1059,7 @@ fn prompt_apply_patch(cx: &mut App) {
             return;
         };
 
-        let _ = cx.update(move |cx| {
+        cx.update(move |cx| {
             let Some(window) = find_normal_gitcomet_window(cx) else {
                 return;
             };
