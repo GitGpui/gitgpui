@@ -47,7 +47,9 @@ fn open_split_prompt(
 }
 
 #[gpui::test]
-fn split_prompt_prefills_stored_remote_but_keeps_publish_disabled(cx: &mut gpui::TestAppContext) {
+fn split_prompt_prefills_stored_extract_defaults_and_enables_publish(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
@@ -102,8 +104,18 @@ fn split_prompt_prefills_stored_remote_but_keeps_publish_disabled(cx: &mut gpui:
     cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
         assert!(
-            !host.subtree_split_remote_enabled,
-            "expected publish to remote to stay disabled on open"
+            host.subtree_split_remote_enabled,
+            "expected publish to remote to be restored on open"
+        );
+        assert_eq!(
+            host.subtree_split_destination_repo_input
+                .read_with(app, |input, _| input.text().to_string()),
+            "/tmp/libs-example"
+        );
+        assert_eq!(
+            host.subtree_split_destination_branch_input
+                .read_with(app, |input, _| input.text().to_string()),
+            "main"
         );
         assert_eq!(
             host.subtree_split_remote_repository_input
@@ -125,6 +137,83 @@ fn split_prompt_prefills_stored_remote_but_keeps_publish_disabled(cx: &mut gpui:
             .is_some(),
         "expected advanced options indicator to start collapsed"
     );
+}
+
+#[gpui::test]
+fn split_prompt_prefills_local_destination_without_enabling_publish(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    let repo_id = RepoId(43);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_subtree_split_local",
+        std::process::id()
+    ));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.open = Loadable::Ready(());
+            repo.subtrees = Loadable::Ready(
+                vec![gitcomet_core::domain::Subtree {
+                    path: std::path::PathBuf::from("libs/example"),
+                    source: Some(gitcomet_core::domain::SubtreeSourceConfig {
+                        local_repository: Some("/tmp/libs-example".to_string()),
+                        repository: "/tmp/libs-example".to_string(),
+                        reference: "main".to_string(),
+                        push_refspec: Some("refs/heads/main".to_string()),
+                        squash: true,
+                    }),
+                }]
+                .into(),
+            );
+
+            this.state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.popover_host.update(cx, |host, _| {
+                host.state = Arc::clone(&this.state);
+            });
+            cx.notify();
+        });
+    });
+
+    open_split_prompt(&view, cx, std::path::PathBuf::from("libs/example"));
+
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert!(
+            !host.subtree_split_remote_enabled,
+            "expected publish to stay disabled for local-only source metadata"
+        );
+        assert_eq!(
+            host.subtree_split_destination_repo_input
+                .read_with(app, |input, _| input.text().to_string()),
+            "/tmp/libs-example"
+        );
+        assert_eq!(
+            host.subtree_split_destination_branch_input
+                .read_with(app, |input, _| input.text().to_string()),
+            "main"
+        );
+        assert_eq!(
+            host.subtree_split_remote_repository_input
+                .read_with(app, |input, _| input.text().to_string()),
+            ""
+        );
+    });
 }
 
 #[gpui::test]

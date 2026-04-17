@@ -180,7 +180,8 @@ fn parse_split_commit(output: &CommandOutput) -> Result<String, Error> {
     if let Some(revision) = output
         .stdout
         .lines()
-        .map(str::trim).rfind(|line| !line.is_empty())
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
     {
         return Ok(revision.to_string());
     }
@@ -188,7 +189,8 @@ fn parse_split_commit(output: &CommandOutput) -> Result<String, Error> {
     let combined = output.combined();
     combined
         .lines()
-        .map(str::trim).rfind(|line| !line.is_empty())
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
             Error::new(ErrorKind::Backend(
@@ -254,6 +256,39 @@ fn default_destination_branch(
         .unwrap_or_else(|| "main".to_string())
 }
 
+fn validate_destination_repository(
+    source_repo: &Path,
+    destination_repo: &Path,
+) -> Result<(), Error> {
+    if destination_repo == source_repo {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "destination repository {} matches the source repository; choose a different folder",
+            destination_repo.display()
+        ))));
+    }
+
+    let Ok(metadata) = fs::metadata(destination_repo) else {
+        return Ok(());
+    };
+
+    if !metadata.is_dir() {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "destination path {} already exists and is not a directory",
+            destination_repo.display()
+        ))));
+    }
+
+    let mut entries = fs::read_dir(destination_repo).map_err(io_error)?;
+    if entries.next().transpose().map_err(io_error)?.is_some() {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "destination directory {} already exists and is not empty",
+            destination_repo.display()
+        ))));
+    }
+
+    Ok(())
+}
+
 fn store_updated_subtree_source(
     repo: &Arc<dyn gitcomet_core::services::GitRepository>,
     subtree_path: &Path,
@@ -294,6 +329,10 @@ pub(super) fn schedule_extract_subtree(
                 return Err(Error::new(ErrorKind::Backend(format!(
                     "a destination repository is required before publishing to `{remote}`"
                 ))));
+            }
+
+            if let Some(destination_repo_path) = options.destination_repository.as_deref() {
+                validate_destination_repository(&repo.spec().workdir, destination_repo_path)?;
             }
 
             if let Some(auth) = auth.clone() {

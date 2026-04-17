@@ -1430,6 +1430,14 @@ impl PopoverHost {
                             _ => Some(source.repository.clone()),
                         })
                         .unwrap_or_default();
+                    let destination_repository = source
+                        .as_ref()
+                        .and_then(|source| source.local_repository.clone())
+                        .unwrap_or_default();
+                    let destination_branch = source
+                        .as_ref()
+                        .map(|source| source.reference.clone())
+                        .unwrap_or_default();
                     self.subtree_split_branch_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
@@ -1454,25 +1462,25 @@ impl PopoverHost {
                     self.subtree_split_destination_repo_input
                         .update(cx, |input, cx| {
                             input.set_theme(theme, cx);
-                            input.set_text("", cx);
+                            input.set_text(destination_repository, cx);
                             cx.notify();
                         });
                     self.subtree_split_destination_branch_input
                         .update(cx, |input, cx| {
                             input.set_theme(theme, cx);
-                            input.set_text("", cx);
+                            input.set_text(destination_branch, cx);
                             cx.notify();
                         });
                     self.subtree_split_remote_repository_input
                         .update(cx, |input, cx| {
                             input.set_theme(theme, cx);
-                            input.set_text(remote_repository, cx);
+                            input.set_text(&remote_repository, cx);
                             cx.notify();
                         });
                     self.subtree_split_advanced_enabled = false;
                     self.subtree_split_rejoin_enabled = false;
                     self.subtree_split_ignore_joins_enabled = false;
-                    self.subtree_split_remote_enabled = false;
+                    self.subtree_split_remote_enabled = !remote_repository.is_empty();
                     let focus = self
                         .subtree_split_destination_repo_input
                         .read_with(cx, |i, _| i.focus_handle());

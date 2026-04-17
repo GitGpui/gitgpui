@@ -164,6 +164,13 @@ fn subtree_commands_round_trip_and_persist_source_metadata() {
 
     let backend = GixBackend;
     let opened = backend.open(&parent_repo).expect("open parent repository");
+    assert!(
+        opened
+            .list_subtrees()
+            .expect("list subtrees before add")
+            .is_empty(),
+        "expected no cached subtree entries before add"
+    );
 
     let upstream_text = upstream_repo.to_string_lossy().to_string();
     let push_text = push_repo.to_string_lossy().to_string();

@@ -1,4 +1,6 @@
 use super::*;
+use gitcomet_core::domain::Subtree;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
@@ -33,6 +35,15 @@ fn local_file_url(path: &Path) -> String {
     } else {
         format!("file:///{normalized}")
     }
+}
+
+fn git_output(repo: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git command to run")
 }
 
 fn schedule_effect_with_state_for_test(
@@ -73,6 +84,230 @@ fn schedule_effect_for_test(
         msg_tx,
         effect,
     );
+}
+
+#[derive(Default)]
+struct ExtractRepoState {
+    split_calls: AtomicUsize,
+    stored_source_configs: AtomicUsize,
+}
+
+struct ExtractRepo {
+    spec: RepoSpec,
+    split_revision: Arc<str>,
+    state: Arc<ExtractRepoState>,
+}
+
+impl GitRepository for ExtractRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        unimplemented!()
+    }
+
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        unimplemented!()
+    }
+
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        unimplemented!()
+    }
+
+    fn current_branch(&self) -> Result<String> {
+        unimplemented!()
+    }
+
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        unimplemented!()
+    }
+
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        unimplemented!()
+    }
+
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        unimplemented!()
+    }
+
+    fn status(&self) -> Result<RepoStatus> {
+        unimplemented!()
+    }
+
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        unimplemented!()
+    }
+
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        unimplemented!()
+    }
+
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn commit(&self, _message: &str) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn fetch_all(&self) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn push(&self) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn list_subtrees(&self) -> Result<Vec<Subtree>> {
+        Ok(Vec::new())
+    }
+
+    fn split_subtree_with_output(
+        &self,
+        _path: &Path,
+        _options: &gitcomet_core::domain::SubtreeSplitOptions,
+    ) -> Result<CommandOutput> {
+        self.state.split_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(CommandOutput {
+            command: "git subtree split".to_string(),
+            stdout: format!("{}\n", self.split_revision),
+            stderr: String::new(),
+            exit_code: Some(0),
+        })
+    }
+
+    fn store_subtree_source_config(
+        &self,
+        _path: &Path,
+        _source: &gitcomet_core::domain::SubtreeSourceConfig,
+    ) -> Result<()> {
+        self.state
+            .stored_source_configs
+            .fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+fn init_commit_repo(repo: &Path) -> String {
+    let _ = std::fs::create_dir_all(repo);
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(repo.join("README.md"), "seed\n").expect("write seed file");
+    run_git(repo, &["add", "README.md"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+    run_git(repo, &["branch", "-M", "main"]);
+    String::from_utf8(git_output(repo, &["rev-parse", "HEAD"]).stdout)
+        .expect("head is utf-8")
+        .trim()
+        .to_string()
+}
+
+fn wait_for_extract_finished(
+    msg_rx: &std::sync::mpsc::Receiver<Msg>,
+    destination_repo: &Path,
+) -> (std::result::Result<(), Error>, bool) {
+    let start = Instant::now();
+    let mut saw_open_repo = false;
+    let mut finished_result = None;
+    let mut finished_at = None;
+    while start.elapsed() < Duration::from_secs(15) {
+        let msg = match msg_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(msg) => msg,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(result) = finished_result.take() {
+                    return (result, saw_open_repo);
+                }
+                continue;
+            }
+            Err(err) => panic!("channel closed: {err:?}"),
+        };
+        match msg {
+            Msg::Internal(crate::msg::InternalMsg::ExtractSubtreeFinished {
+                destination_repo: Some(finished_dest),
+                result,
+                ..
+            }) if finished_dest == destination_repo => {
+                let succeeded = result.is_ok();
+                finished_result = Some(result);
+                finished_at = Some(Instant::now());
+                if !succeeded {
+                    return (
+                        finished_result.take().expect("finished result is present"),
+                        saw_open_repo,
+                    );
+                }
+            }
+            Msg::OpenRepo(path) if path == destination_repo => {
+                saw_open_repo = true;
+                if let Some(result) = finished_result.take() {
+                    return (result, true);
+                }
+            }
+            _ => {}
+        }
+
+        if finished_at.is_some_and(|finished| finished.elapsed() >= Duration::from_millis(250)) {
+            return (
+                finished_result.take().expect("finished result is present"),
+                saw_open_repo,
+            );
+        }
+    }
+    panic!("timed out waiting for ExtractSubtreeFinished");
 }
 
 #[test]
@@ -270,6 +505,220 @@ fn clone_repo_effect_abort_removes_partially_created_destination() {
         !dest.exists(),
         "aborted clone should clean up the destination directory"
     );
+}
+
+#[test]
+fn extract_subtree_effect_rejects_non_empty_destination_repo_without_mutating_it() {
+    if !super::require_git_shell_for_store_tests() {
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    let dest = temp.path().join("dest");
+    let split_revision = init_commit_repo(&src);
+    let original_head = init_commit_repo(&dest);
+    run_git(
+        &dest,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.com/original.git",
+        ],
+    );
+    let original_origin =
+        String::from_utf8(git_output(&dest, &["remote", "get-url", "origin"]).stdout)
+            .expect("origin url is utf-8")
+            .trim()
+            .to_string();
+
+    let repo_id = RepoId(7);
+    let state = Arc::new(ExtractRepoState::default());
+    let repo: Arc<dyn GitRepository> = Arc::new(ExtractRepo {
+        spec: RepoSpec {
+            workdir: src.clone(),
+        },
+        split_revision: Arc::from(split_revision),
+        state: Arc::clone(&state),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::ExtractSubtree {
+            repo_id,
+            path: PathBuf::from("vendor/lib"),
+            options: gitcomet_core::domain::SubtreeExtractOptions {
+                destination_repository: Some(dest.clone()),
+                remote_repository: Some("https://example.com/new.git".to_string()),
+                ..Default::default()
+            },
+            auth: None,
+        },
+    );
+
+    let (result, saw_open_repo) = wait_for_extract_finished(&msg_rx, &dest);
+    let err = result.expect_err("non-empty destination repo should be rejected");
+    let err_text = err.to_string();
+    assert!(
+        err_text.contains("already exists and is not empty"),
+        "unexpected error: {err_text}"
+    );
+    assert!(
+        !saw_open_repo,
+        "rejected extract should not open destination"
+    );
+    assert_eq!(state.split_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(state.stored_source_configs.load(Ordering::SeqCst), 0);
+
+    let head_after = String::from_utf8(git_output(&dest, &["rev-parse", "HEAD"]).stdout)
+        .expect("head is utf-8")
+        .trim()
+        .to_string();
+    let origin_after =
+        String::from_utf8(git_output(&dest, &["remote", "get-url", "origin"]).stdout)
+            .expect("origin url is utf-8")
+            .trim()
+            .to_string();
+    assert_eq!(head_after, original_head);
+    assert_eq!(origin_after, original_origin);
+}
+
+#[test]
+fn extract_subtree_effect_rejects_destination_matching_source_repo() {
+    if !super::require_git_shell_for_store_tests() {
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    let split_revision = init_commit_repo(&src);
+
+    let repo_id = RepoId(8);
+    let state = Arc::new(ExtractRepoState::default());
+    let repo: Arc<dyn GitRepository> = Arc::new(ExtractRepo {
+        spec: RepoSpec {
+            workdir: src.clone(),
+        },
+        split_revision: Arc::from(split_revision),
+        state: Arc::clone(&state),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::ExtractSubtree {
+            repo_id,
+            path: PathBuf::from("vendor/lib"),
+            options: gitcomet_core::domain::SubtreeExtractOptions {
+                destination_repository: Some(src.clone()),
+                ..Default::default()
+            },
+            auth: None,
+        },
+    );
+
+    let (result, saw_open_repo) = wait_for_extract_finished(&msg_rx, &src);
+    let err = result.expect_err("source repo destination should be rejected");
+    let err_text = err.to_string();
+    assert!(
+        err_text.contains("matches the source repository"),
+        "unexpected error: {err_text}"
+    );
+    assert!(
+        !saw_open_repo,
+        "rejected extract should not open destination"
+    );
+    assert_eq!(state.split_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(state.stored_source_configs.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn extract_subtree_effect_succeeds_for_missing_and_empty_destinations() {
+    if !super::require_git_shell_for_store_tests() {
+        return;
+    }
+
+    for label in ["missing", "empty"] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let src = temp.path().join("src");
+        let dest = temp.path().join("dest");
+        let split_revision = init_commit_repo(&src);
+        if label == "empty" {
+            std::fs::create_dir_all(&dest).expect("create empty destination");
+        }
+
+        let repo_id = RepoId(9);
+        let state = Arc::new(ExtractRepoState::default());
+        let repo: Arc<dyn GitRepository> = Arc::new(ExtractRepo {
+            spec: RepoSpec {
+                workdir: src.clone(),
+            },
+            split_revision: Arc::from(split_revision),
+            state: Arc::clone(&state),
+        });
+        let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+            let mut repos = HashMap::default();
+            repos.insert(repo_id, repo);
+            repos
+        };
+        let executor = super::executor::TaskExecutor::new(1);
+        let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+        let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+        schedule_effect_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &repos,
+            msg_tx,
+            Effect::ExtractSubtree {
+                repo_id,
+                path: PathBuf::from("vendor/lib"),
+                options: gitcomet_core::domain::SubtreeExtractOptions {
+                    destination_repository: Some(dest.clone()),
+                    ..Default::default()
+                },
+                auth: None,
+            },
+        );
+
+        let (result, saw_open_repo) = wait_for_extract_finished(&msg_rx, &dest);
+        result.unwrap_or_else(|err| panic!("{label} destination should succeed: {err}"));
+        assert!(
+            saw_open_repo,
+            "{label} destination should open after success"
+        );
+        assert_eq!(state.split_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(state.stored_source_configs.load(Ordering::SeqCst), 1);
+        assert!(
+            dest.join(".git").exists(),
+            "{label} destination should be a git repo"
+        );
+    }
 }
 
 #[test]

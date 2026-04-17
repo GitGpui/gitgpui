@@ -97,6 +97,19 @@ struct LogHeadPageCacheEntry {
     page: LogPage,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SubtreeListCacheKey {
+    head_oid: Option<gix::ObjectId>,
+    index_stamp: RepoFileStamp,
+    local_config: RepoFileStamp,
+}
+
+#[derive(Clone, Debug)]
+struct SubtreeListCacheEntry {
+    key: SubtreeListCacheKey,
+    subtrees: Vec<Subtree>,
+}
+
 const LOG_HEAD_PAGE_CACHE_LIMIT: usize = 32;
 
 pub(crate) struct GixRepo {
@@ -106,6 +119,7 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_head_page_cache: std::sync::Mutex<Vec<LogHeadPageCacheEntry>>,
+    subtree_list_cache: std::sync::Mutex<Option<SubtreeListCacheEntry>>,
 }
 
 impl GixRepo {
@@ -117,6 +131,7 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_head_page_cache: std::sync::Mutex::new(Vec::new()),
+            subtree_list_cache: std::sync::Mutex::new(None),
         }
     }
 

@@ -219,6 +219,41 @@ fn extract_subtree_sets_running_state_and_emits_effect() {
 }
 
 #[test]
+fn extract_subtree_resolves_relative_destination_against_repo_workdir() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/source-repo");
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ExtractSubtree {
+            repo_id,
+            path: PathBuf::from("vendor/lib"),
+            options: gitcomet_core::domain::SubtreeExtractOptions {
+                destination_repository: Some(PathBuf::from("split-out")),
+                ..Default::default()
+            },
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ExtractSubtree { options, .. }]
+            if options.destination_repository == Some(PathBuf::from("/tmp/source-repo/split-out"))
+    ));
+    assert_eq!(
+        state
+            .extract_subtree
+            .as_ref()
+            .and_then(|op| op.destination_repo.as_deref().cloned()),
+        Some(PathBuf::from("/tmp/source-repo/split-out"))
+    );
+}
+
+#[test]
 fn extract_subtree_finished_marks_success_and_refreshes_subtrees() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

@@ -1,4 +1,4 @@
-use super::GixRepo;
+use super::{GixRepo, RepoFileStamp, SubtreeListCacheEntry, SubtreeListCacheKey};
 use crate::util::{
     bytes_to_text_preserving_utf8, git_command_failed_error, run_git_raw_output,
     run_git_with_output,
@@ -29,15 +29,40 @@ struct StoredSubtreeConfigRow {
 
 impl GixRepo {
     pub(super) fn list_subtrees_impl(&self) -> Result<Vec<Subtree>> {
+        let repo = self._repo.to_thread_local();
+        let cache_key = SubtreeListCacheKey {
+            head_oid: super::history::gix_head_id_or_none(&repo)?,
+            index_stamp: repo_file_stamp(repo.index_path().as_path()),
+            local_config: repo_file_stamp(repo.common_dir().join("config").as_path()),
+        };
+        if let Some(cached) = self
+            .subtree_list_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .filter(|cached| cached.key == cache_key)
+            .map(|cached| cached.subtrees.clone())
+        {
+            return Ok(cached);
+        }
+
         let mut source_configs = self.read_stored_subtree_source_configs()?;
         let discovered_paths = self.discover_subtree_paths()?;
-        Ok(discovered_paths
+        let subtrees = discovered_paths
             .into_iter()
             .map(|path| Subtree {
                 source: source_configs.remove(&path),
                 path,
             })
-            .collect())
+            .collect::<Vec<_>>();
+        *self
+            .subtree_list_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(SubtreeListCacheEntry {
+            key: cache_key,
+            subtrees: subtrees.clone(),
+        });
+        Ok(subtrees)
     }
 
     pub(super) fn add_subtree_with_output_impl(
@@ -513,6 +538,17 @@ fn path_to_config_value(path: &Path) -> Result<String> {
     path.to_str()
         .map(str::to_string)
         .ok_or_else(|| Error::new(ErrorKind::Backend("subtree path is not valid UTF-8".into())))
+}
+
+fn repo_file_stamp(path: &Path) -> RepoFileStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => RepoFileStamp {
+            exists: true,
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        },
+        Err(_) => RepoFileStamp::default(),
+    }
 }
 
 fn is_same_or_child_path(prefix: &Path, candidate: &Path) -> bool {
