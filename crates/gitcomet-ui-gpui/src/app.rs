@@ -4,6 +4,8 @@ use crate::ui_scale;
 use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, SettingsWindowView, StartupCrashReport,
+    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange,
+    TextInputDiffPrevChange, TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -1232,6 +1234,22 @@ fn bind_text_input_keys(cx: &mut App) {
         ),
         KeyBinding::new("alt-delete", crate::kit::DeleteWordRight, Some("TextInput")),
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
+        KeyBinding::new("f1", TextInputDiffPrevFile, Some("TextInput")),
+        KeyBinding::new("f4", TextInputDiffNextFile, Some("TextInput")),
+        KeyBinding::new(
+            "f2",
+            TextInputDiffPrevSearchMatchOrChange,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            "f3",
+            TextInputDiffNextSearchMatchOrChange,
+            Some("TextInput"),
+        ),
+        KeyBinding::new("shift-f7", TextInputDiffPrevChange, Some("TextInput")),
+        KeyBinding::new("f7", TextInputDiffNextChange, Some("TextInput")),
+        KeyBinding::new("alt-up", TextInputDiffPrevChange, Some("TextInput")),
+        KeyBinding::new("alt-down", TextInputDiffNextChange, Some("TextInput")),
         KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
         KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
         KeyBinding::new("up", crate::kit::Up, Some("TextInput")),
@@ -1300,6 +1318,11 @@ fn bind_text_input_keys(cx: &mut App) {
             Some("TextInput"),
         ),
     ]);
+}
+
+#[cfg(test)]
+pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {
+    bind_text_input_keys(cx);
 }
 
 #[cfg(test)]
@@ -1451,6 +1474,20 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::Copy))
                 .on_action(record_action_listener!(crate::kit::Undo))
                 .on_action(record_action_listener!(crate::kit::Redo))
+                .on_action(record_action_listener!(crate::view::TextInputDiffPrevFile))
+                .on_action(record_action_listener!(crate::view::TextInputDiffNextFile))
+                .on_action(record_action_listener!(
+                    crate::view::TextInputDiffPrevSearchMatchOrChange
+                ))
+                .on_action(record_action_listener!(
+                    crate::view::TextInputDiffNextSearchMatchOrChange
+                ))
+                .on_action(record_action_listener!(
+                    crate::view::TextInputDiffPrevChange
+                ))
+                .on_action(record_action_listener!(
+                    crate::view::TextInputDiffNextChange
+                ))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenRepository))
@@ -1551,6 +1588,20 @@ mod tests {
             ("alt-backspace", crate::kit::DeleteWordLeft.name()),
             ("alt-delete", crate::kit::DeleteWordRight.name()),
             ("enter", crate::kit::Enter.name()),
+            ("f1", crate::view::TextInputDiffPrevFile.name()),
+            ("f4", crate::view::TextInputDiffNextFile.name()),
+            (
+                "f2",
+                crate::view::TextInputDiffPrevSearchMatchOrChange.name(),
+            ),
+            (
+                "f3",
+                crate::view::TextInputDiffNextSearchMatchOrChange.name(),
+            ),
+            ("shift-f7", crate::view::TextInputDiffPrevChange.name()),
+            ("f7", crate::view::TextInputDiffNextChange.name()),
+            ("alt-up", crate::view::TextInputDiffPrevChange.name()),
+            ("alt-down", crate::view::TextInputDiffNextChange.name()),
             ("left", crate::kit::Left.name()),
             ("right", crate::kit::Right.name()),
             ("up", crate::kit::Up.name()),

@@ -2870,6 +2870,60 @@ impl MainPaneView {
             .bg(theme.colors.surface_bg_elevated)
             .when(diff_editor_menu_active, |d| d.bg(theme.colors.active))
             .track_focus(&self.diff_panel_focus_handle)
+            .on_action(
+                cx.listener(|this, _: &crate::view::TextInputDiffPrevFile, window, cx| {
+                    if let Some(repo_id) = this.active_repo_id()
+                        && this
+                            .try_select_adjacent_diff_file_preserving_focus(repo_id, -1, window, cx)
+                    {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::view::TextInputDiffNextFile, window, cx| {
+                    if let Some(repo_id) = this.active_repo_id()
+                        && this
+                            .try_select_adjacent_diff_file_preserving_focus(repo_id, 1, window, cx)
+                    {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(cx.listener(
+                |this, _: &crate::view::TextInputDiffPrevSearchMatchOrChange, _window, cx| {
+                    if this.navigate_prev_search_match_or_diff_change(cx) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::view::TextInputDiffNextSearchMatchOrChange, _window, cx| {
+                    if this.navigate_next_search_match_or_diff_change(cx) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::view::TextInputDiffPrevChange, _window, cx| {
+                    if this.navigate_prev_diff_change(cx) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::view::TextInputDiffNextChange, _window, cx| {
+                    if this.navigate_next_diff_change(cx) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                },
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseDownEvent, window, cx| {
@@ -3094,13 +3148,11 @@ impl MainPaneView {
                             this.toggle_show_whitespace();
                             handled = true;
                         }
-                        "up" if !this.is_file_preview_active() => {
-                            this.diff_jump_prev();
-                            handled = true;
+                        "up" => {
+                            handled = this.navigate_prev_diff_change(cx);
                         }
-                        "down" if !this.is_file_preview_active() => {
-                            this.diff_jump_next();
-                            handled = true;
+                        "down" => {
+                            handled = this.navigate_next_diff_change(cx);
                         }
                         _ => {}
                     }
@@ -3113,30 +3165,20 @@ impl MainPaneView {
                     && !mods.platform
                     && !mods.function
                 {
-                    if let Some(direction) =
-                        conflict_resolver::conflict_nav_direction_for_key(key, mods.shift)
-                    {
-                        if conflict_resolver_active {
-                            if !conflict_preview_active {
-                                match direction {
-                                    conflict_resolver::ConflictNavDirection::Prev => {
-                                        this.conflict_jump_prev(cx);
-                                    }
-                                    conflict_resolver::ConflictNavDirection::Next => {
-                                        this.conflict_jump_next(cx);
-                                    }
-                                }
-                            }
-                        } else if !this.is_file_preview_active() {
-                            match direction {
-                                conflict_resolver::ConflictNavDirection::Prev => {
-                                    this.diff_jump_prev()
-                                }
-                                conflict_resolver::ConflictNavDirection::Next => {
-                                    this.diff_jump_next()
-                                }
-                            }
+                    match key {
+                        "f2" => {
+                            let _ = this.navigate_prev_search_match_or_diff_change(cx);
                         }
+                        "f3" => {
+                            let _ = this.navigate_next_search_match_or_diff_change(cx);
+                        }
+                        "f7" if mods.shift => {
+                            let _ = this.navigate_prev_diff_change(cx);
+                        }
+                        "f7" => {
+                            let _ = this.navigate_next_diff_change(cx);
+                        }
+                        _ => {}
                     }
                     handled = true;
                 }
