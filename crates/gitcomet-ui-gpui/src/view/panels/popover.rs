@@ -418,6 +418,14 @@ fn choose_popover_anchor_corner(
 }
 
 impl PopoverHost {
+    #[cfg(test)]
+    pub(in crate::view) fn create_branch_input_focus_handle_for_test(
+        &self,
+        app: &App,
+    ) -> FocusHandle {
+        self.create_branch_input.read(app).focus_handle()
+    }
+
     fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
         let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));

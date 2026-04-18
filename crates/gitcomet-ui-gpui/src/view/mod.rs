@@ -26,8 +26,8 @@ use gpui::{
     GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
     ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, TextRun, Tiling,
-    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill, point, px,
-    relative, size, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div, fill,
+    point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 #[cfg(test)]
@@ -37,6 +37,18 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::time::{Duration, Instant};
+
+actions!(
+    text_input_diff_navigation,
+    [
+        TextInputDiffPrevFile,
+        TextInputDiffNextFile,
+        TextInputDiffPrevSearchMatchOrChange,
+        TextInputDiffNextSearchMatchOrChange,
+        TextInputDiffPrevChange,
+        TextInputDiffNextChange,
+    ]
+);
 
 mod app_model;
 mod branch_sidebar;
@@ -1744,27 +1756,63 @@ impl GitCometView {
         platform_open::open_url(url)
     }
 
+    fn defer_text_input_main_pane_action<F>(&self, cx: &mut gpui::Context<Self>, action: F)
+    where
+        F: FnOnce(&mut MainPaneView, &mut Window, &mut gpui::Context<MainPaneView>) -> bool
+            + 'static,
+    {
+        let main_pane = self.main_pane.clone();
+        let window_handle = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                main_pane.update(cx, |pane, cx| {
+                    if action(pane, window, cx) {
+                        cx.notify();
+                    }
+                });
+            });
+        });
+    }
+
+    fn defer_text_input_adjacent_diff_file_navigation(
+        &self,
+        direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.defer_text_input_main_pane_action(cx, move |pane, window, cx| {
+            let Some(repo_id) = pane.active_repo_id() else {
+                return false;
+            };
+            pane.try_select_adjacent_diff_file_preserving_focus(repo_id, direction, window, cx)
+        });
+    }
+
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
         self.popover_host.read(app).is_open()
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
         self.tooltip_host.read(app).tooltip_text_for_test()
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn open_repo_panel_visible_for_test(&self) -> bool {
         self.open_repo_panel
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn show_timezone_for_test(&self) -> bool {
         self.show_timezone
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
         self.change_tracking_view
     }
@@ -1799,6 +1847,7 @@ impl GitCometView {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(in crate::view) fn diff_scroll_sync_for_test(&self) -> DiffScrollSync {
         self.diff_scroll_sync
     }
@@ -2234,6 +2283,47 @@ impl Render for GitCometView {
             .text_color(theme.colors.text);
         root = root.relative();
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
+        root = root
+            .on_action(cx.listener(|this, _: &TextInputDiffPrevFile, _window, cx| {
+                this.defer_text_input_adjacent_diff_file_navigation(-1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &TextInputDiffNextFile, _window, cx| {
+                this.defer_text_input_adjacent_diff_file_navigation(1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(
+                |this, _: &TextInputDiffPrevSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_prev_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &TextInputDiffNextSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_next_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(
+                cx.listener(|this, _: &TextInputDiffPrevChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_prev_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &TextInputDiffNextChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_next_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            );
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
             this.last_mouse_pos = e.position;
