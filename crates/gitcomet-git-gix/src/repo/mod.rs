@@ -96,7 +96,28 @@ struct LogHeadPageCacheEntry {
     page: LogPage,
 }
 
+type LogPagedWalk = gix::traverse::commit::Simple<gix::OdbHandleArc, fn(&gix::oid) -> bool>;
+
+struct LogPagedWalkState {
+    pending: Option<gix::traverse::commit::Info>,
+    walk: LogPagedWalk,
+}
+
+struct LogPagedWalkCacheEntry {
+    token: Arc<str>,
+    mode: HistoryMode,
+    head_oid: gix::ObjectId,
+    state: LogPagedWalkState,
+}
+
+#[derive(Default)]
+struct LogPagedWalkCache {
+    next_id: u64,
+    entries: Vec<LogPagedWalkCacheEntry>,
+}
+
 const LOG_HEAD_PAGE_CACHE_LIMIT: usize = 32;
+const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 
 pub(crate) struct GixRepo {
     spec: RepoSpec,
@@ -105,6 +126,7 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_head_page_cache: std::sync::Mutex<Vec<LogHeadPageCacheEntry>>,
+    log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
 }
 
 impl GixRepo {
@@ -116,6 +138,7 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_head_page_cache: std::sync::Mutex::new(Vec::new()),
+            log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
         }
     }
 

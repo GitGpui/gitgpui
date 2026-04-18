@@ -41,6 +41,7 @@ pub(super) struct HistoryBaseCacheRequest {
     pub(super) log_fingerprint: u64,
     pub(super) head_branch_rev: u64,
     pub(super) detached_head_commit: Option<CommitId>,
+    pub(super) head_branch_target: Option<CommitId>,
     pub(super) branches_rev: u64,
     pub(super) remote_branches_rev: u64,
     pub(super) stashes_rev: u64,

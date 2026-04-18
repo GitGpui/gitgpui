@@ -102,6 +102,17 @@ fn git_remote_url(path: &Path) -> String {
     }
 }
 
+fn git_force_file_transport_url(path: &Path) -> String {
+    if cfg!(windows) {
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        format!("file:///{normalized}")
+    } else {
+        // Force Git to use file:// transport so clone flags like `--depth`
+        // are honored instead of falling back to the local-clone fast path.
+        format!("file://{}", path.to_string_lossy())
+    }
+}
+
 fn run_git_at(repo: &Path, args: &[&str], unix_seconds: i64) {
     let seconds = unix_seconds.rem_euclid(60);
     let minutes = unix_seconds.div_euclid(60).rem_euclid(60);
@@ -343,6 +354,10 @@ fn no_merges_history_mode_paginates_without_repeating_filtered_commits() {
         vec!["main", "feature"]
     );
     let cursor = first.next_cursor.as_ref().expect("next cursor");
+    assert!(
+        cursor.resume_token.is_some(),
+        "filtered history pagination should provide an opaque resume token"
+    );
 
     let second = opened
         .log_history_mode_page(HistoryMode::NoMerges, 2, Some(cursor))
@@ -362,6 +377,165 @@ fn no_merges_history_mode_paginates_without_repeating_filtered_commits() {
             .all(|commit| first.commits.iter().all(|first| first.id != commit.id)),
         "filtered pagination should not repeat commits across pages"
     );
+
+    let stale_cursor = LogCursor {
+        last_seen: first.commits[1].id.clone(),
+        resume_from: None,
+        resume_token: Some(Arc::from("stale")),
+    };
+    let stale_second = opened
+        .log_history_mode_page(HistoryMode::NoMerges, 2, Some(&stale_cursor))
+        .unwrap();
+    assert_eq!(stale_second.commits, second.commits);
+
+    let legacy_cursor = LogCursor {
+        last_seen: first.commits[1].id.clone(),
+        resume_from: None,
+        resume_token: None,
+    };
+    let legacy_second = opened
+        .log_history_mode_page(HistoryMode::NoMerges, 2, Some(&legacy_cursor))
+        .unwrap();
+    assert_eq!(legacy_second.commits, second.commits);
+}
+
+#[test]
+fn full_reachable_history_mode_paginates_without_repeating_commits() {
+    let fixture = HistoryModeFixture::new();
+    let backend = GixBackend;
+    let opened = backend.open(fixture.repo()).unwrap();
+
+    let first = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 2, None)
+        .unwrap();
+    assert_eq!(
+        first
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["merge feature", "main"]
+    );
+    let cursor = first.next_cursor.as_ref().expect("next cursor");
+    assert!(
+        cursor.resume_token.is_some(),
+        "full-reachable pagination should provide an opaque resume token"
+    );
+
+    let second = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 2, Some(cursor))
+        .unwrap();
+    assert_eq!(
+        second
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["feature", "base"]
+    );
+    assert!(
+        second
+            .commits
+            .iter()
+            .all(|commit| first.commits.iter().all(|first| first.id != commit.id)),
+        "full-reachable pagination should not repeat commits across pages"
+    );
+
+    let stale_cursor = LogCursor {
+        last_seen: first.commits[1].id.clone(),
+        resume_from: None,
+        resume_token: Some(Arc::from("stale")),
+    };
+    let stale_second = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 2, Some(&stale_cursor))
+        .unwrap();
+    assert_eq!(stale_second.commits, second.commits);
+
+    let legacy_cursor = LogCursor {
+        last_seen: first.commits[1].id.clone(),
+        resume_from: None,
+        resume_token: None,
+    };
+    let legacy_second = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 2, Some(&legacy_cursor))
+        .unwrap();
+    assert_eq!(legacy_second.commits, second.commits);
+}
+
+#[test]
+fn shallow_history_modes_paginate_without_resume_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin_work = dir.path().join("origin-work");
+    let origin_bare = dir.path().join("origin.git");
+    let shallow = dir.path().join("shallow");
+    std::fs::create_dir_all(&origin_work).unwrap();
+
+    run_git(&origin_work, &["init", "-b", "main"]);
+    run_git(&origin_work, &["config", "user.email", "you@example.com"]);
+    run_git(&origin_work, &["config", "user.name", "You"]);
+    run_git(&origin_work, &["config", "commit.gpgsign", "false"]);
+
+    commit_file_at(&origin_work, "base.txt", "base\n", "base", 1);
+    let base_id = git_stdout(&origin_work, &["rev-parse", "HEAD"]);
+
+    commit_file_at(&origin_work, "middle.txt", "middle\n", "middle", 2);
+    let middle_id = git_stdout(&origin_work, &["rev-parse", "HEAD"]);
+
+    commit_file_at(&origin_work, "tip.txt", "tip\n", "tip", 3);
+    let tip_id = git_stdout(&origin_work, &["rev-parse", "HEAD"]);
+
+    let origin_work_str = origin_work.to_string_lossy().to_string();
+    let origin_bare_str = origin_bare.to_string_lossy().to_string();
+    let shallow_str = shallow.to_string_lossy().to_string();
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            "--bare",
+            origin_work_str.as_str(),
+            origin_bare_str.as_str(),
+        ],
+    );
+    let origin_url = git_force_file_transport_url(&origin_bare);
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            "--depth",
+            "2",
+            origin_url.as_str(),
+            shallow_str.as_str(),
+        ],
+    );
+    assert_eq!(
+        git_stdout(&shallow, &["rev-parse", "--is-shallow-repository"]),
+        "true"
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&shallow).unwrap();
+
+    for mode in [HistoryMode::FullReachable, HistoryMode::NoMerges] {
+        let first = opened.log_history_mode_page(mode, 1, None).unwrap();
+        assert_eq!(first.commits.len(), 1);
+        assert_eq!(first.commits[0].id.as_ref(), tip_id.as_str());
+        let cursor = first.next_cursor.as_ref().expect("next cursor");
+        assert_eq!(cursor.last_seen.as_ref(), tip_id.as_str());
+        assert!(
+            cursor.resume_token.is_none(),
+            "shallow repositories should keep legacy cursor semantics"
+        );
+
+        let second = opened.log_history_mode_page(mode, 1, Some(cursor)).unwrap();
+        assert_eq!(second.commits.len(), 1);
+        assert_eq!(second.commits[0].id.as_ref(), middle_id.as_str());
+        assert!(second.next_cursor.is_none());
+        assert_ne!(
+            second.commits[0].id.as_ref(),
+            base_id.as_str(),
+            "depth-2 clone should not expose commits beyond the shallow boundary"
+        );
+    }
 }
 
 #[test]
@@ -412,6 +586,10 @@ fn merges_only_history_mode_paginates_without_repeating_filtered_merges() {
         .next_cursor
         .as_ref()
         .expect("next cursor for second merge");
+    assert!(
+        cursor.resume_token.is_some(),
+        "filtered history pagination should provide an opaque resume token"
+    );
 
     let second = opened
         .log_history_mode_page(HistoryMode::MergesOnly, 1, Some(cursor))
@@ -420,6 +598,26 @@ fn merges_only_history_mode_paginates_without_repeating_filtered_merges() {
     assert_eq!(second.commits[0].id.as_ref(), merge_one.as_str());
     assert!(second.next_cursor.is_none());
     assert_ne!(first.commits[0].id, second.commits[0].id);
+
+    let stale_cursor = LogCursor {
+        last_seen: first.commits[0].id.clone(),
+        resume_from: None,
+        resume_token: Some(Arc::from("stale")),
+    };
+    let stale_second = opened
+        .log_history_mode_page(HistoryMode::MergesOnly, 1, Some(&stale_cursor))
+        .unwrap();
+    assert_eq!(stale_second.commits, second.commits);
+
+    let legacy_cursor = LogCursor {
+        last_seen: first.commits[0].id.clone(),
+        resume_from: None,
+        resume_token: None,
+    };
+    let legacy_second = opened
+        .log_history_mode_page(HistoryMode::MergesOnly, 1, Some(&legacy_cursor))
+        .unwrap();
+    assert_eq!(legacy_second.commits, second.commits);
 }
 
 #[test]
@@ -670,6 +868,7 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
     let legacy_cursor = LogCursor {
         last_seen: first.commits[0].id.clone(),
         resume_from: None,
+        resume_token: None,
     };
     let legacy_second = opened.log_head_page(10, Some(&legacy_cursor)).unwrap();
     assert_eq!(legacy_second.commits, second.commits);
@@ -743,6 +942,7 @@ fn log_head_page_resume_hint_follows_first_parent_after_merge_commit() {
     let legacy_cursor = LogCursor {
         last_seen: first.commits[0].id.clone(),
         resume_from: None,
+        resume_token: None,
     };
     let legacy_second = opened.log_head_page(10, Some(&legacy_cursor)).unwrap();
     assert_eq!(legacy_second.commits, second.commits);

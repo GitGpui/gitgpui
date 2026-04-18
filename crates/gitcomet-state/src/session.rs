@@ -217,6 +217,48 @@ pub fn load_from_path(path: &Path) -> UiSession {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RepoSessionPreferences {
+    pub(crate) default_history_mode: Option<HistoryMode>,
+    pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
+    pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
+    pub(crate) repo_fetch_prune_deleted_remote_tracking_branches: BTreeMap<String, bool>,
+}
+
+pub(crate) fn load_repo_session_preferences() -> RepoSessionPreferences {
+    let Some(session_file_path) = default_session_file_path() else {
+        return RepoSessionPreferences::default();
+    };
+    load_repo_session_preferences_from_path(&session_file_path)
+}
+
+pub(crate) fn load_repo_session_preferences_from_path(
+    session_file_path: &Path,
+) -> RepoSessionPreferences {
+    let Some(file) = load_file(session_file_path) else {
+        return RepoSessionPreferences::default();
+    };
+
+    RepoSessionPreferences {
+        default_history_mode: file.default_history_mode.map(Into::into),
+        repo_history_modes: file
+            .repo_history_modes
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect(),
+        repo_history_scopes: file
+            .repo_history_scopes
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect(),
+        repo_fetch_prune_deleted_remote_tracking_branches: file
+            .repo_fetch_prune_deleted_remote_tracking_branches
+            .unwrap_or_default(),
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionReposSnapshot {
     pub open_repos: Arc<[Arc<str>]>,
     pub active_repo_index: Option<usize>,
@@ -595,6 +637,21 @@ pub fn persist_repo_history_mode(workdir: &Path, mode: HistoryMode) -> io::Resul
     persist_repo_history_mode_to_path(workdir, mode, &session_file_path)
 }
 
+fn repo_history_mode_setting_from_file(
+    file: &UiSessionFile,
+    workdir: &Path,
+) -> Option<HistoryModeSetting> {
+    file.repo_history_modes.as_ref().and_then(|modes| {
+        workdir
+            .to_str()
+            .and_then(|path| modes.get(path).copied())
+            .or_else(|| {
+                let workdir_key = path_storage_key(workdir);
+                modes.get(&workdir_key).copied()
+            })
+    })
+}
+
 pub fn persist_repo_history_mode_to_path(
     workdir: &Path,
     mode: HistoryMode,
@@ -603,15 +660,7 @@ pub fn persist_repo_history_mode_to_path(
     let mut file = load_file(session_file_path).unwrap_or_default();
     let mode = HistoryModeSetting::from(mode);
 
-    if let Some(existing_mode) = file.repo_history_modes.as_ref().and_then(|modes| {
-        workdir
-            .to_str()
-            .and_then(|path| modes.get(path).copied())
-            .or_else(|| {
-                let workdir_key = path_storage_key(workdir);
-                modes.get(&workdir_key).copied()
-            })
-    }) && existing_mode == mode
+    if repo_history_mode_setting_from_file(&file, workdir).is_some_and(|existing| existing == mode)
     {
         return Ok(());
     }
@@ -622,6 +671,52 @@ pub fn persist_repo_history_mode_to_path(
         .get_or_insert_with(BTreeMap::new)
         .insert(workdir_key, mode);
 
+    persist_to_path(session_file_path, &file)
+}
+
+pub(crate) fn persist_repo_history_modes_batch(
+    updates: &[(PathBuf, HistoryMode)],
+) -> io::Result<()> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let Some(session_file_path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_repo_history_modes_batch_to_path(updates, &session_file_path)
+}
+
+pub(crate) fn persist_repo_history_modes_batch_to_path(
+    updates: &[(PathBuf, HistoryMode)],
+    session_file_path: &Path,
+) -> io::Result<()> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    let mut file = load_file(session_file_path).unwrap_or_default();
+    let mut changed = false;
+
+    for (workdir, mode) in updates {
+        let mode = HistoryModeSetting::from(*mode);
+        if repo_history_mode_setting_from_file(&file, workdir)
+            .is_some_and(|existing| existing == mode)
+        {
+            continue;
+        }
+
+        let workdir_key = path_storage_key(workdir);
+        file.repo_history_modes
+            .get_or_insert_with(BTreeMap::new)
+            .insert(workdir_key, mode);
+        changed = true;
+    }
+
+    if !changed {
+        return Ok(());
+    }
+
+    file.version = CURRENT_SESSION_FILE_VERSION;
     persist_to_path(session_file_path, &file)
 }
 
@@ -1165,13 +1260,25 @@ fn app_state_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::model::{RepoId, RepoState};
-    use gitcomet_core::domain::LogScope;
-    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_core::domain::{HistoryMode, LogScope, RepoSpec};
 
     fn clear_session_repos_snapshot_cache() {
         SESSION_REPOS_SNAPSHOT_CACHE.with(|cache| {
             cache.borrow_mut().take();
         });
+    }
+
+    fn unique_session_test_dir(label: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-session-unit-test-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        dir
     }
 
     #[test]
@@ -1213,6 +1320,153 @@ mod tests {
         assert!(key.starts_with(SESSION_PATH_BYTES_PREFIX), "{key}");
         let restored = path_from_storage_key(&key);
         assert_eq!(restored.as_os_str().as_bytes(), path.as_os_str().as_bytes());
+    }
+
+    #[test]
+    fn load_repo_session_preferences_collects_current_and_legacy_history_settings() {
+        let dir = unique_session_test_dir("repo-session-preferences");
+        let session_file = dir.join("session.json");
+        let repo_mode = dir.join("repo-mode");
+        let repo_legacy = dir.join("repo-legacy");
+        let repo_fetch = dir.join("repo-fetch");
+        let _ = fs::create_dir_all(&repo_mode);
+        let _ = fs::create_dir_all(&repo_legacy);
+        let _ = fs::create_dir_all(&repo_fetch);
+
+        assert_eq!(
+            load_repo_session_preferences_from_path(&dir.join("missing.json")),
+            RepoSessionPreferences::default()
+        );
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                default_history_mode: Some(HistoryMode::MergesOnly),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist default history mode");
+        persist_repo_history_mode_to_path(&repo_mode, HistoryMode::NoMerges, &session_file)
+            .expect("persist explicit history mode");
+        persist_repo_history_scope_to_path(&repo_legacy, LogScope::CurrentBranch, &session_file)
+            .expect("persist legacy history scope");
+        persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
+            &repo_fetch,
+            true,
+            &session_file,
+        )
+        .expect("persist fetch-prune setting");
+
+        let loaded = load_repo_session_preferences_from_path(&session_file);
+        assert_eq!(loaded.default_history_mode, Some(HistoryMode::MergesOnly));
+        assert_eq!(
+            loaded.repo_history_modes.get(&path_storage_key(&repo_mode)),
+            Some(&HistoryMode::NoMerges)
+        );
+        assert_eq!(
+            loaded
+                .repo_history_scopes
+                .get(&path_storage_key(&repo_legacy)),
+            Some(&HistoryMode::FirstParent)
+        );
+        assert_eq!(
+            loaded
+                .repo_fetch_prune_deleted_remote_tracking_branches
+                .get(&path_storage_key(&repo_fetch)),
+            Some(&true)
+        );
+    }
+
+    #[test]
+    fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
+        let dir = unique_session_test_dir("repo-history-mode-batch");
+        let session_file = dir.join("session.json");
+        let missing_file = dir.join("missing.json");
+        let repo_a = dir.join("repo-a");
+        let repo_b = dir.join("repo-b");
+        let repo_c = dir.join("repo-c");
+        let _ = fs::create_dir_all(&repo_a);
+        let _ = fs::create_dir_all(&repo_b);
+        let _ = fs::create_dir_all(&repo_c);
+
+        persist_repo_history_modes_batch_to_path(&[], &missing_file)
+            .expect("empty updates should succeed");
+        assert!(
+            !missing_file.exists(),
+            "empty batch updates should not create a session file"
+        );
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                default_history_mode: Some(HistoryMode::MergesOnly),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist default history mode");
+        persist_repo_history_scope_to_path(&repo_b, LogScope::CurrentBranch, &session_file)
+            .expect("persist legacy history scope");
+        persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
+            &repo_c,
+            true,
+            &session_file,
+        )
+        .expect("persist fetch-prune setting");
+        persist_repo_history_mode_to_path(&repo_a, HistoryMode::FirstParent, &session_file)
+            .expect("persist repo_a history mode");
+
+        let before = fs::read_to_string(&session_file).expect("read session file");
+
+        persist_repo_history_modes_batch_to_path(&[], &session_file)
+            .expect("empty updates should not rewrite the file");
+        assert_eq!(
+            fs::read_to_string(&session_file).expect("read session file after empty batch"),
+            before
+        );
+
+        persist_repo_history_modes_batch_to_path(
+            &[(repo_a.clone(), HistoryMode::FirstParent)],
+            &session_file,
+        )
+        .expect("unchanged updates should not rewrite the file");
+        assert_eq!(
+            fs::read_to_string(&session_file).expect("read session file after unchanged batch"),
+            before
+        );
+
+        persist_repo_history_modes_batch_to_path(
+            &[
+                (repo_b.clone(), HistoryMode::AllBranches),
+                (repo_c.clone(), HistoryMode::NoMerges),
+            ],
+            &session_file,
+        )
+        .expect("persist changed batch updates");
+
+        let loaded = load_repo_session_preferences_from_path(&session_file);
+        assert_eq!(loaded.default_history_mode, Some(HistoryMode::MergesOnly));
+        assert_eq!(
+            loaded.repo_history_modes.get(&path_storage_key(&repo_a)),
+            Some(&HistoryMode::FirstParent)
+        );
+        assert_eq!(
+            loaded.repo_history_modes.get(&path_storage_key(&repo_b)),
+            Some(&HistoryMode::AllBranches)
+        );
+        assert_eq!(
+            loaded.repo_history_modes.get(&path_storage_key(&repo_c)),
+            Some(&HistoryMode::NoMerges)
+        );
+        assert_eq!(
+            loaded.repo_history_scopes.get(&path_storage_key(&repo_b)),
+            Some(&HistoryMode::FirstParent)
+        );
+        assert_eq!(
+            loaded
+                .repo_fetch_prune_deleted_remote_tracking_branches
+                .get(&path_storage_key(&repo_c)),
+            Some(&true)
+        );
     }
 
     #[test]

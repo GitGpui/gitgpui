@@ -717,6 +717,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
             resume_from: None,
+            resume_token: None,
         }),
     }));
     repo_state.history_state.log_loading_more = false;
@@ -1012,6 +1013,7 @@ fn log_loaded_appends_when_loading_more() {
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
             resume_from: None,
+            resume_token: None,
         }),
     }));
     repo_state.history_state.log_loading_more = true;
@@ -1027,6 +1029,7 @@ fn log_loaded_appends_when_loading_more() {
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
                 resume_from: None,
+                resume_token: None,
             }),
             result: Ok(LogPage {
                 commits: vec![Commit {
@@ -1080,6 +1083,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
             resume_from: None,
+            resume_token: None,
         }),
     })));
     repo_state.history_state.log_loading_more = true;
@@ -1094,6 +1098,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
                 resume_from: None,
+                resume_token: None,
             }),
             result: Ok(LogPage {
                 commits: vec![Commit {
@@ -1106,6 +1111,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
                 next_cursor: Some(LogCursor {
                     last_seen: CommitId("c2".into()),
                     resume_from: None,
+                    resume_token: None,
                 }),
             }),
         }),
@@ -1243,6 +1249,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
                 next_cursor: Some(LogCursor {
                     last_seen,
                     resume_from: None,
+                    resume_token: None,
                 }),
             }),
         }),

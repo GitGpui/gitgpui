@@ -999,6 +999,22 @@ impl HistoryView {
         }
     }
 
+    fn attached_head_target_for_repo(repo: &RepoState) -> Option<CommitId> {
+        let Loadable::Ready(head_branch) = &repo.head_branch else {
+            return None;
+        };
+        if head_branch == "HEAD" {
+            return None;
+        }
+        let Loadable::Ready(branches) = &repo.branches else {
+            return None;
+        };
+        branches
+            .iter()
+            .find(|branch| branch.name == *head_branch)
+            .map(|branch| branch.target.clone())
+    }
+
     fn history_base_cache_request_for_repo(
         &self,
         repo: &RepoState,
@@ -1010,7 +1026,12 @@ impl HistoryView {
             log_fingerprint: Self::log_fingerprint(&page.commits),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
-            branches_rev: repo.branches_rev,
+            head_branch_target: Self::attached_head_target_for_repo(repo),
+            branches_rev: if repo.history_state.history_scope.is_current_branch_mode() {
+                0
+            } else {
+                repo.branches_rev
+            },
             remote_branches_rev: if repo.history_state.history_scope.is_current_branch_mode() {
                 0
             } else {
@@ -2187,6 +2208,7 @@ mod tests {
             next_cursor: next_cursor.map(|last_seen| LogCursor {
                 last_seen: CommitId(last_seen.into()),
                 resume_from: None,
+                resume_token: None,
             }),
         }
     }
@@ -3098,6 +3120,356 @@ mod tests {
         assert_eq!(after_base_request, before_base_request);
         assert!(after_branches_text.contains("origin/main"));
         assert!(after_branches_text.contains("upstream/main"));
+    }
+
+    #[gpui::test]
+    fn current_branch_local_branch_changes_reuse_base_cache_and_refresh_decorations(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let page = Arc::new(log_page(vec![commit("tip", &[], "tip")], None));
+        let repo_path = PathBuf::from("/tmp/history-current-branch-local-reuse");
+
+        let mut initial_repo = RepoState::new_opening(repo_id, RepoSpec { workdir: repo_path });
+        initial_repo.history_state.history_scope = LogScope::CurrentBranch;
+        initial_repo.head_branch = Loadable::Ready("main".to_string());
+        initial_repo.head_branch_rev = 1;
+        initial_repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+        initial_repo.branches_rev = 1;
+        initial_repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        initial_repo.remote_branches_rev = 1;
+        initial_repo.log = Loadable::Ready(Arc::clone(&page));
+        initial_repo.log_rev = 1;
+        initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        initial_repo.history_state.log_rev = 1;
+
+        let initial_state = Arc::new(AppState {
+            repos: vec![initial_repo.clone()],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        let mut updated_repo = initial_repo;
+        updated_repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main", "tip"),
+            branch("feature", "tip"),
+        ]));
+        updated_repo.branches_rev = 2;
+
+        let updated_state = Arc::new(AppState {
+            repos: vec![updated_repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        ensure_history_cache_for_tests(cx, &view, initial_state);
+
+        wait_until(cx, "initial current-branch local history cache", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == LogScope::CurrentBranch
+                        && cache.base.request.branches_rev == 0
+                        && cache.decorations.row_vms.len() == 1
+                        && cache.decorations.row_vms[0]
+                            .branches_text
+                            .as_ref()
+                            .contains("main")
+                })
+            })
+        });
+
+        let (before_graph_rows, before_base_request, before_branches_text) =
+            cx.update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let rows_len = history_view.update(app, |history, cx| {
+                    HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+                });
+                assert_eq!(rows_len, 1, "initial current-branch row should render");
+
+                let history = history_view.read(app);
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("history cache should be available");
+                (
+                    Arc::clone(&cache.base.graph_rows),
+                    cache.base.request.clone(),
+                    cache.decorations.row_vms[0]
+                        .branches_text
+                        .as_ref()
+                        .to_owned(),
+                )
+            });
+
+        assert!(before_branches_text.contains("main"));
+        assert!(!before_branches_text.contains("feature"));
+
+        ensure_history_cache_for_tests(cx, &view, updated_state);
+
+        wait_until(cx, "updated current-branch local decorations", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == LogScope::CurrentBranch
+                        && cache.base.request.branches_rev == 0
+                        && cache.decorations.request.branches_rev == 2
+                        && cache.decorations.row_vms.len() == 1
+                        && cache.decorations.row_vms[0]
+                            .branches_text
+                            .as_ref()
+                            .contains("feature")
+                })
+            })
+        });
+
+        let (after_graph_rows, after_base_request, after_branches_text) =
+            cx.update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let rows_len = history_view.update(app, |history, cx| {
+                    HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+                });
+                assert_eq!(
+                    rows_len, 1,
+                    "updated current-branch row should still render"
+                );
+
+                let history = history_view.read(app);
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("history cache should be available");
+                (
+                    Arc::clone(&cache.base.graph_rows),
+                    cache.base.request.clone(),
+                    cache.decorations.row_vms[0]
+                        .branches_text
+                        .as_ref()
+                        .to_owned(),
+                )
+            });
+
+        assert!(
+            Arc::ptr_eq(&before_graph_rows, &after_graph_rows),
+            "local branch changes in current-branch mode should reuse the heavy base cache"
+        );
+        assert_eq!(after_base_request, before_base_request);
+        assert!(after_branches_text.contains("main"));
+        assert!(after_branches_text.contains("feature"));
+    }
+
+    #[gpui::test]
+    fn current_branch_head_target_changes_rebuild_base_cache_and_move_head_marker(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let page = Arc::new(log_page(
+            vec![commit("tip", &["base"], "tip"), commit("base", &[], "base")],
+            None,
+        ));
+        let repo_path = PathBuf::from("/tmp/history-current-branch-head-target");
+
+        let mut initial_repo = RepoState::new_opening(repo_id, RepoSpec { workdir: repo_path });
+        initial_repo.history_state.history_scope = LogScope::CurrentBranch;
+        initial_repo.head_branch = Loadable::Ready("main".to_string());
+        initial_repo.head_branch_rev = 1;
+        initial_repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+        initial_repo.branches_rev = 1;
+        initial_repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        initial_repo.remote_branches_rev = 1;
+        initial_repo.log = Loadable::Ready(Arc::clone(&page));
+        initial_repo.log_rev = 1;
+        initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        initial_repo.history_state.log_rev = 1;
+
+        let initial_state = Arc::new(AppState {
+            repos: vec![initial_repo.clone()],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        let mut updated_repo = initial_repo;
+        updated_repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "base")]));
+        updated_repo.branches_rev = 2;
+
+        let updated_state = Arc::new(AppState {
+            repos: vec![updated_repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        ensure_history_cache_for_tests(cx, &view, initial_state);
+
+        wait_until(cx, "initial current-branch head target cache", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == LogScope::CurrentBranch
+                        && cache.base.request.branches_rev == 0
+                        && cache
+                            .base
+                            .request
+                            .head_branch_target
+                            .as_ref()
+                            .map(AsRef::as_ref)
+                            == Some("tip")
+                        && cache.base.row_vms.len() == 2
+                        && cache.base.row_vms[0].is_head
+                        && !cache.base.row_vms[1].is_head
+                        && cache.decorations.row_vms[0]
+                            .branches_text
+                            .as_ref()
+                            .contains("main")
+                })
+            })
+        });
+
+        let (before_graph_rows, before_base_request, before_head_rows, before_branches_text) = cx
+            .update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let rows_len = history_view.update(app, |history, cx| {
+                    HistoryView::render_history_table_rows(history, 0..2, window, cx).len()
+                });
+                assert_eq!(rows_len, 2, "initial rows should render");
+
+                let history = history_view.read(app);
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("history cache should be available");
+                (
+                    Arc::clone(&cache.base.graph_rows),
+                    cache.base.request.clone(),
+                    cache
+                        .base
+                        .row_vms
+                        .iter()
+                        .map(|row| row.is_head)
+                        .collect::<Vec<_>>(),
+                    cache
+                        .decorations
+                        .row_vms
+                        .iter()
+                        .map(|row| row.branches_text.as_ref().to_owned())
+                        .collect::<Vec<_>>(),
+                )
+            });
+
+        assert_eq!(before_head_rows, vec![true, false]);
+        assert!(before_branches_text[0].contains("main"));
+        assert!(before_branches_text[1].is_empty());
+
+        ensure_history_cache_for_tests(cx, &view, updated_state);
+
+        wait_until(cx, "updated current-branch head target cache", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == LogScope::CurrentBranch
+                        && cache.base.request.branches_rev == 0
+                        && cache
+                            .base
+                            .request
+                            .head_branch_target
+                            .as_ref()
+                            .map(AsRef::as_ref)
+                            == Some("base")
+                        && cache.base.row_vms.len() == 2
+                        && !cache.base.row_vms[0].is_head
+                        && cache.base.row_vms[1].is_head
+                        && cache.decorations.row_vms[1]
+                            .branches_text
+                            .as_ref()
+                            .contains("main")
+                })
+            })
+        });
+
+        let (after_graph_rows, after_base_request, after_head_rows, after_branches_text) = cx
+            .update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let rows_len = history_view.update(app, |history, cx| {
+                    HistoryView::render_history_table_rows(history, 0..2, window, cx).len()
+                });
+                assert_eq!(rows_len, 2, "updated rows should still render");
+
+                let history = history_view.read(app);
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("history cache should be available");
+                (
+                    Arc::clone(&cache.base.graph_rows),
+                    cache.base.request.clone(),
+                    cache
+                        .base
+                        .row_vms
+                        .iter()
+                        .map(|row| row.is_head)
+                        .collect::<Vec<_>>(),
+                    cache
+                        .decorations
+                        .row_vms
+                        .iter()
+                        .map(|row| row.branches_text.as_ref().to_owned())
+                        .collect::<Vec<_>>(),
+                )
+            });
+
+        assert!(
+            !Arc::ptr_eq(&before_graph_rows, &after_graph_rows),
+            "head target changes should rebuild the heavy base cache in current-branch mode"
+        );
+        assert_eq!(before_base_request.branches_rev, 0);
+        assert_eq!(after_base_request.branches_rev, 0);
+        assert_ne!(after_base_request, before_base_request);
+        assert_eq!(
+            before_base_request
+                .head_branch_target
+                .as_ref()
+                .map(AsRef::as_ref),
+            Some("tip")
+        );
+        assert_eq!(
+            after_base_request
+                .head_branch_target
+                .as_ref()
+                .map(AsRef::as_ref),
+            Some("base")
+        );
+        assert_eq!(after_head_rows, vec![false, true]);
+        assert!(after_branches_text[0].is_empty());
+        assert!(after_branches_text[1].contains("main"));
     }
 
     #[gpui::test]

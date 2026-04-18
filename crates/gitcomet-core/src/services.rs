@@ -1009,6 +1009,7 @@ mod tests {
         let cursor = LogCursor {
             last_seen: CommitId("cursor".into()),
             resume_from: Some(CommitId("resume".into())),
+            resume_token: Some(Arc::from("token")),
         };
 
         for mode in [

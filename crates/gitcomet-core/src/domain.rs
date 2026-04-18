@@ -668,6 +668,10 @@ pub struct LogCursor {
     /// treat this as an opaque optimization and fall back to `last_seen`
     /// semantics when it is absent.
     pub resume_from: Option<CommitId>,
+    /// Optional backend-provided opaque token for resuming more complex walks.
+    /// Consumers must treat this as an implementation detail and fall back to
+    /// `last_seen` semantics when it is absent or stale.
+    pub resume_token: Option<Arc<str>>,
 }
 
 #[cfg(test)]
@@ -857,12 +861,14 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
             resume_from: Some(CommitId("feedface".into())),
+            resume_token: Some(Arc::from("cursor-token")),
         };
         assert_eq!(cursor.last_seen.as_ref(), "deadbeef");
         assert_eq!(
             cursor.resume_from.as_ref().map(AsRef::as_ref),
             Some("feedface")
         );
+        assert_eq!(cursor.resume_token.as_deref(), Some("cursor-token"));
     }
 
     #[test]

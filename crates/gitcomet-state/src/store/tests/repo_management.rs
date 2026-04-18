@@ -386,6 +386,65 @@ fn open_repo_uses_builtin_default_history_mode_without_saved_preferences() {
 }
 
 #[test]
+fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_path = dir.path().join("repo");
+    let session_file = dir.path().join("session.json");
+    std::fs::create_dir_all(&repo_path).expect("create repo path");
+
+    crate::session::persist_ui_settings_to_path(
+        crate::session::UiSettings {
+            default_history_mode: Some(LogScope::AllBranches),
+            ..Default::default()
+        },
+        &session_file,
+    )
+    .expect("persist initial default history mode");
+
+    let _session_file_override =
+        crate::session::push_test_session_file_path_override(Some(session_file.clone()));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(repo_path.clone()),
+    );
+
+    assert_eq!(
+        state.repos[0].history_state.history_scope,
+        LogScope::AllBranches
+    );
+    assert_eq!(
+        crate::session::load_repo_history_mode_from_path(&repo_path, &session_file),
+        Some(LogScope::AllBranches)
+    );
+
+    crate::session::persist_ui_settings_to_path(
+        crate::session::UiSettings {
+            default_history_mode: Some(LogScope::NoMerges),
+            ..Default::default()
+        },
+        &session_file,
+    )
+    .expect("persist updated default history mode");
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    reduce(&mut repos, &id_alloc, &mut state, Msg::OpenRepo(repo_path));
+
+    assert_eq!(
+        state.repos[0].history_state.history_scope,
+        LogScope::AllBranches
+    );
+}
+
+#[test]
 fn clone_repo_sets_running_state_and_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -1194,11 +1253,11 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(
-        by_workdir.get(&super::reducer::normalize_repo_path(repo_mode)),
+        by_workdir.get(&super::reducer::normalize_repo_path(repo_mode.clone())),
         Some(&LogScope::NoMerges)
     );
     assert_eq!(
-        by_workdir.get(&super::reducer::normalize_repo_path(repo_legacy)),
+        by_workdir.get(&super::reducer::normalize_repo_path(repo_legacy.clone())),
         Some(&LogScope::FirstParent)
     );
     assert_eq!(
@@ -1211,7 +1270,19 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
             .iter()
             .find(|repo| repo.id == repo_id)
             .map(|repo| repo.spec.workdir.clone())),
-        Some(super::reducer::normalize_repo_path(repo_default))
+        Some(super::reducer::normalize_repo_path(repo_default.clone()))
+    );
+    assert_eq!(
+        crate::session::load_repo_history_mode_from_path(&repo_mode, &session_file),
+        Some(LogScope::NoMerges)
+    );
+    assert_eq!(
+        crate::session::load_repo_history_mode_from_path(&repo_legacy, &session_file),
+        Some(LogScope::FirstParent)
+    );
+    assert_eq!(
+        crate::session::load_repo_history_mode_from_path(&repo_default, &session_file),
+        Some(LogScope::MergesOnly)
     );
 }
 

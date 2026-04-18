@@ -1232,6 +1232,7 @@ mod tests {
             Some(LogCursor {
                 last_seen: CommitId("older".into()),
                 resume_from: None,
+                resume_token: None,
             }),
         ));
         assert!(!loads.request_log(LogScope::NoMerges, 20, None));
@@ -1252,6 +1253,7 @@ mod tests {
         let cursor = LogCursor {
             last_seen: CommitId("page-1".into()),
             resume_from: None,
+            resume_token: None,
         };
 
         assert!(loads.request_log(LogScope::MergesOnly, 20, None));
