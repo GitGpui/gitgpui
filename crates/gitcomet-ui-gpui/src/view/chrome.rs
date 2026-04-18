@@ -131,31 +131,12 @@ fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
         .into_any_element()
 }
 
-#[cfg(test)]
 pub(super) fn titlebar_control_button(
     theme: AppTheme,
     id: &'static str,
     icon: gpui::Svg,
     hover_bg: gpui::Rgba,
     active_bg: gpui::Rgba,
-) -> gpui::Div {
-    titlebar_control_button_scaled(
-        theme,
-        id,
-        icon,
-        hover_bg,
-        active_bg,
-        ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    )
-}
-
-pub(super) fn titlebar_control_button_scaled(
-    theme: AppTheme,
-    id: &'static str,
-    icon: gpui::Svg,
-    hover_bg: gpui::Rgba,
-    active_bg: gpui::Rgba,
-    _ui_scale_percent: u32,
 ) -> gpui::Div {
     let hitbox_width = px(32.0);
     let visual_size = px(26.0);
@@ -203,12 +184,7 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
-#[cfg(test)]
-fn window_frame_visual_inset() -> Pixels {
-    window_frame_visual_inset_scaled(ui_scale::DEFAULT_UI_SCALE_PERCENT)
-}
-
-fn window_frame_visual_inset_scaled(ui_scale_percent: u32) -> Pixels {
+fn window_frame_visual_inset(ui_scale_percent: u32) -> Pixels {
     if cfg!(target_os = "macos") {
         px(0.0)
     } else {
@@ -544,13 +520,12 @@ impl Render for TitleBarView {
         let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let min_tooltip: SharedString = "Minimize window".into();
-        let min = titlebar_control_button_scaled(
+        let min = titlebar_control_button(
             theme,
             "win_min_btn",
             titlebar_control_icon("icons/generic_minimize.svg", theme.colors.accent),
             min_hover,
             min_active,
-            ui_scale_percent,
         )
         .id("win_min")
         .debug_selector(|| "titlebar_win_min".to_string())
@@ -582,13 +557,12 @@ impl Render for TitleBarView {
         };
         let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
-        let max = titlebar_control_button_scaled(
+        let max = titlebar_control_button(
             theme,
             "win_max_btn",
             titlebar_control_icon(max_icon, theme.colors.accent),
             max_hover,
             max_active,
-            ui_scale_percent,
         )
         .id("win_max")
         .debug_selector(|| "titlebar_win_max".to_string())
@@ -612,13 +586,12 @@ impl Render for TitleBarView {
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
         let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
         let close_tooltip: SharedString = "Close window".into();
-        let close = titlebar_control_button_scaled(
+        let close = titlebar_control_button(
             theme,
             "win_close_btn",
             titlebar_control_icon("icons/generic_close.svg", theme.colors.danger),
             close_hover,
             close_active,
-            ui_scale_percent,
         )
         .id("win_close")
         .debug_selector(|| "titlebar_win_close".to_string())
@@ -765,28 +738,14 @@ impl Render for TitleBarView {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn window_frame(
-    theme: AppTheme,
-    decorations: Decorations,
-    content: AnyElement,
-) -> AnyElement {
-    window_frame_scaled(
-        theme,
-        decorations,
-        content,
-        ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    )
-}
-
-pub(crate) fn window_frame_scaled(
     theme: AppTheme,
     decorations: Decorations,
     content: AnyElement,
     ui_scale_percent: u32,
 ) -> AnyElement {
     let suppress_frame = should_suppress_window_frame(decorations);
-    let frame_inset = window_frame_visual_inset_scaled(ui_scale_percent);
+    let frame_inset = window_frame_visual_inset(ui_scale_percent);
     let mut outer = div()
         .id("window_frame")
         .size_full()
@@ -856,9 +815,15 @@ mod tests {
     #[test]
     fn window_frame_visual_inset_matches_platform_chrome_strategy() {
         #[cfg(target_os = "macos")]
-        assert_eq!(window_frame_visual_inset(), px(0.0));
+        assert_eq!(
+            window_frame_visual_inset(ui_scale::DEFAULT_UI_SCALE_PERCENT),
+            px(0.0)
+        );
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(window_frame_visual_inset(), CLIENT_SIDE_DECORATION_INSET);
+        assert_eq!(
+            window_frame_visual_inset(ui_scale::DEFAULT_UI_SCALE_PERCENT),
+            CLIENT_SIDE_DECORATION_INSET
+        );
     }
 
     #[test]

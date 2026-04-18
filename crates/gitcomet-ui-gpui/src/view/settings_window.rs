@@ -285,7 +285,7 @@ fn settings_window_frame(
     if cfg!(target_os = "windows") {
         content
     } else {
-        chrome::window_frame_scaled(theme, decorations, content, ui_scale_percent)
+        chrome::window_frame(theme, decorations, content, ui_scale_percent)
     }
 }
 
@@ -2065,13 +2065,12 @@ impl Render for SettingsWindowView {
 
         let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
-        let min = chrome::titlebar_control_button_scaled(
+        let min = chrome::titlebar_control_button(
             theme,
             "settings_window_min_btn",
             chrome::titlebar_control_icon("icons/generic_minimize.svg", theme.colors.accent),
             min_hover,
             min_active,
-            self.ui_scale_percent,
         )
         .id("settings_window_min")
         .debug_selector(|| "settings_window_min".to_string())
@@ -2088,13 +2087,12 @@ impl Render for SettingsWindowView {
         };
         let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
-        let max = chrome::titlebar_control_button_scaled(
+        let max = chrome::titlebar_control_button(
             theme,
             "settings_window_max_btn",
             chrome::titlebar_control_icon(max_icon, theme.colors.accent),
             max_hover,
             max_active,
-            self.ui_scale_percent,
         )
         .id("settings_window_max")
         .debug_selector(|| "settings_window_max".to_string())
@@ -2107,13 +2105,12 @@ impl Render for SettingsWindowView {
 
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
         let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
-        let close = chrome::titlebar_control_button_scaled(
+        let close = chrome::titlebar_control_button(
             theme,
             "settings_window_close_btn",
             chrome::titlebar_control_icon("icons/generic_close.svg", theme.colors.danger),
             close_hover,
             close_active,
-            self.ui_scale_percent,
         )
         .id("settings_window_close_btn")
         .debug_selector(|| "settings_window_close".to_string())

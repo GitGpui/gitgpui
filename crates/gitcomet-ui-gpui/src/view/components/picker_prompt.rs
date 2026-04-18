@@ -1,7 +1,7 @@
 use super::control_height_md;
 use crate::kit::{Scrollbar, ScrollbarAxis, TextInput};
 use crate::theme::AppTheme;
-use crate::ui_scale::{self, UiScale};
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
     ClickEvent, CursorStyle, Div, Entity, FontWeight, ScrollHandle, SharedString, Window, div, px,
@@ -46,17 +46,7 @@ impl PickerPrompt {
         self
     }
 
-    #[allow(dead_code)]
     pub fn render<V: 'static>(
-        self,
-        theme: AppTheme,
-        cx: &gpui::Context<V>,
-        on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
-    ) -> Div {
-        self.render_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT, cx, on_select)
-    }
-
-    pub fn render_scaled<V: 'static>(
         self,
         theme: AppTheme,
         ui_scale: impl Into<UiScale>,

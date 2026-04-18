@@ -17,7 +17,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .items(labels)
                 .empty_text("No recent repositories")
                 .max_height(scaled_px(320.0))
-                .render_scaled(
+                .render(
                     theme,
                     ui_scale_percent,
                     cx,

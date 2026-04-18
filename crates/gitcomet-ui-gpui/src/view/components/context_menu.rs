@@ -1,5 +1,5 @@
 use crate::theme::AppTheme;
-use crate::ui_scale::{self, UiScale};
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{CursorStyle, Div, ElementId, SharedString, Stateful, div, px};
 
@@ -16,12 +16,7 @@ pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
         .child(content)
 }
 
-#[allow(dead_code)]
-pub fn context_menu_header(theme: AppTheme, title: impl Into<SharedString>) -> Div {
-    context_menu_header_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT, title)
-}
-
-pub fn context_menu_header_scaled(
+pub fn context_menu_header(
     theme: AppTheme,
     ui_scale: impl Into<UiScale>,
     title: impl Into<SharedString>,
@@ -42,12 +37,7 @@ pub fn context_menu_header_scaled(
         .child(title.into())
 }
 
-#[allow(dead_code)]
-pub fn context_menu_label(theme: AppTheme, text: impl Into<SharedString>) -> Div {
-    context_menu_label_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT, text)
-}
-
-pub fn context_menu_label_scaled(
+pub fn context_menu_label(
     theme: AppTheme,
     ui_scale: impl Into<UiScale>,
     text: impl Into<SharedString>,
@@ -66,12 +56,7 @@ pub fn context_menu_label_scaled(
         .child(text.into())
 }
 
-#[allow(dead_code)]
-pub fn context_menu_separator(theme: AppTheme) -> Div {
-    context_menu_separator_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
-}
-
-pub fn context_menu_separator_scaled(theme: AppTheme, ui_scale: impl Into<UiScale>) -> Div {
+pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> Div {
     let ui_scale = ui_scale.into();
     let scaled_px = |value| ui_scale.px(value);
     div()

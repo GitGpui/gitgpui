@@ -205,7 +205,7 @@ impl MainPaneView {
                                 })
                         };
 
-                        let columns_header = components::split_columns_header_scaled(
+                        let columns_header = components::split_columns_header(
                             theme,
                             ui_scale_percent,
                             "A (before)",
@@ -1022,7 +1022,7 @@ impl MainPaneView {
                     .flex_col()
                     .h_full()
                     .min_h(px(0.0))
-                    .child(components::split_columns_header_scaled(
+                    .child(components::split_columns_header(
                         theme,
                         ui_scale_percent,
                         "A (before)",

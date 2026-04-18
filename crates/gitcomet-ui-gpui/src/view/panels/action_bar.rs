@@ -459,7 +459,7 @@ impl Render for ActionBarView {
                     ),
                 )
                 .style(components::SplitButtonStyle::Outlined)
-                .render_scaled(theme, ui_scale_percent),
+                .render(theme, ui_scale_percent),
             )
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                 let text = pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref());
@@ -580,7 +580,7 @@ impl Render for ActionBarView {
                     ),
                 )
                 .style(components::SplitButtonStyle::Outlined)
-                .render_scaled(theme, ui_scale_percent),
+                .render(theme, ui_scale_percent),
             )
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                 let text = push_tooltip_text(push_count, push_tracking_branch_name.as_deref());

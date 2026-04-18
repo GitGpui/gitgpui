@@ -50,19 +50,16 @@ pub(super) fn panel(
         );
 
     let body: AnyElement = match repo.map(|r| &r.history_state.file_history) {
-        None => components::context_menu_label_scaled(theme, ui_scale_percent, "No repository")
+        None => components::context_menu_label(theme, ui_scale_percent, "No repository")
             .into_any_element(),
         Some(Loadable::Loading) => {
-            components::context_menu_label_scaled(theme, ui_scale_percent, "Loading")
-                .into_any_element()
+            components::context_menu_label(theme, ui_scale_percent, "Loading").into_any_element()
         }
         Some(Loadable::Error(e)) => {
-            components::context_menu_label_scaled(theme, ui_scale_percent, e.clone())
-                .into_any_element()
+            components::context_menu_label(theme, ui_scale_percent, e.clone()).into_any_element()
         }
         Some(Loadable::NotLoaded) => {
-            components::context_menu_label_scaled(theme, ui_scale_percent, "Not loaded")
-                .into_any_element()
+            components::context_menu_label(theme, ui_scale_percent, "Not loaded").into_any_element()
         }
         Some(Loadable::Ready(page)) => {
             let commit_ids = page
@@ -85,7 +82,7 @@ pub(super) fn panel(
                     .items(items)
                     .empty_text("No commits")
                     .max_height(scaled_px(340.0))
-                    .render_scaled(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
+                    .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                         let Some(commit_id) = commit_ids.get(ix).cloned() else {
                             return;
                         };
@@ -106,7 +103,7 @@ pub(super) fn panel(
                     })
                     .into_any_element()
             } else {
-                components::context_menu_label_scaled(
+                components::context_menu_label(
                     theme,
                     ui_scale_percent,
                     "Search input not initialized",

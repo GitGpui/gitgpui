@@ -1005,17 +1005,17 @@ impl PopoverHost {
                 .children(model.items.into_iter().enumerate().map(|(ix, item)| {
                     match item {
                         ContextMenuItem::Separator => {
-                            components::context_menu_separator_scaled(theme, ui_scale)
+                            components::context_menu_separator(theme, ui_scale)
                                 .id(("context_menu_sep", ix))
                                 .into_any_element()
                         }
                         ContextMenuItem::Header(title) => {
-                            components::context_menu_header_scaled(theme, ui_scale, title)
+                            components::context_menu_header(theme, ui_scale, title)
                                 .id(("context_menu_header", ix))
                                 .into_any_element()
                         }
                         ContextMenuItem::Label(text) => {
-                            components::context_menu_label_scaled(theme, ui_scale, text)
+                            components::context_menu_label(theme, ui_scale, text)
                                 .id(("context_menu_label", ix))
                                 .into_any_element()
                         }

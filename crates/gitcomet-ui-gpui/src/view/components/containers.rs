@@ -99,16 +99,7 @@ pub fn empty_state(
         )
 }
 
-#[allow(dead_code)]
 pub fn split_columns_header(
-    theme: AppTheme,
-    left: impl Into<SharedString>,
-    right: impl Into<SharedString>,
-) -> Div {
-    split_columns_header_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT, left, right)
-}
-
-pub fn split_columns_header_scaled(
     theme: AppTheme,
     ui_scale_percent: u32,
     left: impl Into<SharedString>,

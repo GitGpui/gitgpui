@@ -594,15 +594,11 @@ fn markdown_preview_row_element(
             .into_any_element();
     }
 
-    let row_layout = markdown_preview_row_layout_scaled(row, ui_scale_percent);
-    let typography = markdown_preview_row_typography_scaled(
-        theme,
-        row,
-        &context.editor_font_family,
-        ui_scale_percent,
-    );
+    let row_layout = markdown_preview_row_layout(row, ui_scale_percent);
+    let typography =
+        markdown_preview_row_typography(theme, row, &context.editor_font_family, ui_scale_percent);
     let styled = markdown_preview_row_styled_text(theme, row);
-    let horizontal_padding = markdown_preview_row_horizontal_padding_scaled(row, ui_scale_percent);
+    let horizontal_padding = markdown_preview_row_horizontal_padding(row, ui_scale_percent);
     let marker = markdown_preview_row_marker(row);
     let alert_title = markdown_preview_alert_title_label(row);
 
@@ -954,7 +950,7 @@ fn markdown_preview_row_element(
                 .items_center()
                 .pl(px(horizontal_padding.left_px))
                 .pr(px(horizontal_padding.right_px));
-            if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter_scaled(
+            if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter(
                 theme,
                 row.blockquote_level,
                 row.alert_kind,
@@ -1004,7 +1000,7 @@ fn markdown_preview_row_element(
                 .items_center()
                 .pl(px(horizontal_padding.left_px))
                 .pr(px(horizontal_padding.right_px));
-            if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter_scaled(
+            if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter(
                 theme,
                 row.blockquote_level,
                 row.alert_kind,
@@ -1035,7 +1031,7 @@ fn markdown_preview_row_required_width(
 
     let editor_font_family: SharedString = editor_font_family.to_owned().into();
     let typography =
-        markdown_preview_row_typography_scaled(theme, row, &editor_font_family, ui_scale_percent);
+        markdown_preview_row_typography(theme, row, &editor_font_family, ui_scale_percent);
     let default_font_family = window.text_style().font_family.clone();
     let resolved_font_family = typography
         .font_family
@@ -1062,8 +1058,7 @@ fn markdown_preview_row_required_width(
             )
         };
 
-        let horizontal_padding =
-            markdown_preview_row_horizontal_padding_scaled(row, ui_scale_percent);
+        let horizontal_padding = markdown_preview_row_horizontal_padding(row, ui_scale_percent);
         let mut width = px(horizontal_padding.left_px + horizontal_padding.right_px);
         width += text_width;
 
@@ -1308,7 +1303,7 @@ fn markdown_preview_alert_color(theme: AppTheme, kind: MarkdownAlertKind) -> gpu
     }
 }
 
-fn markdown_preview_blockquote_gutter_scaled(
+fn markdown_preview_blockquote_gutter(
     theme: AppTheme,
     blockquote_level: u8,
     alert_kind: Option<MarkdownAlertKind>,
@@ -1430,12 +1425,7 @@ fn markdown_preview_row_text_color(theme: AppTheme, row: &MarkdownPreviewRow) ->
     }
 }
 
-#[allow(dead_code)]
-fn markdown_preview_row_layout(row: &MarkdownPreviewRow) -> MarkdownPreviewRowLayout {
-    markdown_preview_row_layout_scaled(row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
-}
-
-fn markdown_preview_row_layout_scaled(
+fn markdown_preview_row_layout(
     row: &MarkdownPreviewRow,
     ui_scale_percent: u32,
 ) -> MarkdownPreviewRowLayout {
@@ -1490,21 +1480,7 @@ fn markdown_preview_row_layout_scaled(
     }
 }
 
-#[allow(dead_code)]
 fn markdown_preview_row_typography(
-    theme: AppTheme,
-    row: &MarkdownPreviewRow,
-    editor_font_family: &SharedString,
-) -> MarkdownPreviewRowTypography {
-    markdown_preview_row_typography_scaled(
-        theme,
-        row,
-        editor_font_family,
-        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-    )
-}
-
-fn markdown_preview_row_typography_scaled(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
     editor_font_family: &SharedString,
@@ -1608,14 +1584,7 @@ fn markdown_preview_code_background(theme: AppTheme) -> gpui::Rgba {
     }
 }
 
-#[allow(dead_code)]
 fn markdown_preview_row_horizontal_padding(
-    row: &MarkdownPreviewRow,
-) -> MarkdownPreviewRowHorizontalPadding {
-    markdown_preview_row_horizontal_padding_scaled(row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
-}
-
-fn markdown_preview_row_horizontal_padding_scaled(
     row: &MarkdownPreviewRow,
     ui_scale_percent: u32,
 ) -> MarkdownPreviewRowHorizontalPadding {
@@ -2431,11 +2400,30 @@ mod tests {
         };
 
         let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
-        let body_typography =
-            markdown_preview_row_typography(theme, &paragraph, &editor_font_family);
-        let h1_typography = markdown_preview_row_typography(theme, &h1, &editor_font_family);
-        let h2_typography = markdown_preview_row_typography(theme, &h2, &editor_font_family);
-        let h6_typography = markdown_preview_row_typography(theme, &h6, &editor_font_family);
+        let body_typography = markdown_preview_row_typography(
+            theme,
+            &paragraph,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
+        let h1_typography = markdown_preview_row_typography(
+            theme,
+            &h1,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
+        let h2_typography = markdown_preview_row_typography(
+            theme,
+            &h2,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
+        let h6_typography = markdown_preview_row_typography(
+            theme,
+            &h6,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
 
         assert!(h1_typography.font_size > h2_typography.font_size);
         assert!(h2_typography.font_size > body_typography.font_size);
@@ -2452,12 +2440,22 @@ mod tests {
         let list_item = markdown_row(MarkdownPreviewRowKind::ListItem { number: None });
 
         let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
-        let paragraph_typography =
-            markdown_preview_row_typography(theme, &paragraph, &editor_font_family);
-        let list_typography =
-            markdown_preview_row_typography(theme, &list_item, &editor_font_family);
-        let paragraph_layout = markdown_preview_row_layout(&paragraph);
-        let list_layout = markdown_preview_row_layout(&list_item);
+        let paragraph_typography = markdown_preview_row_typography(
+            theme,
+            &paragraph,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
+        let list_typography = markdown_preview_row_typography(
+            theme,
+            &list_item,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
+        let paragraph_layout =
+            markdown_preview_row_layout(&paragraph, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+        let list_layout =
+            markdown_preview_row_layout(&list_item, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
 
         assert_eq!(
             list_typography.line_height,
@@ -2472,7 +2470,12 @@ mod tests {
         let row = markdown_row(MarkdownPreviewRowKind::DetailsSummary);
 
         let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
-        let typography = markdown_preview_row_typography(theme, &row, &editor_font_family);
+        let typography = markdown_preview_row_typography(
+            theme,
+            &row,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
 
         assert_eq!(typography.font_weight, Some(FontWeight::BOLD));
         assert_eq!(
@@ -2494,8 +2497,10 @@ mod tests {
             is_last: true,
         });
 
-        let first_layout = markdown_preview_row_layout(&first_row);
-        let last_layout = markdown_preview_row_layout(&last_row);
+        let first_layout =
+            markdown_preview_row_layout(&first_row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+        let last_layout =
+            markdown_preview_row_layout(&last_row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
 
         assert_eq!(first_layout.top_inset_px, 5.0);
         assert_eq!(last_layout.bottom_inset_px, 5.0);
@@ -2509,7 +2514,10 @@ mod tests {
         });
         row.indent_level = 3;
 
-        let padding = markdown_preview_row_horizontal_padding(&row);
+        let padding = markdown_preview_row_horizontal_padding(
+            &row,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
 
         assert_eq!(padding.left_px, super::MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX);
         assert_eq!(padding.right_px, super::MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX);
@@ -2739,9 +2747,18 @@ mod tests {
         let body = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: false });
 
         let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
-        let header_typography =
-            markdown_preview_row_typography(theme, &header, &editor_font_family);
-        let body_typography = markdown_preview_row_typography(theme, &body, &editor_font_family);
+        let header_typography = markdown_preview_row_typography(
+            theme,
+            &header,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
+        let body_typography = markdown_preview_row_typography(
+            theme,
+            &body,
+            &editor_font_family,
+            crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        );
 
         assert_eq!(
             header_typography
@@ -2810,7 +2827,7 @@ mod tests {
         let theme = AppTheme::gitcomet_light();
         let row = markdown_row(MarkdownPreviewRowKind::Spacer);
 
-        let layout = markdown_preview_row_layout(&row);
+        let layout = markdown_preview_row_layout(&row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
 
         assert_eq!(layout.top_inset_px, 0.0);
         assert_eq!(layout.bottom_inset_px, 0.0);

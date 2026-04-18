@@ -72,7 +72,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .items(items)
             .empty_text("No hunks")
             .max_height(scaled_px(260.0))
-            .render_scaled(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
+            .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                 let Some(&target) = targets.get(ix) else {
                     return;
                 };

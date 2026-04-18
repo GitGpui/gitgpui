@@ -1932,7 +1932,7 @@ impl DetailsPaneView {
                         })
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_submit_commit)
-                        .render_scaled(theme, ui_scale_percent)
+                        .render(theme, ui_scale_percent)
                         .debug_selector(|| "commit_button".to_string())
                         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
                             let Some(repo_id) = this.active_repo_id() else {

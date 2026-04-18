@@ -2302,7 +2302,7 @@ impl MainPaneView {
                                 "Theirs (deleted)".into()
                             };
 
-                            let columns_header = components::split_columns_header_scaled(
+                            let columns_header = components::split_columns_header(
                                 theme,
                                 ui_scale_percent,
                                 ours_label,

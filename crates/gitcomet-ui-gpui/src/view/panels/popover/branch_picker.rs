@@ -26,19 +26,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             .items(items)
                             .empty_text("No branches")
                             .max_height(scaled_px(240.0))
-                            .render_scaled(
-                                theme,
-                                ui_scale_percent,
-                                cx,
-                                move |this, ix, _e, _w, cx| {
-                                    if let Some(name) = branch_names.get(ix).cloned() {
-                                        this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
-                                    }
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                },
-                            ),
+                            .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
+                                if let Some(name) = branch_names.get(ix).cloned() {
+                                    this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
+                                }
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            }),
                     );
                 } else {
                     for (ix, branch) in branches.iter().enumerate() {
@@ -72,21 +67,21 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 }
             }
             Loadable::Loading => {
-                menu = menu.child(components::context_menu_label_scaled(
+                menu = menu.child(components::context_menu_label(
                     theme,
                     ui_scale_percent,
                     "Loading",
                 ));
             }
             Loadable::Error(e) => {
-                menu = menu.child(components::context_menu_label_scaled(
+                menu = menu.child(components::context_menu_label(
                     theme,
                     ui_scale_percent,
                     e.clone(),
                 ));
             }
             Loadable::NotLoaded => {
-                menu = menu.child(components::context_menu_label_scaled(
+                menu = menu.child(components::context_menu_label(
                     theme,
                     ui_scale_percent,
                     "Not loaded",

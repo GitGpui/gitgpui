@@ -1,5 +1,5 @@
 use crate::theme::AppTheme;
-use crate::ui_scale::{self, UiScale};
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, Bounds, ClickEvent, CursorStyle, Div, IntoElement, Pixels, SharedString, Stateful,
@@ -107,7 +107,7 @@ impl Button {
         let disabled = self.disabled;
         let ui_scale = UiScale::current(cx);
 
-        self.render_scaled(theme, ui_scale)
+        self.render(theme, ui_scale)
             .when(!disabled, |this| this.on_click(cx.listener(f)))
     }
 
@@ -125,7 +125,7 @@ impl Button {
         let last_bounds_for_click = Rc::clone(&last_bounds);
         let wrapper_id: SharedString = format!("{}_bounds_wrapper", self.id).into();
 
-        let button = self.render_scaled(theme, ui_scale).when(!disabled, |this| {
+        let button = self.render(theme, ui_scale).when(!disabled, |this| {
             this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                 let bounds = (*last_bounds_for_click.borrow())
                     .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
@@ -143,12 +143,7 @@ impl Button {
             .id(wrapper_id)
     }
 
-    #[allow(dead_code)]
-    pub fn render(self, theme: AppTheme) -> Stateful<Div> {
-        self.render_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
-    }
-
-    pub fn render_scaled(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
+    pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
         let Self {
             id,
             label,

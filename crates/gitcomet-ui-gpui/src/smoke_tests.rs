@@ -72,33 +72,33 @@ fn builds_pure_components_without_panics() {
         assert_no_panic("components::Button render variants", || {
             let _ = components::Button::new("z1", "Filled")
                 .style(components::ButtonStyle::Filled)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z2", "Outlined")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z3", "Subtle")
                 .style(components::ButtonStyle::Subtle)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z4", "Disabled")
                 .style(components::ButtonStyle::Outlined)
                 .disabled(true)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z5", "Create")
                 .style(components::ButtonStyle::Filled)
                 .separated_end_slot(div().text_xs().child("Enter"))
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
         assert_no_panic("components::SplitButton", || {
             let left = components::Button::new("s1", "Left")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let right = components::Button::new("s2", "Right")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::SplitButton::new(left, right)
                 .style(components::SplitButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
         assert_no_panic("components::Tab + TabBar", || {
@@ -113,13 +113,19 @@ fn builds_pure_components_without_panics() {
 
         assert_no_panic("view::window_frame", || {
             let content = div().child("content").into_any_element();
-            let _ = view::window_frame(theme, Decorations::Server, content);
+            let _ = view::window_frame(
+                theme,
+                Decorations::Server,
+                content,
+                ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            );
             let _ = view::window_frame(
                 theme,
                 Decorations::Client {
                     tiling: Tiling::default(),
                 },
                 div().child("content").into_any_element(),
+                ui_scale::DEFAULT_UI_SCALE_PERCENT,
             );
         });
 
@@ -207,17 +213,22 @@ impl gpui::Render for SmokeView {
                     .child(
                         components::Button::new("b1", "Primary")
                             .style(components::ButtonStyle::Filled)
-                            .render(theme),
+                            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
                     )
                     .child(
                         components::Button::new("b2", "Secondary")
                             .style(components::ButtonStyle::Outlined)
-                            .render(theme),
+                            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
                     ),
             ))
             .into_any_element();
 
-        view::window_frame(theme, window.window_decorations(), content)
+        view::window_frame(
+            theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -289,7 +300,12 @@ impl gpui::Render for TextInputCursorScrollView {
             )
             .into_any_element();
 
-        view::window_frame(theme, window.window_decorations(), content)
+        view::window_frame(
+            theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -334,7 +350,12 @@ impl gpui::Render for TextInputHostView {
             )
             .into_any_element();
 
-        view::window_frame(self.theme, window.window_decorations(), content)
+        view::window_frame(
+            self.theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -2144,7 +2165,12 @@ impl gpui::Render for PickerPromptScrollbarTestView {
                 components::PickerPrompt::new(self.input.clone(), self.scroll_handle.clone())
                     .items(items)
                     .max_height(px(120.0))
-                    .render(self.theme, cx, |_this, _ix, _event, _window, _cx| {}),
+                    .render(
+                        self.theme,
+                        ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                        cx,
+                        |_this, _ix, _event, _window, _cx| {},
+                    ),
             ),
         )
     }

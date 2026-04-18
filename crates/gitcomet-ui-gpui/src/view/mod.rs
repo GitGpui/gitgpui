@@ -2287,7 +2287,7 @@ impl Render for GitCometView {
             self.hover_resize_edge = None;
         }
 
-        root = root.child(chrome::window_frame_scaled(
+        root = root.child(chrome::window_frame(
             theme,
             decorations,
             body.into_any_element(),

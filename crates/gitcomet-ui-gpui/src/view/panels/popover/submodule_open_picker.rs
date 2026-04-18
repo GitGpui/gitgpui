@@ -11,14 +11,12 @@ pub(super) fn panel(
 
     if let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) {
         match &repo.submodules {
-            Loadable::Loading => {
-                components::context_menu_label_scaled(theme, ui_scale_percent, "Loading")
-            }
+            Loadable::Loading => components::context_menu_label(theme, ui_scale_percent, "Loading"),
             Loadable::NotLoaded => {
-                components::context_menu_label_scaled(theme, ui_scale_percent, "Not loaded")
+                components::context_menu_label(theme, ui_scale_percent, "Not loaded")
             }
             Loadable::Error(e) => {
-                components::context_menu_label_scaled(theme, ui_scale_percent, e.clone())
+                components::context_menu_label(theme, ui_scale_percent, e.clone())
             }
             Loadable::Ready(subs) => {
                 let base = repo.spec.workdir.clone();
@@ -35,25 +33,20 @@ pub(super) fn panel(
                             .items(items)
                             .empty_text("No submodules")
                             .max_height(scaled_px(260.0))
-                            .render_scaled(
-                                theme,
-                                ui_scale_percent,
-                                cx,
-                                move |this, ix, _e, _w, cx| {
-                                    let Some(path) = paths.get(ix).cloned() else {
-                                        return;
-                                    };
-                                    this.store.dispatch(Msg::OpenRepo(path));
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                },
-                            ),
+                            .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
+                                let Some(path) = paths.get(ix).cloned() else {
+                                    return;
+                                };
+                                this.store.dispatch(Msg::OpenRepo(path));
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            }),
                     )
                     .w(scaled_px(520.0))
                     .max_w(scaled_px(820.0))
                 } else {
-                    components::context_menu_label_scaled(
+                    components::context_menu_label(
                         theme,
                         ui_scale_percent,
                         "Search input not initialized",
@@ -62,6 +55,6 @@ pub(super) fn panel(
             }
         }
     } else {
-        components::context_menu_label_scaled(theme, ui_scale_percent, "No repository")
+        components::context_menu_label(theme, ui_scale_percent, "No repository")
     }
 }
