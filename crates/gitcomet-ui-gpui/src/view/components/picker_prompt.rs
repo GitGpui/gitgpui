@@ -1,7 +1,7 @@
 use super::control_height_md;
 use crate::kit::{Scrollbar, ScrollbarAxis, TextInput};
 use crate::theme::AppTheme;
-use crate::ui_scale;
+use crate::ui_scale::{self, UiScale};
 use gpui::prelude::*;
 use gpui::{
     ClickEvent, CursorStyle, Div, Entity, FontWeight, ScrollHandle, SharedString, Window, div, px,
@@ -59,13 +59,14 @@ impl PickerPrompt {
     pub fn render_scaled<V: 'static>(
         self,
         theme: AppTheme,
-        ui_scale_percent: u32,
+        ui_scale: impl Into<UiScale>,
         cx: &gpui::Context<V>,
         on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Div {
         let on_select: Arc<OnSelectFn<V>> = Arc::new(on_select);
         let scroll_handle = self.scroll_handle;
-        let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let ui_scale = ui_scale.into();
+        let scaled_px = |value| ui_scale.px(value);
 
         let query = self
             .query_input
@@ -96,7 +97,7 @@ impl PickerPrompt {
         if matches.is_empty() {
             list = list.child(
                 div()
-                    .h(control_height_md(ui_scale_percent))
+                    .h(control_height_md(ui_scale))
                     .w_full()
                     .flex()
                     .items_center()
@@ -115,7 +116,7 @@ impl PickerPrompt {
                     div()
                         .id(("picker_prompt_item", original_index))
                         .debug_selector(move || format!("picker_prompt_item_{original_index}"))
-                        .h(control_height_md(ui_scale_percent))
+                        .h(control_height_md(ui_scale))
                         .w_full()
                         .flex()
                         .items_center()

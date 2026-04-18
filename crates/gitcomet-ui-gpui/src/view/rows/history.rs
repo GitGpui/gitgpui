@@ -61,7 +61,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
         let query = this.diff_search_query_or_empty();
-        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let theme = this.theme;
         let Some(path) = this.worktree_preview_path.as_ref() else {
@@ -187,6 +187,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let editor_font_family: SharedString =
             crate::font_preferences::current_editor_font_family(cx).into();
         let Loadable::Ready(document) = &this.worktree_markdown_preview else {
@@ -219,7 +220,7 @@ impl MainPaneView {
                 bar_color,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
                 editor_font_family,
-                ui_scale_percent: crate::ui_scale::current(cx).percent,
+                ui_scale_percent,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::Inline,
             },
@@ -233,6 +234,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let editor_font_family: SharedString =
             crate::font_preferences::current_editor_font_family(cx).into();
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
@@ -268,7 +270,7 @@ impl MainPaneView {
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
                 editor_font_family,
-                ui_scale_percent: crate::ui_scale::current(cx).percent,
+                ui_scale_percent,
                 view: Some(cx.entity().clone()),
                 text_region: region,
             },
@@ -282,6 +284,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let editor_font_family: SharedString =
             crate::font_preferences::current_editor_font_family(cx).into();
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
@@ -313,7 +316,7 @@ impl MainPaneView {
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
                 editor_font_family,
-                ui_scale_percent: crate::ui_scale::current(cx).percent,
+                ui_scale_percent,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::Inline,
             },
@@ -327,6 +330,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let editor_font_family: SharedString =
             crate::font_preferences::current_editor_font_family(cx).into();
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
@@ -358,7 +362,7 @@ impl MainPaneView {
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
                 editor_font_family,
-                ui_scale_percent: crate::ui_scale::current(cx).percent,
+                ui_scale_percent,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::SplitRight,
             },
@@ -375,6 +379,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let mut min_width = self.diff_horizontal_min_width;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         for row in range.filter_map(|ix| document.rows.get(ix)) {
             let required = markdown_preview_row_required_width(
                 window,
@@ -382,7 +387,7 @@ impl MainPaneView {
                 row,
                 bar_color,
                 editor_font_family,
-                crate::ui_scale::current(cx).percent,
+                ui_scale_percent,
             );
             if required > min_width {
                 min_width = required;
@@ -1703,7 +1708,7 @@ impl HistoryView {
         let col_author = this.history_col_author;
         let col_date = this.history_col_date;
         let col_sha = this.history_col_sha;
-        let ui_scale_percent = this.ui_scale_percent;
+        let ui_scale = this.ui_scale();
         let (show_graph, show_author, show_date, show_sha) = this.history_visible_columns();
 
         let page = match &repo.log {
@@ -1729,7 +1734,7 @@ impl HistoryView {
                     let selected = repo.history_state.selected_commit.is_none();
                     return Some(working_tree_summary_history_row(
                         theme,
-                        ui_scale_percent,
+                        ui_scale,
                         col_branch,
                         col_graph,
                         col_author,
@@ -1774,7 +1779,7 @@ impl HistoryView {
 
                 Some(history_table_row(
                     theme,
-                    ui_scale_percent,
+                    ui_scale,
                     col_branch,
                     col_graph,
                     col_author,
@@ -1811,8 +1816,8 @@ impl HistoryView {
 
 const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
 
-fn history_row_height(ui_scale_percent: u32) -> Pixels {
-    ui_scale::design_px_from_percent(HISTORY_ROW_HEIGHT_PX, ui_scale_percent)
+fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
+    ui_scale.px(HISTORY_ROW_HEIGHT_PX)
 }
 
 fn history_selected_branch_entry_range(
@@ -1857,7 +1862,7 @@ fn history_branch_text_highlights(
 #[allow(clippy::too_many_arguments)]
 fn history_table_row(
     theme: AppTheme,
-    ui_scale_percent: u32,
+    ui_scale: ui_scale::UiScale,
     col_branch: Pixels,
     col_graph: Pixels,
     col_author: Pixels,
@@ -1922,7 +1927,7 @@ fn history_table_row(
     );
 
     let commit_id = commit.id.clone();
-    let row_height = history_row_height(ui_scale_percent);
+    let row_height = history_row_height(ui_scale);
     let mut row = div()
         .id(ix)
         .relative()
@@ -1954,7 +1959,7 @@ fn history_table_row(
     }
 
     if is_head {
-        let thickness = ui_scale::design_px_from_percent(1.0, ui_scale_percent);
+        let thickness = ui_scale.px(1.0);
         let color = with_alpha(theme.colors.accent, 0.90);
         row = row
             .child(
@@ -2001,7 +2006,7 @@ fn history_table_row(
 #[allow(clippy::too_many_arguments)]
 fn working_tree_summary_history_row(
     theme: AppTheme,
-    ui_scale_percent: u32,
+    ui_scale: ui_scale::UiScale,
     col_branch: Pixels,
     col_graph: Pixels,
     col_author: Pixels,
@@ -2017,7 +2022,7 @@ fn working_tree_summary_history_row(
     counts: (usize, usize, usize),
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
-    let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+    let scaled_px = |value| ui_scale.px(value);
     let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
     let icon_count = |icon_path: &'static str, color: gpui::Rgba, count: usize| {
         div()
@@ -2102,7 +2107,7 @@ fn working_tree_summary_history_row(
 
     let mut row = div()
         .id(("history_worktree_summary", repo_id.0))
-        .h(history_row_height(ui_scale_percent))
+        .h(history_row_height(ui_scale))
         .flex()
         .w_full()
         .items_center()

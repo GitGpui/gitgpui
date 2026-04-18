@@ -184,7 +184,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
         let query = this.diff_search_query_or_empty();
-        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         if this.is_file_diff_view_active() {
             let theme = this.theme;
@@ -638,7 +638,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
         let query = this.diff_search_query_or_empty();
-        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let is_left = matches!(column, PatchSplitColumn::Left);
         let region = if is_left {

@@ -229,21 +229,37 @@ impl DetailsPaneView {
             })
     }
 
+    pub(in super::super) fn sanitized_restored_change_tracking_height_design(
+        view: ChangeTrackingView,
+        height: Option<u32>,
+    ) -> Option<f32> {
+        let min_height: f32 = min_change_tracking_stack_height(
+            view == ChangeTrackingView::SplitUntracked,
+            px(PANE_RESIZE_HANDLE_PX),
+        )
+        .into();
+        height.map(|value| (value as f32).max(min_height))
+    }
+
+    #[cfg(test)]
     pub(in super::super) fn sanitized_restored_change_tracking_height(
         view: ChangeTrackingView,
         height: Option<u32>,
     ) -> Option<Pixels> {
-        let min_height = min_change_tracking_stack_height(
-            view == ChangeTrackingView::SplitUntracked,
-            px(PANE_RESIZE_HANDLE_PX),
-        );
-        height.map(|value| px(value as f32).max(min_height))
+        Self::sanitized_restored_change_tracking_height_design(view, height).map(px)
     }
 
+    pub(in super::super) fn sanitized_restored_untracked_height_design(
+        height: Option<u32>,
+    ) -> Option<f32> {
+        height.map(|value| (value as f32).max(STATUS_SECTION_MIN_HEIGHT_PX))
+    }
+
+    #[cfg(test)]
     pub(in super::super) fn sanitized_restored_untracked_height(
         height: Option<u32>,
     ) -> Option<Pixels> {
-        height.map(|value| px(value as f32).max(px(STATUS_SECTION_MIN_HEIGHT_PX)))
+        Self::sanitized_restored_untracked_height_design(height).map(px)
     }
 
     fn status_resize_total_height(
@@ -338,7 +354,7 @@ impl DetailsPaneView {
                     (state.start_height + delta_y).max(min_top)
                 };
                 if self.change_tracking_height != Some(next_height) {
-                    self.change_tracking_height = Some(next_height);
+                    self.set_change_tracking_height_from_pixels(Some(next_height));
                     changed = true;
                 }
             }
@@ -354,7 +370,7 @@ impl DetailsPaneView {
                     (state.start_height + delta_y).max(section_min_h)
                 };
                 if self.untracked_height != Some(next_height) {
-                    self.untracked_height = Some(next_height);
+                    self.set_untracked_height_from_pixels(Some(next_height));
                     changed = true;
                 }
             }
@@ -416,6 +432,9 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let ui_scale = self.ui_scale();
+        let commit_files_min_viewport_height = ui_scale.px(24.0);
+        let commit_files_section_min_height = ui_scale.px(44.0);
         let active_repo_id = self.active_repo_id();
         let selected_id = self
             .active_repo()
@@ -432,9 +451,7 @@ impl DetailsPaneView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(components::control_height_md(
-                    crate::ui_scale::current(cx).percent,
-                ))
+                .h(components::control_height_md(ui_scale))
                 .px_2()
                 .bg(theme.colors.surface_bg_elevated)
                 .border_b_1()
@@ -539,7 +556,7 @@ impl DetailsPaneView {
                                     .flex_col()
                                     .flex_1()
                                     .h_full()
-                                    .min_h(px(0.0))
+                                    .min_h(commit_files_min_viewport_height)
                                     .w_full()
                                     .overflow_hidden()
                                     .child(
@@ -650,7 +667,7 @@ impl DetailsPaneView {
                                         .gap_1()
                                         .flex_1()
                                         .h_full()
-                                        .min_h(px(0.0))
+                                        .min_h(commit_files_section_min_height)
                                         .child(
                                             div()
                                                 .text_sm()
@@ -697,7 +714,7 @@ impl DetailsPaneView {
                                 .flex_col()
                                 .flex_1()
                                 .h_full()
-                                .min_h(px(0.0))
+                                .min_h(commit_files_min_viewport_height)
                                 .w_full()
                                 .overflow_hidden()
                                 .child(
@@ -808,7 +825,7 @@ impl DetailsPaneView {
                                     .gap_1()
                                     .flex_1()
                                     .h_full()
-                                    .min_h(px(0.0))
+                                    .min_h(commit_files_section_min_height)
                                     .child(
                                         div()
                                             .text_sm()

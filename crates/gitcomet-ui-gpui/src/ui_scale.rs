@@ -93,6 +93,81 @@ pub(crate) fn step_down(current: u32) -> u32 {
         .unwrap_or(current)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct UiScale {
+    percent: u32,
+    factor: f32,
+}
+
+impl From<u32> for UiScale {
+    fn from(percent: u32) -> Self {
+        Self::from_percent(percent)
+    }
+}
+
+impl UiScale {
+    pub(crate) fn from_percent(percent: u32) -> Self {
+        let percent = sanitize_percent(Some(percent));
+        Self {
+            percent,
+            factor: percent as f32 / DEFAULT_UI_SCALE_PERCENT as f32,
+        }
+    }
+
+    pub(crate) fn from_window(window: &Window) -> Self {
+        let factor = design_scale_factor_from_window(window);
+        let percent = sanitize_percent(Some(
+            (factor * DEFAULT_UI_SCALE_PERCENT as f32).round() as u32
+        ));
+        Self { percent, factor }
+    }
+
+    pub(crate) fn current<C>(cx: &mut C) -> Self
+    where
+        C: BorrowAppContext,
+    {
+        Self::from_percent(current(cx).percent)
+    }
+
+    pub(crate) fn percent(self) -> u32 {
+        self.percent
+    }
+
+    pub(crate) fn scale_f32(self, value: f32) -> f32 {
+        value * self.factor
+    }
+
+    pub(crate) fn px(self, value: f32) -> Pixels {
+        px(self.scale_f32(value))
+    }
+
+    pub(crate) fn size(self, width: f32, height: f32) -> Size<Pixels> {
+        size(self.px(width), self.px(height))
+    }
+
+    pub(crate) fn design_units_from_pixels(self, value: Pixels) -> f32 {
+        let raw: f32 = value.into();
+        raw / self.factor.max(f32::EPSILON)
+    }
+
+    pub(crate) fn design_units_from_optional_pixels(self, value: Option<Pixels>) -> Option<f32> {
+        value.map(|value| self.design_units_from_pixels(value))
+    }
+
+    pub(crate) fn pixels_from_design_units(self, value: Option<f32>) -> Option<Pixels> {
+        value.map(|value| self.px(value))
+    }
+}
+
+pub(crate) fn design_units_from_stored(value: Option<u32>) -> Option<f32> {
+    value.map(|value| value as f32)
+}
+
+pub(crate) fn stored_design_units(value: Option<f32>) -> Option<u32> {
+    let value = value?.round();
+    (value.is_finite() && value >= 1.0).then_some(value as u32)
+}
+
 pub(crate) fn rem_size_for_percent(percent: u32) -> Pixels {
     px(BASE_REM_PX * design_scale_factor_from_percent(percent))
 }
@@ -114,34 +189,32 @@ pub(crate) fn design_px<C>(value: f32, cx: &mut C) -> Pixels
 where
     C: BorrowAppContext,
 {
-    design_px_from_percent(value, current(cx).percent)
+    UiScale::current(cx).px(value)
 }
 
 pub(crate) fn design_px_from_percent(value: f32, percent: u32) -> Pixels {
-    px(value * design_scale_factor_from_percent(percent))
+    UiScale::from_percent(percent).px(value)
 }
 
 pub(crate) fn design_px_from_window(value: f32, window: &Window) -> Pixels {
-    px(value * design_scale_factor_from_window(window))
+    UiScale::from_window(window).px(value)
 }
 
 pub(crate) fn design_size_from_percent(width: f32, height: f32, percent: u32) -> Size<Pixels> {
-    size(
-        design_px_from_percent(width, percent),
-        design_px_from_percent(height, percent),
-    )
+    UiScale::from_percent(percent).size(width, height)
 }
 
+#[cfg(test)]
 pub(crate) fn rescale_pixels(value: Pixels, from_percent: u32, to_percent: u32) -> Pixels {
     if from_percent == to_percent {
         return value;
     }
 
-    let raw_value: f32 = value.into();
-    px(raw_value * design_scale_factor_from_percent(to_percent)
-        / design_scale_factor_from_percent(from_percent))
+    let design_units = UiScale::from_percent(from_percent).design_units_from_pixels(value);
+    UiScale::from_percent(to_percent).px(design_units)
 }
 
+#[cfg(test)]
 pub(crate) fn rescale_optional_u32(
     value: Option<u32>,
     from_percent: u32,
@@ -171,5 +244,15 @@ mod tests {
     fn ui_scale_rescaling_uses_percent_ratio() {
         assert_eq!(rescale_optional_u32(Some(200), 100, 125), Some(250));
         assert_eq!(rescale_optional_u32(Some(250), 125, 100), Some(200));
+    }
+
+    #[test]
+    fn ui_scale_round_trips_design_units_without_drift() {
+        let width = 273.63635;
+        let scale = UiScale::from_percent(110);
+        let px = scale.px(width);
+        let round_trip = scale.design_units_from_pixels(px);
+        assert!((round_trip - width).abs() < 1e-3);
+        assert_eq!(stored_design_units(Some(round_trip)), Some(274));
     }
 }

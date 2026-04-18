@@ -13,8 +13,12 @@ fn history_columns_available_width(content_width: Pixels) -> Pixels {
     content_width.max(px(0.0))
 }
 
+fn history_scale(ui_scale_percent: u32) -> ui_scale::UiScale {
+    ui_scale::UiScale::from_percent(ui_scale_percent)
+}
+
 fn history_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
-    ui_scale::design_px_from_percent(value, ui_scale_percent)
+    history_scale(ui_scale_percent).px(value)
 }
 
 fn history_message_min_width(ui_scale_percent: u32) -> Pixels {
@@ -75,28 +79,43 @@ struct HistoryColumnWidths {
     sha: Pixels,
 }
 
-fn default_history_column_widths(ui_scale_percent: u32) -> HistoryColumnWidths {
-    HistoryColumnWidths {
-        branch: history_scaled_px(HISTORY_COL_BRANCH_PX, ui_scale_percent),
-        graph: history_scaled_px(HISTORY_COL_GRAPH_PX, ui_scale_percent),
-        author: history_scaled_px(HISTORY_COL_AUTHOR_PX, ui_scale_percent),
-        date: history_scaled_px(HISTORY_COL_DATE_PX, ui_scale_percent),
-        sha: history_scaled_px(HISTORY_COL_SHA_PX, ui_scale_percent),
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct HistoryColumnDesignWidths {
+    branch: f32,
+    graph: f32,
+    author: f32,
+    date: f32,
+    sha: f32,
+}
+
+fn default_history_column_design_widths() -> HistoryColumnDesignWidths {
+    HistoryColumnDesignWidths {
+        branch: HISTORY_COL_BRANCH_PX,
+        graph: HISTORY_COL_GRAPH_PX,
+        author: HISTORY_COL_AUTHOR_PX,
+        date: HISTORY_COL_DATE_PX,
+        sha: HISTORY_COL_SHA_PX,
     }
 }
 
-fn rescale_history_column_widths(
-    widths: HistoryColumnWidths,
-    from_percent: u32,
-    to_percent: u32,
+fn scaled_history_column_widths(
+    widths: HistoryColumnDesignWidths,
+    scale: ui_scale::UiScale,
 ) -> HistoryColumnWidths {
     HistoryColumnWidths {
-        branch: ui_scale::rescale_pixels(widths.branch, from_percent, to_percent),
-        graph: ui_scale::rescale_pixels(widths.graph, from_percent, to_percent),
-        author: ui_scale::rescale_pixels(widths.author, from_percent, to_percent),
-        date: ui_scale::rescale_pixels(widths.date, from_percent, to_percent),
-        sha: ui_scale::rescale_pixels(widths.sha, from_percent, to_percent),
+        branch: scale.px(widths.branch),
+        graph: scale.px(widths.graph),
+        author: scale.px(widths.author),
+        date: scale.px(widths.date),
+        sha: scale.px(widths.sha),
     }
+}
+
+fn default_history_column_widths(ui_scale_percent: u32) -> HistoryColumnWidths {
+    scaled_history_column_widths(
+        default_history_column_design_widths(),
+        history_scale(ui_scale_percent),
+    )
 }
 
 #[derive(Copy, Clone)]
@@ -801,6 +820,11 @@ pub(in super::super) struct HistoryView {
 
     pub(in super::super) history_cache_seq: u64,
     pub(in super::super) history_cache_inflight: Option<HistoryCacheRequest>,
+    history_col_branch_design: f32,
+    history_col_graph_design: f32,
+    history_col_author_design: f32,
+    history_col_date_design: f32,
+    history_col_sha_design: f32,
     pub(in super::super) history_col_branch: Pixels,
     pub(in super::super) history_col_graph: Pixels,
     pub(in super::super) history_col_author: Pixels,
@@ -886,7 +910,9 @@ impl HistoryView {
         });
 
         let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
-        let default_widths = default_history_column_widths(ui_scale_percent);
+        let default_design_widths = default_history_column_design_widths();
+        let scale = ui_scale::UiScale::from_percent(ui_scale_percent);
+        let default_widths = scaled_history_column_widths(default_design_widths, scale);
 
         Self {
             store,
@@ -905,6 +931,11 @@ impl HistoryView {
             history_content_width: history_columns_available_width(last_window_size.width),
             history_cache_seq: 0,
             history_cache_inflight: None,
+            history_col_branch_design: default_design_widths.branch,
+            history_col_graph_design: default_design_widths.graph,
+            history_col_author_design: default_design_widths.author,
+            history_col_date_design: default_design_widths.date,
+            history_col_sha_design: default_design_widths.sha,
             history_col_branch: default_widths.branch,
             history_col_graph: default_widths.graph,
             history_col_author: default_widths.author,
@@ -936,6 +967,28 @@ impl HistoryView {
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
+        history_scale(self.ui_scale_percent)
+    }
+
+    fn sync_history_column_widths_from_design(&mut self) {
+        let scale = self.ui_scale();
+        self.history_col_branch = scale.px(self.history_col_branch_design);
+        self.history_col_graph = scale.px(self.history_col_graph_design);
+        self.history_col_author = scale.px(self.history_col_author_design);
+        self.history_col_date = scale.px(self.history_col_date_design);
+        self.history_col_sha = scale.px(self.history_col_sha_design);
+    }
+
+    fn sync_history_column_design_widths_from_pixels(&mut self) {
+        let scale = self.ui_scale();
+        self.history_col_branch_design = scale.design_units_from_pixels(self.history_col_branch);
+        self.history_col_graph_design = scale.design_units_from_pixels(self.history_col_graph);
+        self.history_col_author_design = scale.design_units_from_pixels(self.history_col_author);
+        self.history_col_date_design = scale.design_units_from_pixels(self.history_col_date);
+        self.history_col_sha_design = scale.design_units_from_pixels(self.history_col_sha);
     }
 
     fn history_cache_request_for_repo(
@@ -1063,6 +1116,7 @@ impl HistoryView {
         self.history_col_author = widths.author;
         self.history_col_date = widths.date;
         self.history_col_sha = widths.sha;
+        self.sync_history_column_design_widths_from_pixels();
         self.history_col_graph_auto = true;
         self.history_col_resize = None;
     }
@@ -1108,25 +1162,10 @@ impl HistoryView {
         }
 
         debug_assert_eq!(self.ui_scale_percent, previous_percent);
+        self.sync_history_column_design_widths_from_pixels();
         self.ui_scale_percent = next_percent;
         self.history_col_resize = None;
-
-        let widths = rescale_history_column_widths(
-            HistoryColumnWidths {
-                branch: self.history_col_branch,
-                graph: self.history_col_graph,
-                author: self.history_col_author,
-                date: self.history_col_date,
-                sha: self.history_col_sha,
-            },
-            previous_percent,
-            next_percent,
-        );
-        self.history_col_branch = widths.branch;
-        self.history_col_graph = widths.graph;
-        self.history_col_author = widths.author;
-        self.history_col_date = widths.date;
-        self.history_col_sha = widths.sha;
+        self.sync_history_column_widths_from_design();
         cx.notify();
     }
 
@@ -1955,6 +1994,9 @@ impl HistoryView {
                                 },
                                 this.ui_scale_percent,
                             );
+                            this.history_col_graph_design = this
+                                .ui_scale()
+                                .design_units_from_pixels(this.history_col_graph);
                         }
                     }
 
@@ -2202,10 +2244,13 @@ mod tests {
     }
 
     #[test]
-    fn history_column_widths_rescale_with_ui_scale_percent() {
-        let widths = default_history_column_widths(100);
+    fn history_column_widths_recompute_from_design_units_with_ui_scale_percent() {
+        let widths = scaled_history_column_widths(
+            default_history_column_design_widths(),
+            ui_scale::UiScale::from_percent(200),
+        );
         assert_eq!(
-            rescale_history_column_widths(widths, 100, 200),
+            widths,
             HistoryColumnWidths {
                 branch: px(HISTORY_COL_BRANCH_PX * 2.0),
                 graph: px(HISTORY_COL_GRAPH_PX * 2.0),

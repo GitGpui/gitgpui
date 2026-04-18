@@ -75,7 +75,7 @@ struct UiSessionFileV1 {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct UiSessionFileV2 {
+struct UiSessionFile {
     version: u32,
     open_repos: Vec<String>,
     active_repo: Option<String>,
@@ -110,8 +110,12 @@ struct UiSessionFileV2 {
 
 const SESSION_FILE_VERSION_V1: u32 = 1;
 const SESSION_FILE_VERSION_V2: u32 = 2;
-const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V2;
+const SESSION_FILE_VERSION_V3: u32 = 3;
+const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V3;
 const MAX_RECENT_REPOS: usize = 15;
+const DEFAULT_UI_SCALE_PERCENT: u32 = 100;
+const MIN_UI_SCALE_PERCENT: u32 = 80;
+const MAX_UI_SCALE_PERCENT: u32 = 200;
 #[cfg(unix)]
 const SESSION_PATH_BYTES_PREFIX: &str = "gitcomet-path-bytes:";
 #[cfg(windows)]
@@ -129,7 +133,7 @@ pub fn load() -> UiSession {
 }
 
 pub fn load_from_path(path: &Path) -> UiSession {
-    let Some(file) = load_file_v2(path) else {
+    let Some(file) = load_file(path) else {
         return UiSession::default();
     };
 
@@ -292,7 +296,7 @@ pub fn persist_repos_snapshot_to_path(
     snapshot: &SessionReposSnapshot,
     path: &Path,
 ) -> io::Result<()> {
-    let mut file = load_file_v2(path).unwrap_or_default();
+    let mut file = load_file(path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
     file.open_repos = snapshot
         .open_repos
@@ -315,7 +319,7 @@ pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
 }
 
 pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
-    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    let mut file = load_file(session_file_path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
 
     let workdir_key = path_storage_key(workdir);
@@ -338,7 +342,7 @@ pub fn remove_recent_repo(workdir: &Path) -> io::Result<()> {
 }
 
 pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
-    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    let mut file = load_file(session_file_path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
 
     let workdir_key = path_storage_key(workdir);
@@ -386,7 +390,7 @@ pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
 }
 
 pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Result<()> {
-    let mut file = load_file_v2(path).unwrap_or_default();
+    let mut file = load_file(path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
     if settings.window_width.is_some() && settings.window_height.is_some() {
         file.window_width = settings.window_width;
@@ -473,7 +477,7 @@ pub fn load_repo_history_scope_from_path(
     session_file_path: &Path,
 ) -> Option<LogScope> {
     let workdir_key = path_storage_key(workdir);
-    let file = load_file_v2(session_file_path)?;
+    let file = load_file(session_file_path)?;
     let scopes = file.repo_history_scopes?;
     scopes.get(&workdir_key).copied().map(Into::into)
 }
@@ -486,7 +490,7 @@ pub fn load_repo_history_scopes() -> BTreeMap<String, LogScope> {
 }
 
 pub fn load_repo_history_scopes_from_path(session_file_path: &Path) -> BTreeMap<String, LogScope> {
-    let Some(file) = load_file_v2(session_file_path) else {
+    let Some(file) = load_file(session_file_path) else {
         return BTreeMap::new();
     };
     file.repo_history_scopes
@@ -508,7 +512,7 @@ pub fn persist_repo_history_scope_to_path(
     scope: LogScope,
     session_file_path: &Path,
 ) -> io::Result<()> {
-    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    let mut file = load_file(session_file_path).unwrap_or_default();
     let scope = HistoryScopeSetting::from(scope);
 
     if let Some(existing_scope) = file.repo_history_scopes.as_ref().and_then(|scopes| {
@@ -543,7 +547,7 @@ pub fn load_repo_fetch_prune_deleted_remote_tracking_branches_from_path(
     session_file_path: &Path,
 ) -> Option<bool> {
     let workdir_key = path_storage_key(workdir);
-    let file = load_file_v2(session_file_path)?;
+    let file = load_file(session_file_path)?;
     let settings = file.repo_fetch_prune_deleted_remote_tracking_branches?;
     settings.get(&workdir_key).copied()
 }
@@ -558,7 +562,7 @@ pub fn load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo() -> BTree
 pub fn load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo_from_path(
     session_file_path: &Path,
 ) -> BTreeMap<String, bool> {
-    let Some(file) = load_file_v2(session_file_path) else {
+    let Some(file) = load_file(session_file_path) else {
         return BTreeMap::new();
     };
     file.repo_fetch_prune_deleted_remote_tracking_branches
@@ -584,7 +588,7 @@ pub fn persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
     enabled: bool,
     session_file_path: &Path,
 ) -> io::Result<()> {
-    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    let mut file = load_file(session_file_path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
     let workdir_key = path_storage_key(workdir);
     file.repo_fetch_prune_deleted_remote_tracking_branches
@@ -677,7 +681,38 @@ fn path_keyed_string_sets_to_storage(
     stored
 }
 
-fn load_file_v2(path: &Path) -> Option<UiSessionFileV2> {
+fn sanitize_ui_scale_percent(percent: Option<u32>) -> u32 {
+    percent
+        .unwrap_or(DEFAULT_UI_SCALE_PERCENT)
+        .clamp(MIN_UI_SCALE_PERCENT, MAX_UI_SCALE_PERCENT)
+}
+
+fn migrate_scaled_dimension_to_design_units(
+    value: Option<u32>,
+    ui_scale_percent: Option<u32>,
+) -> Option<u32> {
+    let value = value? as f32;
+    let factor =
+        sanitize_ui_scale_percent(ui_scale_percent) as f32 / DEFAULT_UI_SCALE_PERCENT as f32;
+    let design_units = (value / factor).round();
+    (design_units.is_finite() && design_units >= 1.0).then_some(design_units as u32)
+}
+
+fn migrate_v2_file(mut file: UiSessionFile) -> UiSessionFile {
+    let ui_scale_percent = file.ui_scale_percent;
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    file.sidebar_width =
+        migrate_scaled_dimension_to_design_units(file.sidebar_width, ui_scale_percent);
+    file.details_width =
+        migrate_scaled_dimension_to_design_units(file.details_width, ui_scale_percent);
+    file.change_tracking_height =
+        migrate_scaled_dimension_to_design_units(file.change_tracking_height, ui_scale_percent);
+    file.untracked_height =
+        migrate_scaled_dimension_to_design_units(file.untracked_height, ui_scale_percent);
+    file
+}
+
+fn load_file(path: &Path) -> Option<UiSessionFile> {
     let Ok(contents) = fs::read_to_string(path) else {
         return None;
     };
@@ -691,14 +726,18 @@ fn load_file_v2(path: &Path) -> Option<UiSessionFileV2> {
     match version {
         SESSION_FILE_VERSION_V1 => {
             let file: UiSessionFileV1 = serde_json::from_value(value).ok()?;
-            Some(UiSessionFileV2 {
+            Some(UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: file.open_repos,
                 active_repo: file.active_repo,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             })
         }
-        SESSION_FILE_VERSION_V2 => serde_json::from_value::<UiSessionFileV2>(value).ok(),
+        SESSION_FILE_VERSION_V2 => {
+            let file = serde_json::from_value::<UiSessionFile>(value).ok()?;
+            Some(migrate_v2_file(file))
+        }
+        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value).ok(),
         _ => None,
     }
 }
@@ -1360,6 +1399,88 @@ mod tests {
     }
 
     #[test]
+    fn load_from_path_migrates_v2_scaled_dimensions_to_design_units() {
+        let cases = [
+            (100, 280, 420, 222, 111),
+            (125, 350, 525, 278, 139),
+            (200, 560, 840, 444, 222),
+        ];
+
+        for (percent, sidebar_width, details_width, change_tracking_height, untracked_height) in
+            cases
+        {
+            let dir = env::temp_dir().join(format!(
+                "gitcomet-session-v2-migration-test-{}-{}-{percent}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
+            let _ = fs::create_dir_all(&dir);
+            let path = dir.join("session.json");
+
+            persist_to_path(
+                &path,
+                &UiSessionFile {
+                    version: SESSION_FILE_VERSION_V2,
+                    open_repos: Vec::new(),
+                    active_repo: None,
+                    sidebar_width: Some(sidebar_width),
+                    details_width: Some(details_width),
+                    ui_scale_percent: Some(percent),
+                    change_tracking_height: Some(change_tracking_height),
+                    untracked_height: Some(untracked_height),
+                    ..UiSessionFile::default()
+                },
+            )
+            .expect("persist succeeds");
+
+            let loaded = load_from_path(&path);
+            assert_eq!(loaded.ui_scale_percent, Some(percent));
+            assert_eq!(loaded.sidebar_width, Some(280));
+            assert_eq!(loaded.details_width, Some(420));
+            assert_eq!(loaded.change_tracking_height, Some(222));
+            assert_eq!(loaded.untracked_height, Some(111));
+        }
+    }
+
+    #[test]
+    fn load_from_path_migrates_v2_scaled_dimensions_without_saved_zoom_as_100_percent() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-session-v2-migration-default-scale-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: SESSION_FILE_VERSION_V2,
+                open_repos: Vec::new(),
+                active_repo: None,
+                sidebar_width: Some(280),
+                details_width: Some(420),
+                change_tracking_height: Some(222),
+                untracked_height: Some(111),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist succeeds");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.sidebar_width, Some(280));
+        assert_eq!(loaded.details_width, Some(420));
+        assert_eq!(loaded.change_tracking_height, Some(222));
+        assert_eq!(loaded.untracked_height, Some(111));
+    }
+
+    #[test]
     fn persist_recent_repo_round_trips_dedup_and_reorders() {
         let dir = env::temp_dir().join(format!(
             "gitcomet-recent-repos-test-{}-{}",
@@ -1379,11 +1500,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1416,12 +1537,12 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
                 recent_repos: Some(vec![path_storage_key(&repo_a), path_storage_key(&repo_b)]),
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1453,12 +1574,12 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
                 recent_repos: Some(recent_repos),
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1503,7 +1624,7 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
@@ -1514,7 +1635,7 @@ mod tests {
                     path_storage_key(&repo_b),
                     "".to_string(),
                 ]),
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1540,11 +1661,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1612,11 +1733,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1668,11 +1789,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1724,11 +1845,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1780,11 +1901,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1839,11 +1960,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1895,11 +2016,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -1952,11 +2073,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -2008,11 +2129,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -2045,11 +2166,11 @@ mod tests {
 
         persist_to_path(
             &path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");
@@ -2104,11 +2225,11 @@ mod tests {
 
         persist_to_path(
             &session_path,
-            &UiSessionFileV2 {
+            &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: Vec::new(),
                 active_repo: None,
-                ..UiSessionFileV2::default()
+                ..UiSessionFile::default()
             },
         )
         .expect("seed session file");

@@ -454,13 +454,6 @@ fn current_or_default_ui_scale_percent(cx: &mut App) -> u32 {
     }
 }
 
-fn persist_ui_scale_percent(percent: u32) {
-    let _ = session::persist_ui_settings(session::UiSettings {
-        ui_scale_percent: Some(percent),
-        ..session::UiSettings::default()
-    });
-}
-
 fn apply_ui_scale_to_open_windows(cx: &mut App, percent: u32) {
     for handle in cx.windows() {
         let _ = handle.update(cx, |root_view, window, cx| {
@@ -494,7 +487,6 @@ pub(crate) fn set_app_ui_scale_percent(cx: &mut App, percent: u32) {
     }
 
     apply_ui_scale_to_open_windows(cx, next.percent);
-    persist_ui_scale_percent(next.percent);
 }
 
 fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {

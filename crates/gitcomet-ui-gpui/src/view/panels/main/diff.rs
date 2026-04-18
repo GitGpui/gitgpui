@@ -28,7 +28,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
-        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let (wants_image, wants_markdown_preview, rendered_preview_kind) = self
             .active_repo()
             .map(|repo| {
@@ -767,7 +767,7 @@ impl MainPaneView {
         inline_len: usize,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         if old_len == 0 && new_len == 0 {
             return components::empty_state(theme, "Preview", "Empty file.").into_any_element();
         }

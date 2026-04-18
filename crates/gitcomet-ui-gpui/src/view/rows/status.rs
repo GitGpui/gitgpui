@@ -387,6 +387,7 @@ fn render_status_rows_for_section(
     let selected_paths = this.status_selected_paths_for_area(repo.id, section.diff_area());
     let multi_select_active = !selected_paths.is_empty();
     let theme = this.theme;
+    let ui_scale = this.ui_scale();
     range
         .filter_map(|ix| entries.get(ix).map(|entry| (ix, entry)))
         .map(|(ix, entry)| {
@@ -403,6 +404,7 @@ fn render_status_rows_for_section(
             };
             status_row(
                 theme,
+                ui_scale,
                 ix,
                 entry,
                 path_display,
@@ -419,6 +421,7 @@ fn render_status_rows_for_section(
 #[allow(clippy::too_many_arguments)]
 fn status_row(
     theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
     ix: usize,
     entry: &FileStatus,
     path_display: SharedString,
@@ -428,8 +431,7 @@ fn status_row(
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
-    let ui_scale_percent = crate::ui_scale::current(cx).percent;
-    let scaled_px = |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+    let scaled_px = |value: f32| ui_scale.px(value);
     let area = section.diff_area();
     let (icon, color) = match entry.kind {
         FileStatusKind::Untracked => match area {

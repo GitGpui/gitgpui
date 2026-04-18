@@ -1,5 +1,5 @@
 use crate::theme::AppTheme;
-use crate::ui_scale;
+use crate::ui_scale::{self, UiScale};
 use gpui::prelude::*;
 use gpui::{
     AnyElement, Bounds, ClickEvent, CursorStyle, Div, IntoElement, Pixels, SharedString, Stateful,
@@ -105,9 +105,9 @@ impl Button {
         f: impl Fn(&mut V, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
-        let ui_scale_percent = ui_scale::current(cx).percent;
+        let ui_scale = UiScale::current(cx);
 
-        self.render_scaled(theme, ui_scale_percent)
+        self.render_scaled(theme, ui_scale)
             .when(!disabled, |this| this.on_click(cx.listener(f)))
     }
 
@@ -118,22 +118,20 @@ impl Button {
         f: impl Fn(&mut V, &ClickEvent, Bounds<Pixels>, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
-        let ui_scale_percent = ui_scale::current(cx).percent;
+        let ui_scale = UiScale::current(cx);
 
         let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
         let last_bounds_for_prepaint = Rc::clone(&last_bounds);
         let last_bounds_for_click = Rc::clone(&last_bounds);
         let wrapper_id: SharedString = format!("{}_bounds_wrapper", self.id).into();
 
-        let button = self
-            .render_scaled(theme, ui_scale_percent)
-            .when(!disabled, |this| {
-                this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                    let bounds = (*last_bounds_for_click.borrow())
-                        .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
-                    f(this, e, bounds, window, cx);
-                }))
-            });
+        let button = self.render_scaled(theme, ui_scale).when(!disabled, |this| {
+            this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                let bounds = (*last_bounds_for_click.borrow())
+                    .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
+                f(this, e, bounds, window, cx);
+            }))
+        });
 
         div()
             .on_children_prepainted(move |children_bounds, _window, _cx| {
@@ -150,7 +148,7 @@ impl Button {
         self.render_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
     }
 
-    pub fn render_scaled(self, theme: AppTheme, ui_scale_percent: u32) -> Stateful<Div> {
+    pub fn render_scaled(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
         let Self {
             id,
             label,
@@ -164,6 +162,7 @@ impl Button {
             end_slot,
             separate_end_slot,
         } = self;
+        let ui_scale = ui_scale.into();
 
         let transparent = gpui::rgba(0x00000000);
         let outlined_border = with_alpha(
@@ -282,12 +281,12 @@ impl Button {
         let icon_only = looks_like_icon_button(&label);
         let selected_bg_override = selected_bg;
         let suppress_hover_border = suppress_hover_border || borderless;
-        let control_height = control_height(ui_scale_percent);
-        let control_pad_x = control_pad_x(ui_scale_percent);
-        let control_pad_y = control_pad_y(ui_scale_percent);
-        let icon_pad_x = icon_pad_x(ui_scale_percent);
-        let content_gap = ui_scale::design_px_from_percent(4.0, ui_scale_percent);
-        let separated_slot_pad = ui_scale::design_px_from_percent(6.0, ui_scale_percent);
+        let control_height = control_height(ui_scale);
+        let control_pad_x = control_pad_x(ui_scale);
+        let control_pad_y = control_pad_y(ui_scale);
+        let icon_pad_x = icon_pad_x(ui_scale);
+        let content_gap = ui_scale.px(4.0);
+        let separated_slot_pad = ui_scale.px(6.0);
 
         let mut leading = div().flex().items_center().gap(content_gap);
         if let Some(start_slot) = start_slot {

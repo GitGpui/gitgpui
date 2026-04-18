@@ -879,14 +879,17 @@ impl GitCometView {
             input
         });
 
-        let initial_sidebar_width = restored_sidebar_width
-            .map(|w| px(w as f32))
-            .unwrap_or(px(280.0))
-            .max(px(SIDEBAR_MIN_PX));
-        let initial_details_width = restored_details_width
-            .map(|w| px(w as f32))
-            .unwrap_or(px(420.0))
-            .max(px(DETAILS_MIN_PX));
+        let scale = ui_scale::UiScale::from_percent(ui_scale.percent);
+        let initial_sidebar_width_design =
+            ui_scale::design_units_from_stored(restored_sidebar_width)
+                .unwrap_or(280.0)
+                .max(SIDEBAR_MIN_PX);
+        let initial_details_width_design =
+            ui_scale::design_units_from_stored(restored_details_width)
+                .unwrap_or(420.0)
+                .max(DETAILS_MIN_PX);
+        let initial_sidebar_width = scale.px(initial_sidebar_width_design);
+        let initial_details_width = scale.px(initial_details_width_design);
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
@@ -928,6 +931,8 @@ impl GitCometView {
             hover_resize_edge: None,
             sidebar_collapsed: false,
             details_collapsed: false,
+            sidebar_width_design: initial_sidebar_width_design,
+            details_width_design: initial_details_width_design,
             sidebar_width: initial_sidebar_width,
             details_width: initial_details_width,
             sidebar_render_width: initial_sidebar_width,
@@ -1029,8 +1034,28 @@ impl GitCometView {
         cx.notify();
     }
 
+    fn ui_scale(&self) -> ui_scale::UiScale {
+        ui_scale::UiScale::from_percent(self.ui_scale_percent)
+    }
+
+    fn sync_cached_pane_widths_from_design(&mut self) {
+        let scale = self.ui_scale();
+        self.sidebar_width = scale.px(self.sidebar_width_design);
+        self.details_width = scale.px(self.details_width_design);
+    }
+
+    fn set_sidebar_width_from_pixels(&mut self, width: Pixels) {
+        self.sidebar_width = width;
+        self.sidebar_width_design = self.ui_scale().design_units_from_pixels(width);
+    }
+
+    fn set_details_width_from_pixels(&mut self, width: Pixels) {
+        self.details_width = width;
+        self.details_width_design = self.ui_scale().design_units_from_pixels(width);
+    }
+
     fn scaled_px(&self, value: f32) -> Pixels {
-        ui_scale::design_px_from_percent(value, self.ui_scale_percent)
+        self.ui_scale().px(value)
     }
 
     fn pane_collapsed_width(&self) -> Pixels {
@@ -1065,6 +1090,9 @@ impl GitCometView {
         }
 
         let previous_percent = self.ui_scale_percent;
+        let scale = self.ui_scale();
+        self.sidebar_width_design = scale.design_units_from_pixels(self.sidebar_width);
+        self.details_width_design = scale.design_units_from_pixels(self.details_width);
         self.ui_scale_percent = percent;
         self.pane_resize = None;
         self.sidebar_width_anim_seq = self.sidebar_width_anim_seq.wrapping_add(1);
@@ -1080,14 +1108,7 @@ impl GitCometView {
 
         self.last_window_size = window.viewport_size();
         self.ui_window_size_last_seen = self.last_window_size;
-        self.sidebar_width =
-            ui_scale::rescale_pixels(self.sidebar_width, previous_percent, percent);
-        self.details_width =
-            ui_scale::rescale_pixels(self.details_width, previous_percent, percent);
-        self.sidebar_render_width =
-            ui_scale::rescale_pixels(self.sidebar_render_width, previous_percent, percent);
-        self.details_render_width =
-            ui_scale::rescale_pixels(self.details_render_width, previous_percent, percent);
+        self.sync_cached_pane_widths_from_design();
 
         let change_tracking_view = self.change_tracking_view;
         self.details_pane.update(cx, |pane, cx| {
@@ -1488,7 +1509,7 @@ impl GitCometView {
                     match state.handle {
                         PaneResizeHandle::Sidebar => {
                             if this.sidebar_width != next_width {
-                                this.sidebar_width = next_width;
+                                this.set_sidebar_width_from_pixels(next_width);
                                 changed = true;
                             }
                             if this.sidebar_render_width != next_width {
@@ -1498,7 +1519,7 @@ impl GitCometView {
                         }
                         PaneResizeHandle::Details => {
                             if this.details_width != next_width {
-                                this.details_width = next_width;
+                                this.set_details_width_from_pixels(next_width);
                                 changed = true;
                             }
                             if this.details_render_width != next_width {

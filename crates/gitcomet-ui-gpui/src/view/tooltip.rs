@@ -24,9 +24,6 @@ impl GitCometView {
                         let window_width = (ww.is_finite() && ww >= 1.0).then_some(ww as u32);
                         let window_height = (wh.is_finite() && wh >= 1.0).then_some(wh as u32);
 
-                        let sidebar_width: f32 = this.sidebar_width.round().into();
-                        let details_width: f32 = this.details_width.round().into();
-
                         let (
                             history_show_graph,
                             history_show_author,
@@ -49,10 +46,12 @@ impl GitCometView {
                         let settings = session::UiSettings {
                             window_width,
                             window_height,
-                            sidebar_width: (sidebar_width.is_finite() && sidebar_width >= 1.0)
-                                .then_some(sidebar_width as u32),
-                            details_width: (details_width.is_finite() && details_width >= 1.0)
-                                .then_some(details_width as u32),
+                            sidebar_width: ui_scale::stored_design_units(
+                                Some(this.ui_scale().design_units_from_pixels(this.sidebar_width)),
+                            ),
+                            details_width: ui_scale::stored_design_units(
+                                Some(this.ui_scale().design_units_from_pixels(this.details_width)),
+                            ),
                             repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             ui_scale_percent: Some(this.ui_scale_percent),
@@ -124,9 +123,11 @@ impl GitCometView {
                 self.details_width.max(details_min)
             };
             let max_sidebar = (total_w - details_w - main_min - handles_w).max(sidebar_min);
-            self.sidebar_width = self.sidebar_width.max(sidebar_min).min(max_sidebar);
+            self.set_sidebar_width_from_pixels(
+                self.sidebar_width.max(sidebar_min).min(max_sidebar),
+            );
         } else {
-            self.sidebar_width = self.sidebar_width.max(sidebar_min);
+            self.set_sidebar_width_from_pixels(self.sidebar_width.max(sidebar_min));
         }
 
         if !self.details_collapsed {
@@ -136,9 +137,11 @@ impl GitCometView {
                 self.sidebar_width.max(sidebar_min)
             };
             let max_details = (total_w - sidebar_w - main_min - handles_w).max(details_min);
-            self.details_width = self.details_width.max(details_min).min(max_details);
+            self.set_details_width_from_pixels(
+                self.details_width.max(details_min).min(max_details),
+            );
         } else {
-            self.details_width = self.details_width.max(details_min);
+            self.set_details_width_from_pixels(self.details_width.max(details_min));
         }
 
         let sidebar_target = if self.sidebar_collapsed {

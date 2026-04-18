@@ -369,6 +369,7 @@ impl HistoryView {
                         let changed = *width != next;
                         if changed {
                             *width = next;
+                            this.sync_history_column_design_widths_from_pixels();
                         }
                         this.history_col_resize = Some(state);
                         if changed {

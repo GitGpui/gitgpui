@@ -15,6 +15,8 @@ pub(in super::super) struct DetailsPaneView {
     tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
+    change_tracking_height_design: Option<f32>,
+    untracked_height_design: Option<f32>,
     pub(in super::super) change_tracking_height: Option<Pixels>,
     pub(in super::super) untracked_height: Option<Pixels>,
     pub(in super::super) status_sections_bounds_ref:
@@ -303,11 +305,15 @@ impl DetailsPaneView {
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
-            change_tracking_height: Self::sanitized_restored_change_tracking_height(
+            change_tracking_height_design: Self::sanitized_restored_change_tracking_height_design(
                 change_tracking_view,
                 change_tracking_height,
             ),
-            untracked_height: Self::sanitized_restored_untracked_height(untracked_height),
+            untracked_height_design: Self::sanitized_restored_untracked_height_design(
+                untracked_height,
+            ),
+            change_tracking_height: None,
+            untracked_height: None,
             status_sections_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             change_tracking_stack_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             status_section_resize: None,
@@ -335,6 +341,7 @@ impl DetailsPaneView {
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
         };
+        pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
         pane
     }
@@ -362,6 +369,48 @@ impl DetailsPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
+        ui_scale::UiScale::from_percent(self.ui_scale_percent)
+    }
+
+    fn change_tracking_height_design(&self) -> Option<f32> {
+        self.change_tracking_height_design.or_else(|| {
+            self.ui_scale()
+                .design_units_from_optional_pixels(self.change_tracking_height)
+        })
+    }
+
+    fn untracked_height_design(&self) -> Option<f32> {
+        self.untracked_height_design.or_else(|| {
+            self.ui_scale()
+                .design_units_from_optional_pixels(self.untracked_height)
+        })
+    }
+
+    fn sync_scaled_section_heights_from_design(&mut self) {
+        let change_tracking_height_design = self.change_tracking_height_design();
+        let untracked_height_design = self.untracked_height_design();
+        let scale = self.ui_scale();
+        self.change_tracking_height_design = change_tracking_height_design;
+        self.untracked_height_design = untracked_height_design;
+        self.change_tracking_height = scale.pixels_from_design_units(change_tracking_height_design);
+        self.untracked_height = scale.pixels_from_design_units(untracked_height_design);
+    }
+
+    pub(in super::super) fn set_change_tracking_height_from_pixels(
+        &mut self,
+        height: Option<Pixels>,
+    ) {
+        self.change_tracking_height = height;
+        self.change_tracking_height_design =
+            self.ui_scale().design_units_from_optional_pixels(height);
+    }
+
+    pub(in super::super) fn set_untracked_height_from_pixels(&mut self, height: Option<Pixels>) {
+        self.untracked_height = height;
+        self.untracked_height_design = self.ui_scale().design_units_from_optional_pixels(height);
+    }
+
     pub(in super::super) fn set_change_tracking_view(
         &mut self,
         next: ChangeTrackingView,
@@ -378,19 +427,24 @@ impl DetailsPaneView {
     }
 
     pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
-        let to_u32 = |value: Option<Pixels>| {
-            let px_value: f32 = value.unwrap_or(px(0.0)).round().into();
-            (px_value.is_finite() && px_value >= 1.0).then_some(px_value as u32)
-        };
+        let scale = self.ui_scale();
         (
-            to_u32(self.change_tracking_height),
-            to_u32(self.untracked_height),
+            ui_scale::stored_design_units(
+                scale
+                    .design_units_from_optional_pixels(self.change_tracking_height)
+                    .or(self.change_tracking_height_design),
+            ),
+            ui_scale::stored_design_units(
+                scale
+                    .design_units_from_optional_pixels(self.untracked_height)
+                    .or(self.untracked_height_design),
+            ),
         )
     }
 
     pub(in super::super) fn apply_ui_scale_percent(
         &mut self,
-        previous_percent: u32,
+        _previous_percent: u32,
         next_percent: u32,
         change_tracking_view: ChangeTrackingView,
         cx: &mut gpui::Context<Self>,
@@ -399,20 +453,16 @@ impl DetailsPaneView {
             return;
         }
 
+        let (change_tracking_height, untracked_height) = self.saved_status_section_heights();
         self.ui_scale_percent = next_percent;
         self.status_section_resize = None;
-        let (change_tracking_height, untracked_height) = self.saved_status_section_heights();
-        self.change_tracking_height = Self::sanitized_restored_change_tracking_height(
+        self.change_tracking_height_design = Self::sanitized_restored_change_tracking_height_design(
             change_tracking_view,
-            crate::ui_scale::rescale_optional_u32(
-                change_tracking_height,
-                previous_percent,
-                next_percent,
-            ),
+            change_tracking_height,
         );
-        self.untracked_height = Self::sanitized_restored_untracked_height(
-            crate::ui_scale::rescale_optional_u32(untracked_height, previous_percent, next_percent),
-        );
+        self.untracked_height_design =
+            Self::sanitized_restored_untracked_height_design(untracked_height);
+        self.sync_scaled_section_heights_from_design();
         cx.notify();
     }
 

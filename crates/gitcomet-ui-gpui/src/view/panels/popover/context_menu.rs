@@ -909,7 +909,8 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
-        let ui_scale_percent = ui_scale::current(cx).percent;
+        let ui_scale = super::popover_ui_scale(cx);
+        let width = super::popover_width_spec(&kind).unwrap_or(super::DEFAULT_CONTEXT_MENU_WIDTH);
         let model = self
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
@@ -1004,17 +1005,17 @@ impl PopoverHost {
                 .children(model.items.into_iter().enumerate().map(|(ix, item)| {
                     match item {
                         ContextMenuItem::Separator => {
-                            components::context_menu_separator_scaled(theme, ui_scale_percent)
+                            components::context_menu_separator_scaled(theme, ui_scale)
                                 .id(("context_menu_sep", ix))
                                 .into_any_element()
                         }
                         ContextMenuItem::Header(title) => {
-                            components::context_menu_header_scaled(theme, ui_scale_percent, title)
+                            components::context_menu_header_scaled(theme, ui_scale, title)
                                 .id(("context_menu_header", ix))
                                 .into_any_element()
                         }
                         ContextMenuItem::Label(text) => {
-                            components::context_menu_label_scaled(theme, ui_scale_percent, text)
+                            components::context_menu_label_scaled(theme, ui_scale, text)
                                 .id(("context_menu_label", ix))
                                 .into_any_element()
                         }
@@ -1032,7 +1033,7 @@ impl PopoverHost {
                             let row = components::context_menu_entry(
                                 ("context_menu_entry", ix),
                                 theme,
-                                ui_scale_percent,
+                                ui_scale,
                                 selected,
                                 disabled,
                                 icon,
@@ -1080,18 +1081,9 @@ impl PopoverHost {
                 }))
                 .into_any_element(),
         )
-        .w(super::popover_scaled_px_from_percent(
-            220.0,
-            ui_scale_percent,
-        ))
-        .min_w(super::popover_scaled_px_from_percent(
-            160.0,
-            ui_scale_percent,
-        ))
-        .max_w(super::popover_scaled_px_from_percent(
-            320.0,
-            ui_scale_percent,
-        ))
+        .w(width.preferred_px(ui_scale))
+        .min_w(width.min_px(ui_scale))
+        .max_w(width.max_px(ui_scale))
     }
 }
 

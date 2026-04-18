@@ -2852,6 +2852,8 @@ pub struct GitCometView {
 
     pub(super) sidebar_collapsed: bool,
     pub(super) details_collapsed: bool,
+    pub(super) sidebar_width_design: f32,
+    pub(super) details_width_design: f32,
     pub(super) sidebar_width: Pixels,
     pub(super) details_width: Pixels,
     pub(super) sidebar_render_width: Pixels,

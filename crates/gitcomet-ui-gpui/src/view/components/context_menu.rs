@@ -1,5 +1,5 @@
 use crate::theme::AppTheme;
-use crate::ui_scale;
+use crate::ui_scale::{self, UiScale};
 use gpui::prelude::*;
 use gpui::{CursorStyle, Div, ElementId, SharedString, Stateful, div, px};
 
@@ -23,10 +23,11 @@ pub fn context_menu_header(theme: AppTheme, title: impl Into<SharedString>) -> D
 
 pub fn context_menu_header_scaled(
     theme: AppTheme,
-    ui_scale_percent: u32,
+    ui_scale: impl Into<UiScale>,
     title: impl Into<SharedString>,
 ) -> Div {
-    let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
     div()
         .w_full()
         .self_stretch()
@@ -48,10 +49,11 @@ pub fn context_menu_label(theme: AppTheme, text: impl Into<SharedString>) -> Div
 
 pub fn context_menu_label_scaled(
     theme: AppTheme,
-    ui_scale_percent: u32,
+    ui_scale: impl Into<UiScale>,
     text: impl Into<SharedString>,
 ) -> Div {
-    let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
     div()
         .w_full()
         .self_stretch()
@@ -69,8 +71,9 @@ pub fn context_menu_separator(theme: AppTheme) -> Div {
     context_menu_separator_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
 }
 
-pub fn context_menu_separator_scaled(theme: AppTheme, ui_scale_percent: u32) -> Div {
-    let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+pub fn context_menu_separator_scaled(theme: AppTheme, ui_scale: impl Into<UiScale>) -> Div {
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
     div()
         .w_full()
         .self_stretch()
@@ -82,14 +85,15 @@ pub fn context_menu_separator_scaled(theme: AppTheme, ui_scale_percent: u32) -> 
 pub fn context_menu_entry(
     id: impl Into<ElementId>,
     theme: AppTheme,
-    ui_scale_percent: u32,
+    ui_scale: impl Into<UiScale>,
     selected: bool,
     disabled: bool,
     icon: Option<SharedString>,
     label: impl Into<SharedString>,
     shortcut: Option<SharedString>,
 ) -> Stateful<Div> {
-    let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
     let label: SharedString = label.into();
     let icon_path = icon
         .as_ref()
@@ -98,7 +102,7 @@ pub fn context_menu_entry(
 
     let mut row = div()
         .id(id)
-        .h(control_height_md(ui_scale_percent))
+        .h(control_height_md(ui_scale))
         .w_full()
         .min_w_full()
         .self_stretch()

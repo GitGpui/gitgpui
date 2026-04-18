@@ -1,5 +1,5 @@
 use crate::theme::AppTheme;
-use crate::ui_scale;
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div};
 use std::cmp::Ordering;
@@ -54,12 +54,13 @@ impl Tab {
         self
     }
 
-    pub fn container_height(ui_scale_percent: u32) -> gpui::Pixels {
-        ui_scale::design_px_from_percent(32.0, ui_scale_percent)
+    pub fn container_height(ui_scale: impl Into<UiScale>) -> gpui::Pixels {
+        ui_scale.into().px(32.0)
     }
 
-    pub fn render(self, theme: AppTheme, ui_scale_percent: u32) -> Stateful<Div> {
-        let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+    pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
+        let ui_scale = ui_scale.into();
+        let scaled_px = |value| ui_scale.px(value);
         let (text_color, tab_bg) = if self.selected {
             (theme.colors.text, theme.colors.active_section)
         } else {
@@ -86,7 +87,7 @@ impl Tab {
             .group("tab")
             .tab_index(0)
             .relative()
-            .h(Self::container_height(ui_scale_percent))
+            .h(Self::container_height(ui_scale))
             .bg(tab_bg)
             .border_color(theme.colors.border)
             .cursor_pointer()
