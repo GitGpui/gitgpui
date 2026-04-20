@@ -246,10 +246,10 @@ impl AppTheme {
     }
 
     pub(crate) fn from_key(key: &str) -> Option<Self> {
-        runtime_themes()
+        embedded_theme_cache()
             .get(key)
             .map(|spec| spec.theme)
-            .or_else(|| embedded_theme_cache().get(key).map(|spec| spec.theme))
+            .or_else(|| runtime_themes().get(key).map(|spec| spec.theme))
     }
 
     /// GitComet's default dark theme loaded from an embedded JSON definition.
@@ -267,20 +267,24 @@ impl AppTheme {
 }
 
 pub(crate) fn available_themes() -> Vec<ThemeOption> {
-    merged_theme_options(None, true)
+    merged_theme_options(None)
 }
 
 pub(crate) fn has_theme_key(key: &str) -> bool {
-    merged_theme_options(None, true)
+    merged_theme_options(None)
         .iter()
         .any(|option| option.key == key)
 }
 
 pub(crate) fn theme_label(key: &str) -> Option<String> {
-    merged_theme_options(None, true)
+    merged_theme_options(None)
         .into_iter()
         .find(|option| option.key == key)
         .map(|option| option.label)
+}
+
+pub(crate) fn ensure_user_themes_dir_exists() -> Option<PathBuf> {
+    resolved_runtime_themes_dir(None)
 }
 
 #[cfg(test)]
@@ -872,35 +876,45 @@ struct RuntimeThemeSpec {
     theme: AppTheme,
 }
 
-fn merged_theme_options(runtime_dir: Option<&Path>, seed_embedded: bool) -> Vec<ThemeOption> {
+fn is_embedded_theme_key(key: &str) -> bool {
+    embedded_theme_cache().contains_key(key)
+}
+
+fn is_embedded_theme_stem(stem: &str) -> bool {
+    EMBEDDED_THEME_FILES.iter().any(|file| file.stem == stem)
+}
+
+fn is_reserved_runtime_theme_path(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(is_embedded_theme_stem)
+}
+
+fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
     let mut options = BTreeMap::<String, ThemeOption>::new();
+    for spec in runtime_themes_with_dir(runtime_dir).into_values() {
+        options.insert(spec.option.key.clone(), spec.option);
+    }
     for spec in embedded_theme_cache().values() {
         options.insert(spec.option.key.clone(), spec.option.clone());
-    }
-
-    for spec in runtime_themes_with_dir(runtime_dir, seed_embedded).into_values() {
-        options.insert(spec.option.key.clone(), spec.option);
     }
 
     options.into_values().collect()
 }
 
 fn runtime_themes() -> HashMap<String, RuntimeThemeSpec> {
-    runtime_themes_with_dir(None, true)
+    runtime_themes_with_dir(None)
 }
 
-fn runtime_themes_with_dir(
-    runtime_dir: Option<&Path>,
-    seed_embedded: bool,
-) -> HashMap<String, RuntimeThemeSpec> {
-    let Some(dir) = resolved_runtime_themes_dir(runtime_dir, seed_embedded) else {
+fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> HashMap<String, RuntimeThemeSpec> {
+    let Some(dir) = resolved_runtime_themes_dir(runtime_dir) else {
         return HashMap::default();
     };
 
     load_runtime_themes_from_dir(&dir)
 }
 
-fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>, seed_embedded: bool) -> Option<PathBuf> {
+fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>) -> Option<PathBuf> {
     let dir = match runtime_dir {
         Some(path) => path.to_path_buf(),
         None => gitcomet_state::session::user_themes_dir()?,
@@ -910,21 +924,7 @@ fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>, seed_embedded: bool) 
         return None;
     }
 
-    if seed_embedded {
-        seed_runtime_themes_dir(&dir);
-    }
-
     Some(dir)
-}
-
-fn seed_runtime_themes_dir(dir: &Path) {
-    for file in EMBEDDED_THEME_FILES {
-        let path = dir.join(format!("{}.json", file.stem));
-        if path.exists() {
-            continue;
-        }
-        let _ = fs::write(path, file.json);
-    }
 }
 
 fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec> {
@@ -935,6 +935,7 @@ fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec>
     let mut files = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter(|path| !is_reserved_runtime_theme_path(path))
         .collect::<Vec<_>>();
     files.sort();
 
@@ -943,7 +944,7 @@ fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec>
         let Ok(json) = fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(specs) = load_theme_specs_from_json(&json) else {
+        let Ok(specs) = load_runtime_theme_specs_from_json(&json) else {
             continue;
         };
 
@@ -960,8 +961,28 @@ fn load_theme_specs_from_json(json: &str) -> Result<Vec<RuntimeThemeSpec>, Theme
     load_theme_specs_from_bundle(bundle)
 }
 
+fn load_runtime_theme_specs_from_json(
+    json: &str,
+) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
+    let bundle = parse_theme_bundle(json)?;
+    load_runtime_theme_specs_from_bundle(bundle)
+}
+
 fn load_theme_specs_from_bundle(
     bundle: ThemeBundleFile,
+) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
+    collect_theme_specs(bundle, false)
+}
+
+fn load_runtime_theme_specs_from_bundle(
+    bundle: ThemeBundleFile,
+) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
+    collect_theme_specs(bundle, true)
+}
+
+fn collect_theme_specs(
+    bundle: ThemeBundleFile,
+    skip_embedded_keys: bool,
 ) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
     if bundle.themes.is_empty() {
         return Err(ThemeParseError::Invalid(
@@ -974,6 +995,10 @@ fn load_theme_specs_from_bundle(
 
     for entry in bundle.themes {
         let key = entry.key.clone();
+        if skip_embedded_keys && is_embedded_theme_key(&key) {
+            continue;
+        }
+
         if !seen_keys.insert(key.clone()) {
             return Err(ThemeParseError::Invalid(format!(
                 "theme bundle defines duplicate key `{key}`"
@@ -1006,10 +1031,74 @@ mod tests {
     use super::{
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
         GRAPH_LANE_PALETTE_SIZE, Rgba, available_themes, derived_syntax_color, has_theme_key,
-        load_theme_specs_from_json, merged_theme_options, theme_label, with_alpha,
+        load_theme_specs_from_json, merged_theme_options, resolved_runtime_themes_dir,
+        runtime_themes_with_dir, theme_label, with_alpha,
     };
-    use std::fs;
+    use std::{fs, path::PathBuf};
     use tempfile::tempdir;
+
+    fn themes_markdown_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/themes.md")
+    }
+
+    fn readme_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../README.md")
+    }
+
+    fn themes_markdown_example() -> String {
+        let markdown = fs::read_to_string(themes_markdown_path())
+            .expect("THEMES.md should be readable for theme docs tests");
+        let start = markdown
+            .find("```javascript")
+            .expect("THEMES.md should include a javascript example block");
+        let example = &markdown[start + "```javascript".len()..];
+        let end = example
+            .find("```")
+            .expect("THEMES.md example block should be closed");
+        example[..end].trim().to_string()
+    }
+
+    fn strip_json_line_comments(json_with_comments: &str) -> String {
+        let mut out = String::with_capacity(json_with_comments.len());
+        let mut chars = json_with_comments.chars().peekable();
+        let mut in_string = false;
+        let mut escaped = false;
+
+        while let Some(ch) = chars.next() {
+            if in_string {
+                out.push(ch);
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            if ch == '"' {
+                in_string = true;
+                out.push(ch);
+                continue;
+            }
+
+            if ch == '/' && chars.peek() == Some(&'/') {
+                let _ = chars.next();
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            out.push(ch);
+        }
+
+        out
+    }
 
     #[test]
     fn with_alpha_preserves_rgb_and_overwrites_alpha() {
@@ -1492,20 +1581,24 @@ mod tests {
         assert_eq!(dark.colors.emphasis_text, gpui::rgba(0xffffffff));
         assert_eq!(light.colors.emphasis_text, gpui::rgba(0x000000ff));
         assert_eq!(dark.syntax.comment, gpui::rgba(0x6f7b94ff));
-        assert_eq!(dark.syntax.keyword, gpui::rgba(0x9d8dffff));
-        assert_eq!(dark.syntax.string, gpui::rgba(0xf4c26bff));
-        assert_eq!(dark.syntax.function_method, gpui::rgba(0x8fe5ffff));
+        assert_eq!(dark.syntax.keyword, gpui::rgba(0xa79aebff));
+        assert_eq!(dark.syntax.string, gpui::rgba(0xe5c180ff));
+        assert_eq!(dark.syntax.function_method, gpui::rgba(0x9cdaebff));
         assert_eq!(dark.syntax.variable, Some(gpui::rgba(0xd7d3caff)));
+        assert_eq!(dark.syntax.variable_parameter, dark.colors.text);
+        assert_eq!(dark.syntax.variable_special, dark.colors.text);
         assert_eq!(dark.syntax.diff_plus, gpui::rgba(0xbbf7d0ff));
         assert_eq!(dark.syntax.diff_minus, gpui::rgba(0xfecacaff));
         assert_eq!(light.syntax.comment, gpui::rgba(0x8b91a3ff));
-        assert_eq!(light.syntax.keyword, gpui::rgba(0x4759cbff));
-        assert_eq!(light.syntax.keyword_control, gpui::rgba(0x7a51d0ff));
-        assert_eq!(light.syntax.string, gpui::rgba(0xb06b12ff));
-        assert_eq!(light.syntax.function, gpui::rgba(0x006fb8ff));
+        assert_eq!(light.syntax.keyword, gpui::rgba(0x3e4ca2ff));
+        assert_eq!(light.syntax.keyword_control, gpui::rgba(0x6446a6ff));
+        assert_eq!(light.syntax.string, gpui::rgba(0x8d5a18ff));
+        assert_eq!(light.syntax.function, gpui::rgba(0x095c94ff));
         assert_eq!(light.syntax.variable, Some(gpui::rgba(0x2a2d34ff)));
-        assert_eq!(light.syntax.constant, gpui::rgba(0x6f52b5ff));
-        assert_eq!(light.syntax.markup_link, gpui::rgba(0x006fb8ff));
+        assert_eq!(light.syntax.variable_parameter, light.colors.text);
+        assert_eq!(light.syntax.variable_special, light.colors.text);
+        assert_eq!(light.syntax.constant, gpui::rgba(0x5c4792ff));
+        assert_eq!(light.syntax.markup_link, gpui::rgba(0x095c94ff));
         assert_eq!(
             dark.graph_lane_palette.as_slice().len(),
             GRAPH_LANE_PALETTE_SIZE
@@ -1671,7 +1764,21 @@ mod tests {
     }
 
     #[test]
-    fn runtime_theme_dir_overrides_and_extends_embedded_themes() {
+    fn ensure_runtime_theme_dir_creates_missing_directory() {
+        let dir = tempdir().expect("temp dir should exist");
+        let path = dir.path().join("themes");
+
+        assert!(!path.exists(), "theme subdirectory should start absent");
+
+        let resolved = resolved_runtime_themes_dir(Some(&path))
+            .expect("runtime theme helper should resolve a writable directory");
+
+        assert_eq!(resolved, path);
+        assert!(resolved.is_dir(), "theme directory should be created");
+    }
+
+    #[test]
+    fn runtime_theme_dir_extends_embedded_themes_with_custom_entries() {
         let dir = tempdir().expect("temp dir should exist");
         fs::write(
             dir.path().join("custom_theme.json"),
@@ -1713,7 +1820,7 @@ mod tests {
         )
         .expect("custom theme file should be written");
 
-        let themes = merged_theme_options(Some(dir.path()), false);
+        let themes = merged_theme_options(Some(dir.path()));
         let custom = themes
             .iter()
             .find(|theme| theme.key == "custom_theme")
@@ -1725,5 +1832,329 @@ mod tests {
                 .iter()
                 .any(|theme| theme.key == DEFAULT_DARK_THEME_KEY)
         );
+    }
+
+    #[test]
+    fn runtime_theme_dir_ignores_reserved_system_theme_filenames() {
+        let dir = tempdir().expect("temp dir should exist");
+        fs::write(
+            dir.path().join("gitcomet.json"),
+            r##"{
+                "name": "Shadow Theme",
+                "themes": [
+                    {
+                        "key": "shadow_theme",
+                        "name": "Shadow Theme",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#000000ff",
+                            "surface_bg": "#111111ff",
+                            "surface_bg_elevated": "#111111ff",
+                            "active_section": "#222222ff",
+                            "border": "#333333ff",
+                            "text": "#eeeeeeff",
+                            "text_muted": "#999999ff",
+                            "accent": "#abcdef12",
+                            "hover": "#222222ff",
+                            "active": "#222222ff",
+                            "focus_ring": "#abcdef12",
+                            "focus_ring_bg": "#abcdef12",
+                            "scrollbar_thumb": "#88888880",
+                            "scrollbar_thumb_hover": "#888888aa",
+                            "scrollbar_thumb_active": "#888888ff",
+                            "danger": "#aa0000ff",
+                            "warning": "#bb9900ff",
+                            "success": "#00aa00ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
+            }"##,
+        )
+        .expect("reserved theme file should be written");
+
+        let themes = merged_theme_options(Some(dir.path()));
+
+        assert!(
+            themes.iter().all(|theme| theme.key != "shadow_theme"),
+            "custom themes in reserved bundled filenames should be ignored"
+        );
+    }
+
+    #[test]
+    fn runtime_theme_dir_ignores_every_reserved_system_theme_filename() {
+        let dir = tempdir().expect("temp dir should exist");
+
+        for (ix, file) in EMBEDDED_THEME_FILES.iter().enumerate() {
+            let theme_key = format!("reserved_shadow_{ix}");
+            let theme_name = format!("Reserved Shadow {ix}");
+            let json = format!(
+                r##"{{
+                    "name": "Reserved Shadow Pack {ix}",
+                    "themes": [
+                        {{
+                            "key": "{theme_key}",
+                            "name": "{theme_name}",
+                            "appearance": "dark",
+                            "colors": {{
+                                "window_bg": "#000000ff",
+                                "surface_bg": "#111111ff",
+                                "surface_bg_elevated": "#111111ff",
+                                "active_section": "#222222ff",
+                                "border": "#333333ff",
+                                "text": "#eeeeeeff",
+                                "text_muted": "#999999ff",
+                                "accent": "#abcdef12",
+                                "hover": "#222222ff",
+                                "active": "#222222ff",
+                                "focus_ring": "#abcdef12",
+                                "focus_ring_bg": "#abcdef12",
+                                "scrollbar_thumb": "#88888880",
+                                "scrollbar_thumb_hover": "#888888aa",
+                                "scrollbar_thumb_active": "#888888ff",
+                                "danger": "#aa0000ff",
+                                "warning": "#bb9900ff",
+                                "success": "#00aa00ff"
+                            }},
+                            "radii": {{
+                                "panel": 2.0,
+                                "pill": 2.0,
+                                "row": 2.0
+                            }}
+                        }}
+                    ]
+                }}"##,
+            );
+            fs::write(dir.path().join(format!("{}.json", file.stem)), json)
+                .expect("reserved theme file should be written");
+        }
+
+        let runtime_themes = runtime_themes_with_dir(Some(dir.path()));
+        let merged_themes = merged_theme_options(Some(dir.path()));
+
+        for ix in 0..EMBEDDED_THEME_FILES.len() {
+            let theme_key = format!("reserved_shadow_{ix}");
+            assert!(
+                !runtime_themes.contains_key(&theme_key),
+                "runtime themes should ignore reserved bundled filename entry `{theme_key}`"
+            );
+            assert!(
+                merged_themes.iter().all(|theme| theme.key != theme_key),
+                "available themes should ignore reserved bundled filename entry `{theme_key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_theme_dir_ignores_embedded_theme_key_collisions_but_keeps_custom_entries() {
+        let dir = tempdir().expect("temp dir should exist");
+        fs::write(
+            dir.path().join("mixed_theme.json"),
+            r##"{
+                "name": "Mixed Theme",
+                "themes": [
+                    {
+                        "key": "gitcomet_dark",
+                        "name": "Fake GitComet Dark",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#000000ff",
+                            "surface_bg": "#111111ff",
+                            "surface_bg_elevated": "#222222ff",
+                            "active_section": "#333333ff",
+                            "border": "#444444ff",
+                            "text": "#eeeeeeff",
+                            "text_muted": "#999999ff",
+                            "accent": "#abcdef12",
+                            "hover": "#555555ff",
+                            "active": "#666666ff",
+                            "focus_ring": "#777777ff",
+                            "focus_ring_bg": "#888888ff",
+                            "scrollbar_thumb": "#99999980",
+                            "scrollbar_thumb_hover": "#999999aa",
+                            "scrollbar_thumb_active": "#999999ff",
+                            "danger": "#aa0000ff",
+                            "warning": "#bb9900ff",
+                            "success": "#00aa00ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    },
+                    {
+                        "key": "custom_keep",
+                        "name": "Custom Keep",
+                        "appearance": "light",
+                        "colors": {
+                            "window_bg": "#ffffffff",
+                            "surface_bg": "#f0f0f0ff",
+                            "surface_bg_elevated": "#f7f7f7ff",
+                            "active_section": "#ffffffff",
+                            "border": "#d2d2d2ff",
+                            "text": "#000000ff",
+                            "text_muted": "#505050ff",
+                            "accent": "#1f6ae2ff",
+                            "hover": "#d0d0d0ff",
+                            "active": "#c7deffff",
+                            "focus_ring": "#1f6ae2ff",
+                            "focus_ring_bg": "#1f6ae233",
+                            "scrollbar_thumb": "#c8c8c8aa",
+                            "scrollbar_thumb_hover": "#c8c8c8cc",
+                            "scrollbar_thumb_active": "#c8c8c8ff",
+                            "danger": "#c5060bff",
+                            "warning": "#c99401ff",
+                            "success": "#036a07ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
+            }"##,
+        )
+        .expect("mixed theme file should be written");
+
+        let runtime_themes = runtime_themes_with_dir(Some(dir.path()));
+        assert!(
+            !runtime_themes.contains_key(DEFAULT_DARK_THEME_KEY),
+            "runtime themes should ignore entries that reuse embedded system keys"
+        );
+        assert!(
+            runtime_themes.contains_key("custom_keep"),
+            "runtime themes should keep valid custom entries from mixed bundles"
+        );
+
+        let themes = merged_theme_options(Some(dir.path()));
+        assert_eq!(
+            themes
+                .iter()
+                .find(|theme| theme.key == DEFAULT_DARK_THEME_KEY)
+                .map(|theme| theme.label.as_str()),
+            Some("GitComet Dark"),
+            "embedded theme labels should remain authoritative"
+        );
+        assert_eq!(
+            themes
+                .iter()
+                .filter(|theme| theme.key == DEFAULT_DARK_THEME_KEY)
+                .count(),
+            1,
+            "embedded system keys should appear only once in the merged theme list"
+        );
+        assert!(
+            themes.iter().any(|theme| theme.key == "custom_keep"),
+            "valid custom themes should still appear in available theme options"
+        );
+    }
+
+    #[test]
+    fn themes_markdown_example_matches_current_theme_parser() {
+        let example = themes_markdown_example();
+        let json = strip_json_line_comments(&example);
+        let themes = load_theme_specs_from_json(&json)
+            .expect("THEMES.md example should stay in sync with the runtime parser");
+
+        assert_eq!(themes.len(), 1, "docs example should define a single theme");
+        assert_eq!(themes[0].option.key, "my_theme_dark");
+    }
+
+    #[test]
+    fn themes_markdown_lists_current_supported_syntax_keys() {
+        const REQUIRED_DOC_KEYS: &[&str] = &[
+            "comment",
+            "comment_doc",
+            "string",
+            "string_escape",
+            "string_regex",
+            "string_special",
+            "keyword",
+            "keyword_control",
+            "preproc",
+            "number",
+            "boolean",
+            "function",
+            "function_method",
+            "function_special",
+            "constructor",
+            "type",
+            "type_builtin",
+            "type_interface",
+            "namespace",
+            "variable",
+            "variable_parameter",
+            "variable_special",
+            "variable_builtin",
+            "property",
+            "label",
+            "constant",
+            "constant_builtin",
+            "operator",
+            "punctuation",
+            "punctuation_bracket",
+            "punctuation_delimiter",
+            "punctuation_special",
+            "punctuation_list_marker",
+            "tag",
+            "attribute",
+            "markup_heading",
+            "markup_link",
+            "text_literal",
+            "diff_plus",
+            "diff_minus",
+            "diff_delta",
+            "lifetime",
+        ];
+
+        let markdown = fs::read_to_string(themes_markdown_path())
+            .expect("THEMES.md should be readable for supported-key checks");
+
+        for key in REQUIRED_DOC_KEYS {
+            assert!(
+                markdown.contains(&format!("`{key}`")),
+                "THEMES.md should mention the supported syntax key `{key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn themes_markdown_documents_custom_theme_override_rules() {
+        let markdown = fs::read_to_string(themes_markdown_path())
+            .expect("THEMES.md should be readable for override behavior checks");
+
+        for snippet in [
+            "GitComet creates the user themes directory on startup",
+            "ignores files whose basename matches a bundled system theme file",
+            "cannot override built-in system theme keys",
+        ] {
+            assert!(
+                markdown.contains(snippet),
+                "THEMES.md should document `{snippet}`"
+            );
+        }
+    }
+
+    #[test]
+    fn readme_themes_section_points_to_theme_guide() {
+        let readme =
+            fs::read_to_string(readme_path()).expect("README.md should be readable for docs tests");
+
+        for snippet in [
+            "Custom themes are loaded from JSON bundle files in your per-user themes directory",
+            "creates on startup",
+            "[THEMES.md](THEMES.md)",
+        ] {
+            assert!(
+                readme.contains(snippet),
+                "README.md theme section should mention `{snippet}`"
+            );
+        }
     }
 }

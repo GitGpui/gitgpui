@@ -4056,6 +4056,17 @@ mod tests {
 
     #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
+    fn rust_treesitter_captures_self_as_variable_special() {
+        let text = "impl Widget { fn render(&self, item: Item) { self.draw(item); } }";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::VariableSpecial, "self"),
+            "Rust `self` should produce VariableSpecial token, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
     fn rust_treesitter_captures_type_builtin() {
         let text = "let x: u32 = 0;";
         let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);

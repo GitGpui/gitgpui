@@ -198,9 +198,9 @@ KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/-
 
 GitComet supports built-in themes and user-provided custom themes.
 
-Themes are loaded from JSON bundle files. GitComet ships with built-in themes and copies them into your per-user themes directory, and it also loads custom theme bundles from that same location.
+Built-in themes are embedded in the GitComet binary. Custom themes are loaded from JSON bundle files in your per-user themes directory, which GitComet creates on startup.
 
-The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](THEMES.md).
+The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](docs/themes.md).
 
 ### Crash logs
 
