@@ -1491,13 +1491,21 @@ mod tests {
         assert_eq!(light.colors.accent_text, gpui::rgba(0xffffffff));
         assert_eq!(dark.colors.emphasis_text, gpui::rgba(0xffffffff));
         assert_eq!(light.colors.emphasis_text, gpui::rgba(0x000000ff));
+        assert_eq!(dark.syntax.comment, gpui::rgba(0x6f7b94ff));
+        assert_eq!(dark.syntax.keyword, gpui::rgba(0x9d8dffff));
+        assert_eq!(dark.syntax.string, gpui::rgba(0xf4c26bff));
+        assert_eq!(dark.syntax.function_method, gpui::rgba(0x8fe5ffff));
+        assert_eq!(dark.syntax.variable, Some(gpui::rgba(0xd7d3caff)));
         assert_eq!(dark.syntax.diff_plus, gpui::rgba(0xbbf7d0ff));
         assert_eq!(dark.syntax.diff_minus, gpui::rgba(0xfecacaff));
-        assert_eq!(light.syntax.keyword, gpui::rgba(0x3358d4ff));
-        assert_eq!(light.syntax.string, gpui::rgba(0x8a6116ff));
-        assert_eq!(light.syntax.function, gpui::rgba(0x245eb8ff));
-        assert_eq!(light.syntax.constant, gpui::rgba(0x276f27ff));
-        assert_eq!(light.syntax.markup_link, gpui::rgba(0x3358d4ff));
+        assert_eq!(light.syntax.comment, gpui::rgba(0x8b91a3ff));
+        assert_eq!(light.syntax.keyword, gpui::rgba(0x4759cbff));
+        assert_eq!(light.syntax.keyword_control, gpui::rgba(0x7a51d0ff));
+        assert_eq!(light.syntax.string, gpui::rgba(0xb06b12ff));
+        assert_eq!(light.syntax.function, gpui::rgba(0x006fb8ff));
+        assert_eq!(light.syntax.variable, Some(gpui::rgba(0x2a2d34ff)));
+        assert_eq!(light.syntax.constant, gpui::rgba(0x6f52b5ff));
+        assert_eq!(light.syntax.markup_link, gpui::rgba(0x006fb8ff));
         assert_eq!(
             dark.graph_lane_palette.as_slice().len(),
             GRAPH_LANE_PALETTE_SIZE
