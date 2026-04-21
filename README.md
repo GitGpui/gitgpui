@@ -20,7 +20,21 @@ Available for Linux, Windows, and macOS.
 
 Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
 
-#### Homebrew (macOS / Linux)
+<details>
+<summary>Windows</summary>
+
+Download the latest Windows installer or portable binary from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
+
+Install from the Microsoft Store:
+
+<a href="https://get.microsoft.com/installer/download/XPFD182V1H793R?referrer=appbadge" target="_self">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Download from Microsoft Store" />
+</a>
+
+</details>
+
+<details>
+<summary>Homebrew (macOS / Linux)</summary>
 
 App and `gitcomet` command from tap:
 
@@ -31,20 +45,29 @@ brew install --cask gitcomet
 
 On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, AUR package, release tarball, or `.deb` instead.
 
-#### AUR (Arch Linux)
+</details>
+
+<details>
+<summary>AUR (Arch Linux)</summary>
 
 ```bash
 git clone https://aur.archlinux.org/gitcomet.git
 cd gitcomet && makepkg -si
 ```
 
-#### GURU (Gentoo Linux)
+</details>
+
+<details>
+<summary>GURU (Gentoo Linux)</summary>
 
 ```bash
 emerge --ask dev-vcs/gitcomet
 ```
 
-#### apt (Debian/Ubuntu)
+</details>
+
+<details>
+<summary>apt (Debian/Ubuntu)</summary>
 
 ```bash
 curl -fsSL https://apt.gitcomet.dev/gitcomet-archive-keyring.gpg | sudo tee /usr/share/keyrings/gitcomet-archive-keyring.gpg >/dev/null
@@ -58,6 +81,8 @@ If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg ins
 ```bash
 sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0
 ```
+
+</details>
 
 ### Requirements
 
