@@ -20,7 +20,21 @@ Available for Linux, Windows, and macOS.
 
 Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
 
-#### Homebrew (macOS / Linux)
+<details>
+<summary>Windows</summary>
+
+Download the latest Windows installer or portable binary from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
+
+Install from the Microsoft Store:
+
+<a href="https://get.microsoft.com/installer/download/XPFD182V1H793R?referrer=appbadge" target="_self">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Download from Microsoft Store" />
+</a>
+
+</details>
+
+<details>
+<summary>Homebrew (macOS / Linux)</summary>
 
 App and `gitcomet` command from tap:
 
@@ -31,20 +45,29 @@ brew install --cask gitcomet
 
 On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, AUR package, release tarball, or `.deb` instead.
 
-#### AUR (Arch Linux)
+</details>
+
+<details>
+<summary>AUR (Arch Linux)</summary>
 
 ```bash
 git clone https://aur.archlinux.org/gitcomet.git
 cd gitcomet && makepkg -si
 ```
 
-#### GURU (Gentoo Linux)
+</details>
+
+<details>
+<summary>GURU (Gentoo Linux)</summary>
 
 ```bash
 emerge --ask dev-vcs/gitcomet
 ```
 
-#### apt (Debian/Ubuntu)
+</details>
+
+<details>
+<summary>apt (Debian/Ubuntu)</summary>
 
 ```bash
 curl -fsSL https://apt.gitcomet.dev/gitcomet-archive-keyring.gpg | sudo tee /usr/share/keyrings/gitcomet-archive-keyring.gpg >/dev/null
@@ -58,6 +81,8 @@ If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg ins
 ```bash
 sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0
 ```
+
+</details>
 
 ### Requirements
 
@@ -198,9 +223,9 @@ KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/-
 
 GitComet supports built-in themes and user-provided custom themes.
 
-Themes are loaded from JSON bundle files. GitComet ships with built-in themes and copies them into your per-user themes directory, and it also loads custom theme bundles from that same location.
+Built-in themes are embedded in the GitComet binary. Custom themes are loaded from JSON bundle files in your per-user themes directory, which GitComet creates on startup.
 
-The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](THEMES.md).
+The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](docs/themes.md).
 
 ### Crash logs
 
