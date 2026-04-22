@@ -3953,6 +3953,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: false,
+                load_submodule_summary: false,
                 preview_text_side: None,
             },
             2,

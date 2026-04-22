@@ -2319,6 +2319,11 @@ pub(super) enum PopoverKind {
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
+    SubmoduleInnerDiffMenu {
+        repo_id: RepoId,
+        submodule_repo_path: std::path::PathBuf,
+        target: DiffTarget,
+    },
     TagMenu {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -2367,6 +2372,7 @@ pub(super) enum SubmodulePopoverKind {
     SectionMenu,
     Menu { path: std::path::PathBuf },
     AddPrompt,
+    ChangePointerPrompt { path: std::path::PathBuf },
     TrustConfirm,
     OpenPicker,
     RemovePicker,
@@ -2536,6 +2542,28 @@ pub(super) enum DeferredRepoBootstrap {
     OpenRepo(std::path::PathBuf),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SubmoduleDiffBootstrap {
+    pub(super) repo_path: std::path::PathBuf,
+    pub(super) target: DiffTarget,
+}
+
+impl SubmoduleDiffBootstrap {
+    pub(super) fn new(repo_path: std::path::PathBuf, target: DiffTarget) -> Self {
+        let repo_path = normalize_bootstrap_repo_path(repo_path);
+        let target = normalize_bootstrap_diff_target(&repo_path, target);
+        Self { repo_path, target }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum SubmoduleDiffBootstrapAction {
+    OpenRepo(std::path::PathBuf),
+    SetActiveRepo(RepoId),
+    SelectDiff { repo_id: RepoId, target: DiffTarget },
+    Complete,
+}
+
 pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
     let path = if path.is_relative() {
         std::env::current_dir()
@@ -2545,6 +2573,46 @@ pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::pa
         path
     };
     canonicalize_path(path)
+}
+
+fn normalize_bootstrap_target_path(
+    repo_path: &std::path::Path,
+    target_path: std::path::PathBuf,
+) -> std::path::PathBuf {
+    if target_path.is_relative() {
+        return target_path;
+    }
+
+    if let Ok(relative) = target_path.strip_prefix(repo_path) {
+        return relative.to_path_buf();
+    }
+
+    canonicalize_path(target_path.clone())
+        .strip_prefix(repo_path)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(target_path)
+}
+
+fn normalize_bootstrap_diff_target(repo_path: &std::path::Path, target: DiffTarget) -> DiffTarget {
+    match target {
+        DiffTarget::WorkingTree { path, area } => DiffTarget::WorkingTree {
+            path: normalize_bootstrap_target_path(repo_path, path),
+            area,
+        },
+        DiffTarget::Commit { commit_id, path } => DiffTarget::Commit {
+            commit_id,
+            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        },
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path,
+        } => DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        },
+    }
 }
 
 pub(super) fn focused_mergetool_target_path(
@@ -2615,6 +2683,38 @@ pub(super) fn focused_mergetool_bootstrap_action(
     }
 
     Some(FocusedMergetoolBootstrapAction::Complete)
+}
+
+pub(super) fn submodule_diff_bootstrap_action(
+    state: &AppState,
+    bootstrap: &SubmoduleDiffBootstrap,
+) -> Option<SubmoduleDiffBootstrapAction> {
+    let Some(repo) = state
+        .repos
+        .iter()
+        .find(|r| r.spec.workdir == bootstrap.repo_path)
+    else {
+        return Some(SubmoduleDiffBootstrapAction::OpenRepo(
+            bootstrap.repo_path.clone(),
+        ));
+    };
+
+    if state.active_repo != Some(repo.id) {
+        return Some(SubmoduleDiffBootstrapAction::SetActiveRepo(repo.id));
+    }
+
+    if !matches!(repo.open, Loadable::Ready(())) {
+        return None;
+    }
+
+    if repo.diff_state.diff_target.as_ref() != Some(&bootstrap.target) {
+        return Some(SubmoduleDiffBootstrapAction::SelectDiff {
+            repo_id: repo.id,
+            target: bootstrap.target.clone(),
+        });
+    }
+
+    Some(SubmoduleDiffBootstrapAction::Complete)
 }
 
 pub(super) fn renders_full_chrome(view_mode: GitCometViewMode) -> bool {
@@ -2830,6 +2930,7 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
+    pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Arc<gpui::Image>,

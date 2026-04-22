@@ -3,7 +3,8 @@ use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
     FileDiffText, HistoryMode, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
-    RepoSpec, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence,
+    Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -563,12 +564,20 @@ impl GitRepository for GixRepo {
         self.list_submodules_impl()
     }
 
+    fn submodule_diff_summary(&self, target: &DiffTarget) -> Result<SubmoduleDiffSummary> {
+        self.submodule_diff_summary_impl(target)
+    }
+
     fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {
         self.check_submodule_add_trust_impl(url, path)
     }
 
     fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
         self.check_submodule_update_trust_impl()
+    }
+
+    fn check_submodule_load_trust(&self, path: &Path) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_load_trust_impl(path)
     }
 
     fn add_submodule_with_output(
@@ -588,6 +597,22 @@ impl GitRepository for GixRepo {
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
         self.update_submodules_with_output_impl(approved_sources)
+    }
+
+    fn load_submodule_with_output(
+        &self,
+        path: &Path,
+        approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        self.load_submodule_with_output_impl(path, approved_sources)
+    }
+
+    fn change_submodule_pointer_with_output(
+        &self,
+        path: &Path,
+        reference: &str,
+    ) -> Result<CommandOutput> {
+        self.change_submodule_pointer_with_output_impl(path, reference)
     }
 
     fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {

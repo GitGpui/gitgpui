@@ -53,6 +53,7 @@ pub(super) struct SelectedDiffLoadPlan {
     pub load_patch_diff: bool,
     pub load_file_text: bool,
     pub preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
+    pub load_submodule_summary: bool,
     pub load_file_image: bool,
 }
 
@@ -113,6 +114,9 @@ pub(super) fn diff_target_preview_flags(target: &DiffTarget) -> DiffTargetPrevie
         DiffTarget::WorkingTree { path, .. } => path_preview_flags(path),
         DiffTarget::Commit {
             path: Some(path), ..
+        }
+        | DiffTarget::CommitRange {
+            path: Some(path), ..
         } => path_preview_flags(path),
         _ => DiffTargetPreviewFlags::default(),
     }
@@ -156,10 +160,11 @@ fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> b
 
             details.files.iter().any(|file| {
                 file.path == *path
+                    && !file.is_submodule
                     && matches!(file.kind, FileStatusKind::Added | FileStatusKind::Deleted)
             })
         }
-        DiffTarget::Commit { path: None, .. } => false,
+        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => false,
     }
 }
 
@@ -197,7 +202,7 @@ fn diff_target_preview_text_side(
             }
 
             details.files.iter().find_map(|file| {
-                (file.path == *path).then_some(match file.kind {
+                (file.path == *path && !file.is_submodule).then_some(match file.kind {
                     FileStatusKind::Added => Some(gitcomet_core::domain::DiffPreviewTextSide::New),
                     FileStatusKind::Deleted => {
                         Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
@@ -209,7 +214,7 @@ fn diff_target_preview_text_side(
                 })?
             })
         }
-        DiffTarget::Commit { path: None, .. } => None,
+        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => None,
     }
 }
 
@@ -217,9 +222,21 @@ pub(super) fn selected_diff_load_plan(
     repo_state: &RepoState,
     target: &DiffTarget,
 ) -> SelectedDiffLoadPlan {
+    if diff_target_is_submodule(repo_state, target) {
+        return SelectedDiffLoadPlan {
+            load_patch_diff: false,
+            load_file_text: false,
+            preview_text_side: None,
+            load_submodule_summary: true,
+            load_file_image: false,
+        };
+    }
+
     let supports_file = matches!(
         target,
-        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+        DiffTarget::WorkingTree { .. }
+            | DiffTarget::Commit { path: Some(_), .. }
+            | DiffTarget::CommitRange { path: Some(_), .. }
     );
     let preview = diff_target_preview_flags(target);
     let preview_only = diff_target_is_preview_only(repo_state, target);
@@ -231,6 +248,7 @@ pub(super) fn selected_diff_load_plan(
         load_patch_diff: !preview_only,
         load_file_text: supports_file && !preview_only && (!preview.wants_image || preview.is_svg),
         preview_text_side,
+        load_submodule_summary: false,
         load_file_image: supports_file && preview.wants_image,
     }
 }
@@ -254,11 +272,54 @@ pub(super) fn apply_selected_diff_load_plan_state(
     } else {
         Loadable::NotLoaded
     };
+    repo_state.diff_state.submodule_summary = if load_plan.load_submodule_summary {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
     repo_state.diff_state.diff_file_image = if load_plan.load_file_image {
         Loadable::Loading
     } else {
         Loadable::NotLoaded
     };
+}
+
+fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool {
+    match target {
+        DiffTarget::WorkingTree { path, area } => {
+            let Some(entry) = repo_state.status_entry_for_path(*area, path) else {
+                return false;
+            };
+            if entry.kind == FileStatusKind::Untracked {
+                return false;
+            }
+
+            if let Loadable::Ready(submodules) = &repo_state.submodules
+                && submodules.iter().any(|submodule| submodule.path == *path)
+            {
+                return true;
+            }
+
+            repo_state.spec.workdir.join(path).is_dir()
+        }
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => {
+            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
+                return false;
+            };
+            if &details.id != commit_id {
+                return false;
+            }
+
+            details
+                .files
+                .iter()
+                .any(|file| file.path == *path && file.is_submodule)
+        }
+        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => false,
+    }
 }
 
 pub(super) fn selected_conflict_target<'a>(
@@ -376,6 +437,9 @@ pub(super) fn diff_reload_effect_count(repo_state: &RepoState, target: &DiffTarg
     let plan = selected_diff_load_plan(repo_state, target);
 
     let mut count = usize::from(plan.load_patch_diff);
+    if plan.load_submodule_summary {
+        count += 1;
+    }
     if plan.load_file_image {
         count += 1;
     }
@@ -408,6 +472,12 @@ pub(super) fn append_diff_reload_effects(
 ) {
     let plan = selected_diff_load_plan(repo_state, &target);
 
+    if plan.load_submodule_summary {
+        effects.push_effect(Effect::LoadSubmoduleSummary {
+            repo_id,
+            target: target.clone(),
+        });
+    }
     if plan.load_patch_diff {
         effects.push_effect(Effect::LoadDiff {
             repo_id,
@@ -863,6 +933,8 @@ fn summarize_command(
             | RepoCommandKind::ForceRemoveWorktree { .. } => "Worktree",
             RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules { .. }
+            | RepoCommandKind::LoadSubmodule { .. }
+            | RepoCommandKind::ChangeSubmodulePointer { .. }
             | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
             RepoCommandKind::ApplyWorktreePatch { reverse } => {
@@ -1055,6 +1127,15 @@ fn summarize_command(
             format!("Submodule added → {}", path.display())
         }
         RepoCommandKind::UpdateSubmodules { .. } => "Submodules: Updated".to_string(),
+        RepoCommandKind::LoadSubmodule { path, .. } => {
+            format!("Submodule loaded → {}", path.display())
+        }
+        RepoCommandKind::ChangeSubmodulePointer { path, reference } => {
+            format!(
+                "Submodule pointer updated → {} ({reference})",
+                path.display()
+            )
+        }
         RepoCommandKind::RemoveSubmodule { path } => {
             format!("Submodule removed → {}", path.display())
         }

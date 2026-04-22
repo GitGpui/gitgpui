@@ -268,17 +268,27 @@ fn commit_file_change_from_diff(
     use gitcomet_core::domain::FileStatusKind;
     use gix::object::tree::diff::ChangeDetached;
 
-    let (location, is_tree, kind) = match change {
+    let (location, is_tree, is_submodule, kind) = match change {
         ChangeDetached::Addition {
             entry_mode,
             location,
             ..
-        } => (location, entry_mode.is_tree(), FileStatusKind::Added),
+        } => (
+            location,
+            entry_mode.is_tree(),
+            entry_mode.is_commit(),
+            FileStatusKind::Added,
+        ),
         ChangeDetached::Deletion {
             entry_mode,
             location,
             ..
-        } => (location, entry_mode.is_tree(), FileStatusKind::Deleted),
+        } => (
+            location,
+            entry_mode.is_tree(),
+            entry_mode.is_commit(),
+            FileStatusKind::Deleted,
+        ),
         ChangeDetached::Modification {
             previous_entry_mode,
             entry_mode,
@@ -287,6 +297,7 @@ fn commit_file_change_from_diff(
         } => (
             location,
             previous_entry_mode.is_tree() || entry_mode.is_tree(),
+            previous_entry_mode.is_commit() || entry_mode.is_commit(),
             FileStatusKind::Modified,
         ),
         ChangeDetached::Rewrite {
@@ -298,6 +309,7 @@ fn commit_file_change_from_diff(
         } => (
             location,
             source_entry_mode.is_tree() || entry_mode.is_tree(),
+            source_entry_mode.is_commit() || entry_mode.is_commit(),
             if copy {
                 FileStatusKind::Added
             } else {
@@ -312,6 +324,7 @@ fn commit_file_change_from_diff(
     Ok(Some(CommitFileChange {
         path: path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?,
         kind,
+        is_submodule,
     }))
 }
 

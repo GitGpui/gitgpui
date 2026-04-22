@@ -929,6 +929,7 @@ impl GitCometView {
             toast_host,
             popover_host,
             focused_mergetool_bootstrap,
+            submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
             startup_repo_bootstrap_pending,
             splash_backdrop_image: splash::load_splash_backdrop_image(),
@@ -979,6 +980,7 @@ impl GitCometView {
         view.maybe_auto_install_linux_desktop_integration(cx);
 
         view.drive_focused_mergetool_bootstrap();
+        view.drive_submodule_diff_bootstrap();
         view.maybe_check_for_updates_on_startup(cx);
 
         crate::app::sync_gitcomet_window_state(
@@ -1604,6 +1606,34 @@ impl GitCometView {
             }
             FocusedMergetoolBootstrapAction::Complete => {
                 self.focused_mergetool_bootstrap = None;
+            }
+        }
+    }
+
+    pub(super) fn drive_submodule_diff_bootstrap(&mut self) {
+        if !self.state.git_runtime.is_available() {
+            return;
+        }
+
+        let Some(bootstrap) = self.submodule_diff_bootstrap.as_ref() else {
+            return;
+        };
+        let Some(action) = submodule_diff_bootstrap_action(&self.state, bootstrap) else {
+            return;
+        };
+
+        match action {
+            SubmoduleDiffBootstrapAction::OpenRepo(path) => {
+                self.store.dispatch(Msg::OpenRepo(path))
+            }
+            SubmoduleDiffBootstrapAction::SetActiveRepo(repo_id) => {
+                self.store.dispatch(Msg::SetActiveRepo { repo_id });
+            }
+            SubmoduleDiffBootstrapAction::SelectDiff { repo_id, target } => {
+                self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            }
+            SubmoduleDiffBootstrapAction::Complete => {
+                self.submodule_diff_bootstrap = None;
             }
         }
     }

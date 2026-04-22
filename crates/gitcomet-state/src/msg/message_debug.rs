@@ -189,6 +189,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::SubmoduleLoadTrustChecked {
+                repo_id,
+                path,
+                result,
+            } => f
+                .debug_struct("SubmoduleLoadTrustChecked")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
             InternalMsg::CommitDetailsLoaded {
                 repo_id,
                 commit_id,
@@ -229,6 +239,28 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("target", target)
                 .field("side", side)
+                .field("result", result)
+                .finish(),
+            InternalMsg::SubmoduleSummaryLoaded {
+                repo_id,
+                target,
+                result,
+            } => f
+                .debug_struct("SubmoduleSummaryLoaded")
+                .field("repo_id", repo_id)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
+            InternalMsg::InlineSubmoduleDiffLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            } => f
+                .debug_struct("InlineSubmoduleDiffLoaded")
+                .field("repo_id", repo_id)
+                .field("inline_rev", inline_rev)
+                .field("target", target)
                 .field("result", result)
                 .finish(),
             InternalMsg::DiffFileImageLoaded {

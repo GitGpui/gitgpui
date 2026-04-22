@@ -645,6 +645,7 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
                     files: vec![gitcomet_core::domain::CommitFileChange {
                         path: file_rel.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Deleted,
+                        is_submodule: false,
                     }],
                 },
             ));
@@ -1571,6 +1572,7 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
         .map(|ix| gitcomet_core::domain::CommitFileChange {
             path: std::path::PathBuf::from(format!("src/commit_details/dir_{ix}/file_{ix}.rs")),
             kind: gitcomet_core::domain::FileStatusKind::Modified,
+            is_submodule: false,
         })
         .collect::<Vec<_>>();
 
@@ -1658,6 +1660,7 @@ fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAp
         .map(|ix| gitcomet_core::domain::CommitFileChange {
             path: std::path::PathBuf::from(format!("src/commit_zoom/dir_{ix}/file_{ix}.rs")),
             kind: gitcomet_core::domain::FileStatusKind::Modified,
+            is_submodule: false,
         })
         .collect::<Vec<_>>();
 

@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::SubmoduleStatus;
 use rustc_hash::{FxHashMap, FxHasher};
 use smallvec::SmallVec;
 use std::{
@@ -548,6 +549,19 @@ fn hash_branch_sidebar_submodule_source<H: Hasher>(repo: &RepoState, hasher: &mu
     if let Loadable::Ready(submodules) = &repo.submodules {
         for submodule in submodules.iter() {
             submodule.path.hash(hasher);
+            submodule.recorded_head.hash(hasher);
+            submodule.checked_out_head.hash(hasher);
+            match submodule.status {
+                SubmoduleStatus::UpToDate => 0u8.hash(hasher),
+                SubmoduleStatus::NotInitialized => 1u8.hash(hasher),
+                SubmoduleStatus::HeadMismatch => 2u8.hash(hasher),
+                SubmoduleStatus::MergeConflict => 3u8.hash(hasher),
+                SubmoduleStatus::MissingMapping => 4u8.hash(hasher),
+                SubmoduleStatus::Unknown(value) => {
+                    5u8.hash(hasher);
+                    value.hash(hasher);
+                }
+            }
         }
     }
 }
@@ -1612,7 +1626,8 @@ mod tests {
         repo.worktrees_rev = 1;
         repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
             path: PathBuf::from("vendor/lib"),
-            head: commit_id("cccccccc"),
+            recorded_head: commit_id("cccccccc"),
+            checked_out_head: Some(commit_id("cccccccc")),
             status: SubmoduleStatus::UpToDate,
         }]));
         repo.submodules_rev = 1;

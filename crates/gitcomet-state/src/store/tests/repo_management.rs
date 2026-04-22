@@ -1658,6 +1658,7 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
                 load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: false,
+                load_submodule_summary: false,
                 preview_text_side: None,
             } if *repo_id == repo1
         )
@@ -1723,6 +1724,7 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
             load_patch_diff: true,
             load_file_text: false,
             load_file_image: true,
+            load_submodule_summary: false,
             preview_text_side: None,
         } if *repo_id == repo1
     )));

@@ -333,6 +333,9 @@ pub enum SubmoduleTrustPromptOperation {
         force: bool,
     },
     Update,
+    Load {
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -468,6 +471,9 @@ pub struct DiffState {
     pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
     pub diff_preview_text_file_rev: u64,
     pub diff_preview_text_file: Loadable<Option<Shared<DiffPreviewTextFile>>>,
+    pub submodule_summary_rev: u64,
+    pub submodule_summary: Loadable<Shared<SubmoduleDiffSummary>>,
+    pub inline_submodule_diff: Option<InlineSubmoduleDiffState>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
@@ -482,9 +488,39 @@ impl Default for DiffState {
             diff_file: Loadable::NotLoaded,
             diff_preview_text_file_rev: 0,
             diff_preview_text_file: Loadable::NotLoaded,
+            submodule_summary_rev: 0,
+            submodule_summary: Loadable::NotLoaded,
+            inline_submodule_diff: None,
             diff_file_image: Loadable::NotLoaded,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InlineSubmoduleDiffSection {
+    Range(SubmoduleDiffRangeKind),
+    LiveStaged,
+    LiveUnstaged,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InlineSubmoduleDiffEntry {
+    pub path: PathBuf,
+    pub kind: FileStatusKind,
+    pub target: DiffTarget,
+    pub section: InlineSubmoduleDiffSection,
+}
+
+#[derive(Clone, Debug)]
+pub struct InlineSubmoduleDiffState {
+    pub submodule_repo_path: PathBuf,
+    pub parent_submodule_path: PathBuf,
+    pub entries: Vec<InlineSubmoduleDiffEntry>,
+    pub selected_ix: usize,
+    pub target: DiffTarget,
+    pub rev: u64,
+    pub diff_rev: u64,
+    pub diff: Loadable<Shared<Diff>>,
 }
 
 #[derive(Clone, Debug)]

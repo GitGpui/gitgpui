@@ -901,6 +901,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
                     files: vec![gitcomet_core::domain::CommitFileChange {
                         path: file_rel.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Deleted,
+                        is_submodule: false,
                     }],
                 },
             ));

@@ -213,7 +213,11 @@ impl MainPaneView {
     pub(in super::super::super) fn is_file_diff_target(target: Option<&DiffTarget>) -> bool {
         matches!(
             target,
-            Some(DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. })
+            Some(
+                DiffTarget::WorkingTree { .. }
+                    | DiffTarget::Commit { path: Some(_), .. }
+                    | DiffTarget::CommitRange { path: Some(_), .. }
+            )
         )
     }
 

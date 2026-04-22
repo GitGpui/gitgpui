@@ -3,11 +3,14 @@ use super::util::{
     selected_diff_load_plan, start_conflict_target_reload, start_conflict_target_reload_with_mode,
     start_current_conflict_target_reload,
 };
-use crate::model::{AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId};
+use crate::model::{
+    AppState, ConflictFileLoadMode, DiagnosticKind, InlineSubmoduleDiffEntry,
+    InlineSubmoduleDiffSection, InlineSubmoduleDiffState, Loadable, RepoId,
+};
 use crate::msg::Effect;
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText,
+    FileDiffText, SubmoduleDiffRange, SubmoduleDiffSummary,
 };
 use gitcomet_core::error::Error;
 use smallvec::SmallVec;
@@ -15,6 +18,80 @@ use std::sync::Arc;
 
 pub(crate) const SELECT_DIFF_INLINE_EFFECT_CAPACITY: usize = 1;
 pub(crate) type SelectDiffEffects = SmallVec<[Effect; SELECT_DIFF_INLINE_EFFECT_CAPACITY]>;
+
+fn clear_inline_submodule_diff_state(
+    repo_state: &mut crate::model::RepoState,
+) -> Option<InlineSubmoduleDiffState> {
+    repo_state.diff_state.inline_submodule_diff.take()
+}
+
+fn inline_submodule_entries_from_range(
+    range: &SubmoduleDiffRange,
+) -> impl Iterator<Item = InlineSubmoduleDiffEntry> + '_ {
+    let range_commits = match (range.from.as_ref(), range.to.as_ref()) {
+        (Some(from_commit_id), Some(to_commit_id)) => Some((from_commit_id, to_commit_id)),
+        _ => None,
+    };
+
+    range.changes.iter().filter_map(move |change| {
+        let (from_commit_id, to_commit_id) = range_commits.as_ref()?;
+        Some(InlineSubmoduleDiffEntry {
+            path: change.path.clone(),
+            kind: change.kind,
+            target: DiffTarget::CommitRange {
+                from_commit_id: (*from_commit_id).clone(),
+                to_commit_id: (*to_commit_id).clone(),
+                path: Some(change.path.clone()),
+            },
+            section: InlineSubmoduleDiffSection::Range(range.kind),
+        })
+    })
+}
+
+fn inline_submodule_entries_from_summary(
+    summary: &SubmoduleDiffSummary,
+) -> Vec<InlineSubmoduleDiffEntry> {
+    let mut entries = Vec::new();
+    for range in &summary.ranges {
+        entries.extend(inline_submodule_entries_from_range(range));
+    }
+    entries.extend(
+        summary
+            .live_staged
+            .iter()
+            .map(|change| InlineSubmoduleDiffEntry {
+                path: change.path.clone(),
+                kind: change.kind,
+                target: DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Staged,
+                },
+                section: InlineSubmoduleDiffSection::LiveStaged,
+            }),
+    );
+    entries.extend(
+        summary
+            .live_unstaged
+            .iter()
+            .map(|change| InlineSubmoduleDiffEntry {
+                path: change.path.clone(),
+                kind: change.kind,
+                target: DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Unstaged,
+                },
+                section: InlineSubmoduleDiffSection::LiveUnstaged,
+            }),
+    );
+    entries
+}
+
+fn inline_submodule_entry_index(
+    entries: &[InlineSubmoduleDiffEntry],
+    target: &DiffTarget,
+) -> Option<usize> {
+    entries.iter().position(|entry| &entry.target == target)
+}
 
 pub(super) fn select_diff(
     state: &mut AppState,
@@ -36,11 +113,14 @@ pub(super) fn fill_select_diff_inline(
         return;
     };
 
+    clear_inline_submodule_diff_state(repo_state);
+
     if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
         repo_state.diff_state.diff_target = Some(target.clone());
         repo_state.diff_state.diff = Loadable::NotLoaded;
         repo_state.diff_state.diff_file = Loadable::NotLoaded;
         repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+        repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
         repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
         repo_state.bump_diff_state_rev();
         let conflict_effects = match conflict_target {
@@ -69,6 +149,7 @@ pub(super) fn fill_select_diff_inline(
         load_patch_diff: load_plan.load_patch_diff,
         load_file_text: load_plan.load_file_text,
         preview_text_side: load_plan.preview_text_side,
+        load_submodule_summary: load_plan.load_submodule_summary,
         load_file_image: load_plan.load_file_image,
     });
 }
@@ -82,6 +163,8 @@ pub(super) fn select_conflict_diff(
         return Vec::new();
     };
 
+    clear_inline_submodule_diff_state(repo_state);
+
     let target = DiffTarget::WorkingTree {
         path: path.clone(),
         area: DiffArea::Unstaged,
@@ -90,6 +173,7 @@ pub(super) fn select_conflict_diff(
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
     repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+    repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
     repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
     repo_state.bump_diff_state_rev();
 
@@ -101,12 +185,99 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
         return Vec::new();
     };
 
+    clear_inline_submodule_diff_state(repo_state);
+
     repo_state.diff_state.diff_target = None;
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
     repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+    repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
     repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
     repo_state.bump_diff_state_rev();
+    Vec::new()
+}
+
+pub(super) fn open_inline_submodule_diff(
+    state: &mut AppState,
+    repo_id: RepoId,
+    submodule_repo_path: std::path::PathBuf,
+    parent_submodule_path: std::path::PathBuf,
+    entries: Vec<InlineSubmoduleDiffEntry>,
+    selected_ix: usize,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if selected_ix >= entries.len() {
+        return Vec::new();
+    }
+
+    let target = entries[selected_ix].target.clone();
+    let rev = repo_state
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .map_or(1, |inline| inline.rev.wrapping_add(1));
+    repo_state.diff_state.inline_submodule_diff = Some(InlineSubmoduleDiffState {
+        submodule_repo_path,
+        parent_submodule_path,
+        entries,
+        selected_ix,
+        target,
+        rev,
+        diff_rev: 0,
+        diff: Loadable::Loading,
+    });
+    repo_state.bump_diff_state_rev();
+
+    vec![Effect::LoadInlineSubmoduleSelectedDiff {
+        repo_id,
+        inline_rev: rev,
+    }]
+}
+
+pub(super) fn select_inline_submodule_diff(
+    state: &mut AppState,
+    repo_id: RepoId,
+    selected_ix: usize,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let inline_rev = {
+        let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+            return Vec::new();
+        };
+        if selected_ix >= inline.entries.len() {
+            return Vec::new();
+        }
+
+        let next_target = inline.entries[selected_ix].target.clone();
+        if inline.selected_ix == selected_ix && inline.target == next_target {
+            return Vec::new();
+        }
+
+        inline.selected_ix = selected_ix;
+        inline.target = next_target;
+        inline.rev = inline.rev.wrapping_add(1);
+        inline.diff = Loadable::Loading;
+        inline.rev
+    };
+    repo_state.bump_diff_state_rev();
+
+    vec![Effect::LoadInlineSubmoduleSelectedDiff {
+        repo_id,
+        inline_rev,
+    }]
+}
+
+pub(super) fn close_inline_submodule_diff(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if clear_inline_submodule_diff_state(repo_state).is_some() {
+        repo_state.bump_diff_state_rev();
+    }
     Vec::new()
 }
 
@@ -241,6 +412,87 @@ pub(super) fn diff_preview_text_file_loaded(
                 Loadable::Error(e.to_string())
             }
         };
+        repo_state.bump_diff_state_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn submodule_summary_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: DiffTarget,
+    result: std::result::Result<SubmoduleDiffSummary, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if repo_state.diff_state.diff_target.as_ref() != Some(&target) {
+            return Vec::new();
+        }
+
+        let current_plan = repo_state
+            .diff_state
+            .diff_target
+            .as_ref()
+            .map(|target| selected_diff_load_plan(repo_state, target))
+            .unwrap_or_default();
+        if !current_plan.load_submodule_summary {
+            return Vec::new();
+        }
+
+        repo_state.diff_state.submodule_summary_rev =
+            repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
+        repo_state.diff_state.submodule_summary = match result {
+            Ok(summary) => {
+                let next_entries = inline_submodule_entries_from_summary(&summary);
+                if let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() {
+                    if let Some(selected_ix) =
+                        inline_submodule_entry_index(next_entries.as_slice(), &inline.target)
+                    {
+                        inline.entries = next_entries;
+                        inline.selected_ix = selected_ix;
+                    } else {
+                        repo_state.diff_state.inline_submodule_diff = None;
+                    }
+                }
+                Loadable::Ready(Arc::new(summary))
+            }
+            Err(e) => {
+                super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.bump_diff_state_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn inline_submodule_diff_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    inline_rev: u64,
+    target: DiffTarget,
+    result: std::result::Result<Diff, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let (next_diff, diagnostic) = match result {
+            Ok(diff) => (Loadable::Ready(Arc::new(diff)), None),
+            Err(e) => {
+                let message = e.to_string();
+                (Loadable::Error(message.clone()), Some(message))
+            }
+        };
+        {
+            let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+                return Vec::new();
+            };
+            if inline.rev != inline_rev || inline.target != target {
+                return Vec::new();
+            }
+            inline.diff_rev = inline.diff_rev.wrapping_add(1);
+            inline.diff = next_diff;
+        }
+        if let Some(message) = diagnostic {
+            super::util::push_diagnostic(repo_state, DiagnosticKind::Error, message);
+        }
         repo_state.bump_diff_state_rev();
     }
     Vec::new()

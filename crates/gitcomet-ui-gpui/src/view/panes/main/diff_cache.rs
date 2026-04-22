@@ -1396,15 +1396,17 @@ impl MainPaneView {
             let Some(repo) = self.active_repo() else {
                 return;
             };
-            let workdir = repo.spec.workdir.clone();
-            let diff = match &repo.diff_state.diff {
-                Loadable::Ready(diff) => Some(Arc::clone(diff)),
+            let workdir: Option<std::path::PathBuf> = self
+                .rendered_diff_workdir()
+                .map(std::path::Path::to_path_buf);
+            let diff = match self.rendered_patch_diff_loadable() {
+                Some(Loadable::Ready(diff)) => Some(Arc::clone(diff)),
                 _ => None,
             };
             (
                 repo.id,
-                repo.diff_state.diff_rev,
-                repo.diff_state.diff_target.clone(),
+                self.rendered_patch_diff_rev(),
+                self.rendered_diff_target().cloned(),
                 workdir,
                 diff,
             )
@@ -1415,6 +1417,9 @@ impl MainPaneView {
         self.diff_cache_target = diff_target;
 
         let Some(diff) = diff else {
+            return;
+        };
+        let Some(workdir) = workdir else {
             return;
         };
 

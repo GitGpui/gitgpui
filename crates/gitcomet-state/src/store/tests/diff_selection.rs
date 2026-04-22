@@ -42,6 +42,7 @@ fn select_diff_sets_loading_and_emits_effect() {
             load_patch_diff: true,
             load_file_text: true,
             load_file_image: false,
+            load_submodule_summary: false,
             preview_text_side: None,
         }]
     ));
@@ -90,6 +91,7 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
             load_patch_diff: true,
             load_file_text: false,
             load_file_image: true,
+            load_submodule_summary: false,
             preview_text_side: None,
         }]
     ));
@@ -138,6 +140,7 @@ fn select_diff_for_ico_sets_loading_and_emits_effect() {
             load_patch_diff: true,
             load_file_text: false,
             load_file_image: true,
+            load_submodule_summary: false,
             preview_text_side: None,
         }]
     ));
@@ -183,6 +186,7 @@ fn select_diff_for_svg_loads_image_and_text() {
             load_patch_diff: true,
             load_file_text: true,
             load_file_image: true,
+            load_submodule_summary: false,
             preview_text_side: None,
         }]
     ));
@@ -243,6 +247,7 @@ fn select_diff_for_untracked_file_skips_patch_diff_and_loads_file_preview() {
             load_file_text: false,
             preview_text_side: Some(gitcomet_core::domain::DiffPreviewTextSide::New),
             load_file_image: false,
+            load_submodule_summary: false,
         }]
     ));
 }
@@ -271,6 +276,7 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
         files: vec![CommitFileChange {
             path: PathBuf::from("report.json"),
             kind: FileStatusKind::Deleted,
+            is_submodule: false,
         }],
     }));
     state.repos.push(repo_state);
@@ -305,6 +311,7 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
             load_file_text: false,
             preview_text_side: Some(gitcomet_core::domain::DiffPreviewTextSide::Old),
             load_file_image: false,
+            load_submodule_summary: false,
         }]
     ));
 }
@@ -347,6 +354,7 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
                 files: vec![CommitFileChange {
                     path: PathBuf::from("report.json"),
                     kind: FileStatusKind::Deleted,
+                    is_submodule: false,
                 }],
             }),
         }),
@@ -555,6 +563,7 @@ fn select_diff_for_commit_without_path_only_loads_patch() {
             load_patch_diff: true,
             load_file_text: false,
             load_file_image: false,
+            load_submodule_summary: false,
             preview_text_side: None,
         }]
     ));
@@ -600,6 +609,7 @@ fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
             load_patch_diff: true,
             load_file_text: true,
             load_file_image: true,
+            load_submodule_summary: false,
             preview_text_side: None,
         }]
     ));

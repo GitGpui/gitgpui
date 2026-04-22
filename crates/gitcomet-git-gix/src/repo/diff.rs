@@ -44,6 +44,19 @@ impl GixRepo {
                     cmd.arg("--").arg(path);
                 }
             }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                cmd.arg("diff")
+                    .arg("--no-ext-diff")
+                    .arg(from_commit_id.as_ref())
+                    .arg(to_commit_id.as_ref());
+                if let Some(path) = path {
+                    cmd.arg("--").arg(path);
+                }
+            }
         }
 
         cmd
@@ -169,6 +182,27 @@ impl GixRepo {
 
                 Ok(Some(FileDiffText::new(path.clone(), old, new)))
             }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                let Some(path) = path else {
+                    return Ok(None);
+                };
+
+                let repo = self._repo.to_thread_local();
+                let old =
+                    gix_revision_path_blob_entry_optional(&repo, from_commit_id.as_ref(), path)?
+                        .map(|entry| decode_utf8_bytes(entry.bytes))
+                        .transpose()?;
+                let new =
+                    gix_revision_path_blob_entry_optional(&repo, to_commit_id.as_ref(), path)?
+                        .map(|entry| decode_utf8_bytes(entry.bytes))
+                        .transpose()?;
+
+                Ok(Some(FileDiffText::new(path.clone(), old, new)))
+            }
         }
     }
 
@@ -230,6 +264,33 @@ impl GixRepo {
                         };
                         gix_revision_path_blob_object_id_optional(&repo, &parent, path)?
                     }
+                };
+
+                blob_id
+                    .map(|blob_id| self.cached_preview_blob_file_path(blob_id, path))
+                    .transpose()
+            }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                let Some(path) = path else {
+                    return Ok(None);
+                };
+
+                let repo = self._repo.to_thread_local();
+                let blob_id = match side {
+                    DiffPreviewTextSide::New => gix_revision_path_blob_object_id_optional(
+                        &repo,
+                        to_commit_id.as_ref(),
+                        path,
+                    )?,
+                    DiffPreviewTextSide::Old => gix_revision_path_blob_object_id_optional(
+                        &repo,
+                        from_commit_id.as_ref(),
+                        path,
+                    )?,
                 };
 
                 blob_id
@@ -356,6 +417,27 @@ impl GixRepo {
                     new,
                 }))
             }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                let Some(path) = path else {
+                    return Ok(None);
+                };
+
+                let repo = self._repo.to_thread_local();
+                let old =
+                    gix_revision_path_blob_bytes_optional(&repo, from_commit_id.as_ref(), path)?;
+                let new =
+                    gix_revision_path_blob_bytes_optional(&repo, to_commit_id.as_ref(), path)?;
+
+                Ok(Some(FileDiffImage {
+                    path: path.clone(),
+                    old,
+                    new,
+                }))
+            }
         }
     }
 
@@ -418,21 +500,16 @@ impl GixRepo {
     }
 
     fn synthetic_simple_commit_path_diff(&self, target: &DiffTarget) -> Result<Option<Diff>> {
-        let DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-        } = target
+        let repo = self._repo.to_thread_local();
+        let Some((path, old_revision, new_revision)) = commit_path_diff_revisions(target, &repo)?
         else {
             return Ok(None);
         };
-
-        let repo = self._repo.to_thread_local();
-        let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
-        let old = match parent.as_deref() {
-            Some(parent) => gix_revision_path_blob_entry_optional(&repo, parent, path)?,
+        let old = match old_revision.as_deref() {
+            Some(revision) => gix_revision_path_blob_entry_optional(&repo, revision, &path)?,
             None => None,
         };
-        let new = gix_revision_path_blob_entry_optional(&repo, commit_id.as_ref(), path)?;
+        let new = gix_revision_path_blob_entry_optional(&repo, &new_revision, &path)?;
 
         let (prefix, body_text, blob) = match (old, new) {
             (None, Some(new)) => {
@@ -462,11 +539,37 @@ impl GixRepo {
 
         Ok(Some(build_simple_commit_path_diff(
             target.clone(),
-            path,
+            &path,
             body_text.as_str(),
             prefix,
             &blob,
         )))
+    }
+}
+
+fn commit_path_diff_revisions(
+    target: &DiffTarget,
+    repo: &gix::Repository,
+) -> Result<Option<(std::path::PathBuf, Option<String>, String)>> {
+    match target {
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => Ok(Some((
+            path.clone(),
+            gix_first_parent_optional(&repo, commit_id.as_ref())?,
+            commit_id.as_ref().to_string(),
+        ))),
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path: Some(path),
+        } => Ok(Some((
+            path.clone(),
+            Some(from_commit_id.as_ref().to_string()),
+            to_commit_id.as_ref().to_string(),
+        ))),
+        _ => Ok(None),
     }
 }
 

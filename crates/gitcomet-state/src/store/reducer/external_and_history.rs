@@ -143,6 +143,7 @@ pub(super) fn repo_externally_changed(
                 change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
             }
             DiffTarget::Commit { .. } => false,
+            DiffTarget::CommitRange { .. } => false,
         });
 
     if should_reload_diff

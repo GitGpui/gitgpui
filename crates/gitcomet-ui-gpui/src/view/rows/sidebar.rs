@@ -1,6 +1,7 @@
 use super::*;
 use crate::ui_scale;
 use gitcomet_core::domain::LogScope;
+use gitcomet_core::domain::SubmoduleStatus;
 
 const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
 
@@ -1184,7 +1185,69 @@ impl SidebarPaneView {
                     let path_for_menu = path.clone();
                     let repo_workdir_for_open = repo_workdir.clone();
                     let path_label = this.cached_path_display(&path);
-                    let tooltip = path_label.clone();
+                    let submodule_info = this.active_repo().and_then(|repo| match &repo.submodules {
+                        Loadable::Ready(submodules) => submodules
+                            .iter()
+                            .find(|submodule| submodule.path == path)
+                            .map(|submodule| {
+                                (
+                                    submodule.status,
+                                    submodule.recorded_head.clone(),
+                                    submodule.checked_out_head.clone(),
+                                )
+                            }),
+                        _ => None,
+                    });
+                    let (icon_color, badge_label, can_open, tooltip) = if let Some((
+                        status,
+                        recorded_head,
+                        checked_out_head,
+                    )) = submodule_info
+                    {
+                        let badge_label = match status {
+                            SubmoduleStatus::NotInitialized => Some("Not loaded"),
+                            SubmoduleStatus::HeadMismatch => Some("Head mismatch"),
+                            SubmoduleStatus::MergeConflict => Some("Conflict"),
+                            SubmoduleStatus::MissingMapping => Some("Missing mapping"),
+                            SubmoduleStatus::Unknown(_) => Some("Unknown"),
+                            SubmoduleStatus::UpToDate => None,
+                        };
+                        let icon_color = match status {
+                            SubmoduleStatus::NotInitialized => {
+                                with_alpha(theme.colors.text_muted, if theme.is_dark { 0.78 } else { 0.92 })
+                            }
+                            SubmoduleStatus::HeadMismatch => theme.colors.warning,
+                            SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping => {
+                                theme.colors.danger
+                            }
+                            SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_) => icon_primary,
+                        };
+                        let can_open = !matches!(
+                            status,
+                            SubmoduleStatus::NotInitialized
+                                | SubmoduleStatus::MergeConflict
+                                | SubmoduleStatus::MissingMapping
+                        );
+                        let checked_out = checked_out_head
+                            .as_ref()
+                            .map(|head| head.as_ref())
+                            .unwrap_or("not loaded");
+                        let tooltip: SharedString = format!(
+                            "{}\nRecorded: {}\nChecked out: {}",
+                            path.display(),
+                            recorded_head.as_ref(),
+                            checked_out,
+                        )
+                        .into();
+                        (icon_color, badge_label, can_open, tooltip)
+                    } else {
+                        (
+                            icon_primary,
+                            None,
+                            true,
+                            SharedString::from(path_label.clone()),
+                        )
+                    };
                     let context_menu_invoker: SharedString =
                         format!("submodule_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
@@ -1217,7 +1280,7 @@ impl SidebarPaneView {
                         })
                         .active(move |s| s.bg(theme.colors.active))
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot("icons/box.svg", icon_primary, 12.0))
+                        .child(tree_icon_slot("icons/box.svg", icon_color, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -1227,6 +1290,30 @@ impl SidebarPaneView {
                                 .whitespace_nowrap()
                                 .child(path_label),
                         )
+                        .when_some(badge_label, |row, badge_label| {
+                            row.child(
+                                div()
+                                    .h(scaled_px(18.0))
+                                    .px(scaled_px(6.0))
+                                    .rounded(px(theme.radii.row))
+                                    .border_1()
+                                    .border_color(if context_menu_active {
+                                        theme.colors.border
+                                    } else {
+                                        with_alpha(
+                                            theme.colors.text_muted,
+                                            if theme.is_dark { 0.32 } else { 0.24 },
+                                        )
+                                    })
+                                    .bg(with_alpha(
+                                        theme.colors.surface_bg,
+                                        if theme.is_dark { 0.9 } else { 0.7 },
+                                    ))
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(badge_label),
+                            )
+                        })
                         .child(
                             context_menu_indicator(
                                 format!("submodule_menu_indicator_{}_{}", repo_id.0, ix).into(),
@@ -1260,6 +1347,9 @@ impl SidebarPaneView {
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
+                                return;
+                            }
+                            if !can_open {
                                 return;
                             }
                             let Some(base) = repo_workdir_for_open.clone() else {

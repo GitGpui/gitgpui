@@ -233,7 +233,7 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
     assert_eq!(submodules.len(), 1);
     assert_eq!(submodules[0].path, PathBuf::from("submod"));
     assert_eq!(submodules[0].status, SubmoduleStatus::MissingMapping);
-    assert_eq!(submodules[0].head.as_ref(), submodule_head);
+    assert_eq!(submodules[0].recorded_head.as_ref(), submodule_head);
 }
 
 #[test]
@@ -289,7 +289,8 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     assert_eq!(not_initialized.len(), 1);
     assert_eq!(not_initialized[0].path, PathBuf::from("sm"));
     assert_eq!(not_initialized[0].status, SubmoduleStatus::NotInitialized);
-    assert_eq!(not_initialized[0].head.as_ref(), original_head);
+    assert_eq!(not_initialized[0].recorded_head.as_ref(), original_head);
+    assert_eq!(not_initialized[0].checked_out_head, None);
 
     run_git(
         &parent_repo,
@@ -333,7 +334,14 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     assert_eq!(head_mismatch.len(), 1);
     assert_eq!(head_mismatch[0].path, PathBuf::from("sm"));
     assert_eq!(head_mismatch[0].status, SubmoduleStatus::HeadMismatch);
-    assert_eq!(head_mismatch[0].head.as_ref(), mismatched_head);
+    assert_eq!(head_mismatch[0].recorded_head.as_ref(), original_head);
+    assert_eq!(
+        head_mismatch[0]
+            .checked_out_head
+            .as_ref()
+            .map(AsRef::as_ref),
+        Some(mismatched_head.as_str())
+    );
 }
 
 #[test]
@@ -572,7 +580,7 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
     assert_eq!(listed[0].path, PathBuf::from("sm"));
     assert_eq!(listed[0].status, SubmoduleStatus::MergeConflict);
     assert_eq!(
-        listed[0].head.as_ref(),
+        listed[0].recorded_head.as_ref(),
         "0000000000000000000000000000000000000000"
     );
 }
@@ -634,7 +642,14 @@ fn submodule_add_update_remove_round_trip() {
         listed[0].status,
         gitcomet_core::domain::SubmoduleStatus::UpToDate
     );
-    assert_eq!(listed[0].head.as_ref().len(), 40);
+    assert_eq!(listed[0].recorded_head.as_ref().len(), 40);
+    assert_eq!(
+        listed[0]
+            .checked_out_head
+            .as_ref()
+            .map(|head| head.as_ref().len()),
+        Some(40)
+    );
 
     assert_eq!(
         opened

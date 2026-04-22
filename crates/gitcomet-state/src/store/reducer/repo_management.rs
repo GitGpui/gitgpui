@@ -423,6 +423,7 @@ pub(super) fn fill_set_active_repo_inline(
                     load_patch_diff: load_plan.load_patch_diff,
                     load_file_text: load_plan.load_file_text,
                     preview_text_side: load_plan.preview_text_side,
+                    load_submodule_summary: load_plan.load_submodule_summary,
                     load_file_image: load_plan.load_file_image,
                 });
             }
@@ -713,6 +714,8 @@ pub(super) fn repo_opened_ok(
         repo_state.diff_state.diff = Loadable::NotLoaded;
         repo_state.diff_state.diff_file = Loadable::NotLoaded;
         repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+        repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+        repo_state.diff_state.inline_submodule_diff = None;
         repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
         repo_state.bump_diff_state_rev();
         repo_state.last_error = None;

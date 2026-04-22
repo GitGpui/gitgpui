@@ -24,6 +24,10 @@ pub(in crate::view) enum ContextMenuAction {
     OpenRepo {
         path: std::path::PathBuf,
     },
+    OpenSubmoduleDiffInTab {
+        path: std::path::PathBuf,
+        target: DiffTarget,
+    },
     ExportPatch {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -94,6 +98,10 @@ pub(in crate::view) enum ContextMenuAction {
     },
     UpdateSubmodules {
         repo_id: RepoId,
+    },
+    LoadSubmodule {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
     },
     LoadWorktrees {
         repo_id: RepoId,

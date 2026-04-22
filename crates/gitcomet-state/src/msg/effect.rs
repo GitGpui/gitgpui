@@ -104,6 +104,14 @@ pub enum Effect {
         target: DiffTarget,
         side: DiffPreviewTextSide,
     },
+    LoadSubmoduleSummary {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
+    LoadInlineSubmoduleSelectedDiff {
+        repo_id: RepoId,
+        inline_rev: u64,
+    },
     LoadDiffFileImage {
         repo_id: RepoId,
         target: DiffTarget,
@@ -113,6 +121,7 @@ pub enum Effect {
         load_patch_diff: bool,
         load_file_text: bool,
         preview_text_side: Option<DiffPreviewTextSide>,
+        load_submodule_summary: bool,
         load_file_image: bool,
     },
     LoadSelectedConflictFile {
@@ -226,6 +235,21 @@ pub enum Effect {
         repo_id: RepoId,
         approved_sources: Vec<SubmoduleTrustTarget>,
         auth: Option<StagedGitAuth>,
+    },
+    CheckSubmoduleLoadTrust {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    LoadSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+        approved_sources: Vec<SubmoduleTrustTarget>,
+        auth: Option<StagedGitAuth>,
+    },
+    ChangeSubmodulePointer {
+        repo_id: RepoId,
+        path: PathBuf,
+        reference: String,
     },
     RemoveSubmodule {
         repo_id: RepoId,

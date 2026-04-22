@@ -28,6 +28,9 @@ pub(super) fn panel(
             "Trust and update",
             "Cancel",
         ),
+        SubmoduleTrustPromptOperation::Load { .. } => {
+            ("Trust local submodule sources?", "Trust and load", "Cancel")
+        }
     };
     let (add_branch, add_name, add_force) = match &prompt.operation {
         SubmoduleTrustPromptOperation::Add {
@@ -36,7 +39,9 @@ pub(super) fn panel(
             force,
             ..
         } => (branch.clone(), name.clone(), *force),
-        SubmoduleTrustPromptOperation::Update => (None, None, false),
+        SubmoduleTrustPromptOperation::Update | SubmoduleTrustPromptOperation::Load { .. } => {
+            (None, None, false)
+        }
     };
     let sources = prompt.sources.clone();
     let operation = prompt.operation.clone();
@@ -210,6 +215,10 @@ pub(super) fn panel(
                                     window.focus(&focus, cx);
                                 }
                                 SubmoduleTrustPromptOperation::Update => {
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                }
+                                SubmoduleTrustPromptOperation::Load { .. } => {
                                     this.popover = None;
                                     this.popover_anchor = None;
                                 }

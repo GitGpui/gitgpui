@@ -202,6 +202,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
             })
         }
         DiffTarget::Commit { path: None, .. } => None,
+        DiffTarget::CommitRange { .. } => None,
     }
 }
 
@@ -214,6 +215,27 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            let next_ix = if direction < 0 {
+                inline.selected_ix.checked_sub(1)
+            } else if direction > 0 {
+                (inline.selected_ix + 1 < inline.entries.len()).then_some(inline.selected_ix + 1)
+            } else {
+                None
+            };
+            let Some(next_ix) = next_ix else {
+                return false;
+            };
+            if focus_diff_panel {
+                window.focus(&self.diff_panel_focus_handle, cx);
+            }
+            self.store.dispatch(Msg::SelectInlineSubmoduleDiff {
+                repo_id,
+                selected_ix: next_ix,
+            });
+            return true;
+        }
+
         let change_tracking_view = self.active_change_tracking_view(cx);
         let Some(target) = (|| {
             let repo = self.active_repo()?;
@@ -443,14 +465,17 @@ mod tests {
                     gitcomet_core::domain::CommitFileChange {
                         path: file_a.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_b.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_c.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
                     },
                 ],
             }));

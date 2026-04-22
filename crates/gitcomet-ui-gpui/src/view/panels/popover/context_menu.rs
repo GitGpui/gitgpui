@@ -17,6 +17,7 @@ mod remote;
 mod stash;
 mod status_file;
 mod submodule;
+mod submodule_inner_diff;
 mod submodule_section;
 mod tag;
 mod ui_scale_picker;
@@ -261,6 +262,15 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            PopoverKind::SubmoduleInnerDiffMenu {
+                repo_id,
+                submodule_repo_path,
+                target,
+            } => Some(submodule_inner_diff::model(
+                *repo_id,
+                submodule_repo_path,
+                target,
+            )),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 Some(diff_hunk::model(self, *repo_id, *src_ix))
             }
@@ -412,6 +422,11 @@ impl PopoverHost {
             }
             ContextMenuAction::OpenRepo { path } => {
                 self.store.dispatch(Msg::OpenRepo(path));
+            }
+            ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
+                let _ = self.main_pane.update(cx, |pane, cx| {
+                    pane.open_submodule_inner_diff(path, target, cx);
+                });
             }
             ContextMenuAction::ExportPatch { repo_id, commit_id } => {
                 cx.stop_propagation();
@@ -586,6 +601,9 @@ impl PopoverHost {
             }
             ContextMenuAction::UpdateSubmodules { repo_id } => {
                 self.store.dispatch(Msg::UpdateSubmodules { repo_id });
+            }
+            ContextMenuAction::LoadSubmodule { repo_id, path } => {
+                self.store.dispatch(Msg::LoadSubmodule { repo_id, path });
             }
             ContextMenuAction::LoadWorktrees { repo_id } => {
                 self.store.dispatch(Msg::LoadWorktrees { repo_id });

@@ -6,7 +6,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
-use gitcomet_core::services::ConflictFileStages;
+use gitcomet_core::services::{ConflictFileStages, GitBackend};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -968,6 +968,57 @@ pub(super) fn schedule_load_diff_preview_text_file(
     });
 }
 
+pub(super) fn schedule_load_submodule_summary(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    target: DiffTarget,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.submodule_diff_summary(&target);
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                repo_id,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_inline_submodule_selected_diff(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_parsed(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_load_diff_file_image(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -997,8 +1048,12 @@ pub(super) fn schedule_load_selected_diff(
     load_patch_diff: bool,
     load_file_text: bool,
     preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
+    load_submodule_summary: bool,
     load_file_image: bool,
 ) {
+    if load_submodule_summary {
+        schedule_load_submodule_summary(executor, repos, msg_tx.clone(), repo_id, target.clone());
+    }
     if load_file_image {
         schedule_load_diff_file_image(executor, repos, msg_tx.clone(), repo_id, target.clone());
     }

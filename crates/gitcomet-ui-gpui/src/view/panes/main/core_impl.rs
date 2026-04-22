@@ -2,7 +2,7 @@ use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::view::branch_sidebar::BranchSection;
-use gitcomet_core::domain::LogScope;
+use gitcomet_core::domain::{Diff, LogScope};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
@@ -618,8 +618,18 @@ impl MainPaneView {
                     commit_id.hash(&mut hasher);
                     path.hash(&mut hasher);
                 }
-                None => {
+                Some(DiffTarget::CommitRange {
+                    from_commit_id,
+                    to_commit_id,
+                    path,
+                }) => {
                     2u8.hash(&mut hasher);
+                    from_commit_id.hash(&mut hasher);
+                    to_commit_id.hash(&mut hasher);
+                    path.hash(&mut hasher);
+                }
+                None => {
+                    3u8.hash(&mut hasher);
                 }
             }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
@@ -832,6 +842,25 @@ impl MainPaneView {
                 cx,
             )
         });
+        let submodule_hash_inputs = (0..4)
+            .map(|_| {
+                cx.new(|cx| {
+                    let mut input = components::TextInput::new(
+                        components::TextInputOptions {
+                            placeholder: "".into(),
+                            multiline: false,
+                            read_only: true,
+                            chromeless: false,
+                            soft_wrap: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    input.set_read_only(true, cx);
+                    input
+                })
+            })
+            .collect::<Vec<_>>();
 
         let conflict_resolver_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
@@ -991,6 +1020,7 @@ impl MainPaneView {
             diff_panel_focus_handle,
             diff_autoscroll_pending: false,
             diff_raw_input,
+            submodule_hash_inputs,
             diff_visible_indices: Vec::new(),
             diff_visible_inline_map: None,
             diff_visible_cache_len: 0,
@@ -2495,6 +2525,78 @@ impl MainPaneView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
+    pub(in crate::view) fn active_inline_submodule_diff(
+        &self,
+    ) -> Option<&gitcomet_state::model::InlineSubmoduleDiffState> {
+        self.active_repo()?
+            .diff_state
+            .inline_submodule_diff
+            .as_ref()
+    }
+
+    pub(in crate::view) fn selected_inline_submodule_diff_entry(
+        &self,
+    ) -> Option<&gitcomet_state::model::InlineSubmoduleDiffEntry> {
+        let inline = self.active_inline_submodule_diff()?;
+        inline.entries.get(inline.selected_ix)
+    }
+
+    pub(in crate::view) fn is_inline_submodule_diff_active(&self) -> bool {
+        self.active_inline_submodule_diff().is_some()
+    }
+
+    pub(in crate::view) fn rendered_diff_target(&self) -> Option<&DiffTarget> {
+        self.active_inline_submodule_diff()
+            .map(|inline| &inline.target)
+            .or_else(|| self.active_repo()?.diff_state.diff_target.as_ref())
+    }
+
+    pub(in crate::view) fn rendered_patch_diff_loadable(
+        &self,
+    ) -> Option<&gitcomet_state::model::Loadable<gitcomet_state::model::Shared<Diff>>> {
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            Some(&inline.diff)
+        } else {
+            self.active_repo().map(|repo| &repo.diff_state.diff)
+        }
+    }
+
+    pub(in crate::view) fn rendered_patch_diff_rev(&self) -> u64 {
+        self.active_inline_submodule_diff()
+            .map(|inline| inline.diff_rev)
+            .or_else(|| self.active_repo().map(|repo| repo.diff_state.diff_rev))
+            .unwrap_or(0)
+    }
+
+    pub(in crate::view) fn rendered_diff_workdir(&self) -> Option<&std::path::Path> {
+        self.active_inline_submodule_diff()
+            .map(|inline| inline.submodule_repo_path.as_path())
+            .or_else(|| self.active_repo().map(|repo| repo.spec.workdir.as_path()))
+    }
+
+    fn rendered_diff_target_for_state(state: &AppState) -> Option<DiffTarget> {
+        let repo_id = state.active_repo?;
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+        repo.diff_state
+            .inline_submodule_diff
+            .as_ref()
+            .map(|inline| inline.target.clone())
+            .or_else(|| repo.diff_state.diff_target.clone())
+    }
+
+    fn rendered_patch_diff_rev_for_state(state: &AppState) -> u64 {
+        let Some(repo_id) = state.active_repo else {
+            return 0;
+        };
+        let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return 0;
+        };
+        repo.diff_state
+            .inline_submodule_diff
+            .as_ref()
+            .map_or(repo.diff_state.diff_rev, |inline| inline.diff_rev)
+    }
+
     pub(in crate::view) fn history_visible_column_preferences(
         &self,
         cx: &gpui::App,
@@ -2840,6 +2942,20 @@ impl MainPaneView {
         });
     }
 
+    pub(in crate::view) fn open_submodule_inner_diff(
+        &mut self,
+        submodule_repo_path: std::path::PathBuf,
+        target: DiffTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, move |root, cx| {
+            root.submodule_diff_bootstrap =
+                Some(SubmoduleDiffBootstrap::new(submodule_repo_path, target));
+            root.drive_submodule_diff_bootstrap();
+            cx.notify();
+        });
+    }
+
     pub(in crate::view) fn active_change_tracking_view(
         &self,
         cx: &mut gpui::Context<Self>,
@@ -2918,17 +3034,11 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let prev_active_repo_id = self.state.active_repo;
-        let prev_diff_target = self
-            .active_repo()
-            .and_then(|r| r.diff_state.diff_target.as_ref())
-            .cloned();
+        let prev_diff_target = Self::rendered_diff_target_for_state(self.state.as_ref());
 
         let next_repo_id = next.active_repo;
-        let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
-        let next_diff_target = next_repo
-            .and_then(|r| r.diff_state.diff_target.as_ref())
-            .cloned();
-        let next_diff_rev = next_repo.map(|r| r.diff_state.diff_rev).unwrap_or(0);
+        let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
+        let next_diff_rev = Self::rendered_patch_diff_rev_for_state(next.as_ref());
 
         if prev_diff_target != next_diff_target {
             self.diff_selection_anchor = None;
@@ -3164,6 +3274,9 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn is_file_diff_view_active(&self) -> bool {
+        if self.is_inline_submodule_diff_active() {
+            return false;
+        }
         let Some(repo) = self.active_repo() else {
             return false;
         };
@@ -3174,6 +3287,9 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn is_file_image_diff_view_active(&self) -> bool {
+        if self.is_inline_submodule_diff_active() {
+            return false;
+        }
         let Some(repo) = self.active_repo() else {
             return false;
         };

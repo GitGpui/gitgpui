@@ -134,6 +134,20 @@ pub enum Msg {
         repo_id: RepoId,
         target: DiffTarget,
     },
+    OpenInlineSubmoduleDiff {
+        repo_id: RepoId,
+        submodule_repo_path: PathBuf,
+        parent_submodule_path: PathBuf,
+        entries: Vec<crate::model::InlineSubmoduleDiffEntry>,
+        selected_ix: usize,
+    },
+    SelectInlineSubmoduleDiff {
+        repo_id: RepoId,
+        selected_ix: usize,
+    },
+    CloseInlineSubmoduleDiff {
+        repo_id: RepoId,
+    },
     SelectConflictDiff {
         repo_id: RepoId,
         path: PathBuf,
@@ -287,8 +301,22 @@ pub enum Msg {
         repo_id: RepoId,
         approved_sources: Vec<SubmoduleTrustTarget>,
     },
+    LoadSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    LoadSubmoduleTrusted {
+        repo_id: RepoId,
+        path: PathBuf,
+        approved_sources: Vec<SubmoduleTrustTarget>,
+    },
     ConfirmSubmoduleTrustPrompt,
     CancelSubmoduleTrustPrompt,
+    ChangeSubmodulePointer {
+        repo_id: RepoId,
+        path: PathBuf,
+        reference: String,
+    },
     RemoveSubmodule {
         repo_id: RepoId,
         path: PathBuf,
@@ -637,6 +665,11 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<SubmoduleTrustDecision, Error>,
     },
+    SubmoduleLoadTrustChecked {
+        repo_id: RepoId,
+        path: PathBuf,
+        result: Result<SubmoduleTrustDecision, Error>,
+    },
     CommitDetailsLoaded {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -657,6 +690,17 @@ pub enum InternalMsg {
         target: DiffTarget,
         side: DiffPreviewTextSide,
         result: Result<Option<PathBuf>, Error>,
+    },
+    SubmoduleSummaryLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        result: Result<SubmoduleDiffSummary, Error>,
+    },
+    InlineSubmoduleDiffLoaded {
+        repo_id: RepoId,
+        inline_rev: u64,
+        target: DiffTarget,
+        result: Result<Diff, Error>,
     },
     DiffFileImageLoaded {
         repo_id: RepoId,

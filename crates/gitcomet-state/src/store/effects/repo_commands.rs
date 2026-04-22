@@ -353,6 +353,77 @@ pub(super) fn schedule_check_submodule_update_trust(
     });
 }
 
+pub(super) fn schedule_check_submodule_load_trust(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.check_submodule_load_trust(&path);
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
+                repo_id,
+                path,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_submodule(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    approved_sources: Vec<SubmoduleTrustTarget>,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_path = path.clone();
+    let command_sources = approved_sources.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LoadSubmodule {
+            path: command_path,
+            approved_sources: command_sources,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.load_submodule_with_output(&path, &approved_sources)
+            })
+        },
+    );
+}
+
+pub(super) fn schedule_change_submodule_pointer(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    reference: String,
+) {
+    let command_path = path.clone();
+    let command_reference = reference.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ChangeSubmodulePointer {
+            path: command_path,
+            reference: command_reference,
+        },
+        move |repo| repo.change_submodule_pointer_with_output(&path, &reference),
+    );
+}
+
 pub(super) fn schedule_remove_submodule(
     executor: &TaskExecutor,
     repos: &RepoMap,

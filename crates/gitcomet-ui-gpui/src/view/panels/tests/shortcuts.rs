@@ -1580,6 +1580,7 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
         .map(|ix| CommitFileChange {
             path: std::path::PathBuf::from(format!("src/commit_nav/file_{ix:02}.rs")),
             kind: FileStatusKind::Modified,
+            is_submodule: false,
         })
         .collect::<Vec<_>>();
     let start_ix = 40usize;
@@ -1652,10 +1653,12 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
         CommitFileChange {
             path: std::path::PathBuf::from("src/commit_details/first.rs"),
             kind: FileStatusKind::Modified,
+            is_submodule: false,
         },
         CommitFileChange {
             path: std::path::PathBuf::from("src/commit_details/second.rs"),
             kind: FileStatusKind::Modified,
+            is_submodule: false,
         },
     ];
 
@@ -2477,6 +2480,7 @@ fn commit_message_text_input_alt_h_does_not_open_diff_hunks(cx: &mut gpui::TestA
         files: vec![CommitFileChange {
             path: std::path::PathBuf::from("src/lib.rs"),
             kind: FileStatusKind::Modified,
+            is_submodule: false,
         }],
     }));
     repo.diff_state.diff_target = Some(target.clone());

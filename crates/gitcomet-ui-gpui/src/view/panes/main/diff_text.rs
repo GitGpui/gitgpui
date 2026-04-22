@@ -921,6 +921,9 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.is_inline_submodule_diff_active() {
+            return;
+        }
         let Some(repo) = self.active_repo() else {
             return;
         };

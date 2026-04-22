@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::SubmoduleStatus;
 use std::sync::Arc;
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -402,11 +403,26 @@ fn render_status_rows_for_section(
                     _ => false,
                 })
             };
+            let is_submodule = entry.kind != FileStatusKind::Untracked
+                && repo.spec.workdir.join(&entry.path).is_dir();
+            let submodule_status = if is_submodule {
+                match &repo.submodules {
+                    Loadable::Ready(submodules) => submodules
+                        .iter()
+                        .find(|submodule| submodule.path == entry.path)
+                        .map(|submodule| submodule.status),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             status_row(
                 theme,
                 ui_scale,
                 ix,
                 entry,
+                is_submodule,
+                submodule_status,
                 path_display,
                 section,
                 repo.id,
@@ -424,6 +440,8 @@ fn status_row(
     ui_scale: crate::ui_scale::UiScale,
     ix: usize,
     entry: &FileStatus,
+    is_submodule: bool,
+    submodule_status: Option<SubmoduleStatus>,
     path_display: SharedString,
     section: StatusSection,
     repo_id: RepoId,
@@ -433,16 +451,33 @@ fn status_row(
 ) -> AnyElement {
     let scaled_px = |value: f32| ui_scale.px(value);
     let area = section.diff_area();
-    let (icon, color) = match entry.kind {
-        FileStatusKind::Untracked => match area {
-            DiffArea::Unstaged => ("icons/plus.svg", theme.colors.success),
-            DiffArea::Staged => ("icons/question.svg", theme.colors.warning),
-        },
-        FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
-        FileStatusKind::Added => ("icons/plus.svg", theme.colors.success),
-        FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
-        FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
-        FileStatusKind::Conflicted => ("icons/warning.svg", theme.colors.danger),
+    let (icon, color) = if is_submodule {
+        let color = match submodule_status {
+            Some(SubmoduleStatus::NotInitialized) => with_alpha(
+                theme.colors.text_muted,
+                if theme.is_dark { 0.78 } else { 0.92 },
+            ),
+            Some(SubmoduleStatus::HeadMismatch) => theme.colors.warning,
+            Some(SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping) => {
+                theme.colors.danger
+            }
+            Some(SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_)) | None => {
+                theme.colors.accent
+            }
+        };
+        ("icons/box.svg", color)
+    } else {
+        match entry.kind {
+            FileStatusKind::Untracked => match area {
+                DiffArea::Unstaged => ("icons/plus.svg", theme.colors.success),
+                DiffArea::Staged => ("icons/question.svg", theme.colors.warning),
+            },
+            FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
+            FileStatusKind::Added => ("icons/plus.svg", theme.colors.success),
+            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
+            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
+            FileStatusKind::Conflicted => ("icons/warning.svg", theme.colors.danger),
+        }
     };
 
     let path = Arc::new(entry.path.clone());

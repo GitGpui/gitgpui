@@ -91,6 +91,7 @@ pub struct CommitDetails {
 pub struct CommitFileChange {
     pub path: PathBuf,
     pub kind: FileStatusKind,
+    pub is_submodule: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -179,7 +180,8 @@ impl SubmoduleStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Submodule {
     pub path: PathBuf,
-    pub head: CommitId,
+    pub recorded_head: CommitId,
+    pub checked_out_head: Option<CommitId>,
     pub status: SubmoduleStatus,
 }
 
@@ -206,6 +208,49 @@ pub struct FileStatus {
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub conflict: Option<FileConflictKind>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleInnerChange {
+    pub path: PathBuf,
+    pub kind: FileStatusKind,
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleDiffSummaryMode {
+    Worktree,
+    CommitHistory,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleDiffRangeKind {
+    StagedPointer,
+    UnstagedPointer,
+    CommitHistory,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleDiffRange {
+    pub kind: SubmoduleDiffRangeKind,
+    pub from: Option<CommitId>,
+    pub to: Option<CommitId>,
+    pub changes: Vec<SubmoduleInnerChange>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleDiffSummary {
+    pub path: PathBuf,
+    pub mode: SubmoduleDiffSummaryMode,
+    pub status: Option<SubmoduleStatus>,
+    pub commit_id: Option<CommitId>,
+    pub parent_commit_id: Option<CommitId>,
+    pub checked_out_head: Option<CommitId>,
+    pub ranges: Vec<SubmoduleDiffRange>,
+    pub live_staged: Vec<SubmoduleInnerChange>,
+    pub live_unstaged: Vec<SubmoduleInnerChange>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -239,6 +284,11 @@ pub enum DiffTarget {
     },
     Commit {
         commit_id: CommitId,
+        path: Option<PathBuf>,
+    },
+    CommitRange {
+        from_commit_id: CommitId,
+        to_commit_id: CommitId,
         path: Option<PathBuf>,
     },
 }

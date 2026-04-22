@@ -93,6 +93,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
             | Msg::LoadSubmodules { .. }
+            | Msg::LoadSubmodule { .. }
             | Msg::LoadTags { .. }
             | Msg::LoadRemoteTags { .. }
             | Msg::RefreshBranches { .. }
@@ -116,6 +117,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::ForceRemoveWorktree { .. }
             | Msg::AddSubmodule { .. }
             | Msg::UpdateSubmodules { .. }
+            | Msg::ChangeSubmodulePointer { .. }
             | Msg::RemoveSubmodule { .. }
             | Msg::StagePath { .. }
             | Msg::StagePaths { .. }
@@ -382,6 +384,21 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             repo_id,
             approved_sources,
         },
+        RepoCommandKind::LoadSubmodule {
+            path,
+            approved_sources,
+        } => Msg::LoadSubmoduleTrusted {
+            repo_id,
+            path,
+            approved_sources,
+        },
+        RepoCommandKind::ChangeSubmodulePointer { path, reference } => {
+            Msg::ChangeSubmodulePointer {
+                repo_id,
+                path,
+                reference,
+            }
+        }
         RepoCommandKind::RemoveSubmodule { path } => Msg::RemoveSubmodule { repo_id, path },
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
@@ -400,6 +417,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         Effect::CloneRepo { auth: slot, .. }
         | Effect::AddSubmodule { auth: slot, .. }
         | Effect::UpdateSubmodules { auth: slot, .. }
+        | Effect::LoadSubmodule { auth: slot, .. }
         | Effect::Commit { auth: slot, .. }
         | Effect::CommitAmend { auth: slot, .. }
         | Effect::FetchAll { auth: slot, .. }
@@ -641,6 +659,27 @@ pub(super) fn reduce(
         }
         Msg::ClearCommitSelection { repo_id } => effects::clear_commit_selection(state, repo_id),
         Msg::SelectDiff { repo_id, target } => diff_selection::select_diff(state, repo_id, target),
+        Msg::OpenInlineSubmoduleDiff {
+            repo_id,
+            submodule_repo_path,
+            parent_submodule_path,
+            entries,
+            selected_ix,
+        } => diff_selection::open_inline_submodule_diff(
+            state,
+            repo_id,
+            submodule_repo_path,
+            parent_submodule_path,
+            entries,
+            selected_ix,
+        ),
+        Msg::SelectInlineSubmoduleDiff {
+            repo_id,
+            selected_ix,
+        } => diff_selection::select_inline_submodule_diff(state, repo_id, selected_ix),
+        Msg::CloseInlineSubmoduleDiff { repo_id } => {
+            diff_selection::close_inline_submodule_diff(state, repo_id)
+        }
         Msg::SelectConflictDiff { repo_id, path } => {
             diff_selection::select_conflict_diff(state, repo_id, path)
         }
@@ -854,6 +893,18 @@ pub(super) fn reduce(
             begin_local_action(state, repo_id);
             actions_emit_effects::update_submodules(repo_id, approved_sources)
         }
+        Msg::LoadSubmodule { repo_id, path } => {
+            state.submodule_trust_prompt = None;
+            vec![Effect::CheckSubmoduleLoadTrust { repo_id, path }]
+        }
+        Msg::LoadSubmoduleTrusted {
+            repo_id,
+            path,
+            approved_sources,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::load_submodule(repo_id, path, approved_sources)
+        }
         Msg::ConfirmSubmoduleTrustPrompt => {
             let Some(prompt) = state.submodule_trust_prompt.take() else {
                 return Vec::new();
@@ -882,11 +933,23 @@ pub(super) fn reduce(
                     begin_local_action(state, prompt.repo_id);
                     actions_emit_effects::update_submodules(prompt.repo_id, prompt.sources)
                 }
+                SubmoduleTrustPromptOperation::Load { path } => {
+                    begin_local_action(state, prompt.repo_id);
+                    actions_emit_effects::load_submodule(prompt.repo_id, path, prompt.sources)
+                }
             }
         }
         Msg::CancelSubmoduleTrustPrompt => {
             state.submodule_trust_prompt = None;
             Vec::new()
+        }
+        Msg::ChangeSubmodulePointer {
+            repo_id,
+            path,
+            reference,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::change_submodule_pointer(repo_id, path, reference)
         }
         Msg::RemoveSubmodule { repo_id, path } => {
             begin_local_action(state, repo_id);
@@ -1302,6 +1365,31 @@ pub(super) fn reduce(
                 }
             }
         }
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
+            repo_id,
+            path,
+            result,
+        }) => match result {
+            Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
+                begin_local_action(state, repo_id);
+                actions_emit_effects::load_submodule(repo_id, path, Vec::new())
+            }
+            Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
+                state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
+                    repo_id,
+                    operation: SubmoduleTrustPromptOperation::Load { path },
+                    sources,
+                });
+                Vec::new()
+            }
+            Err(error) => {
+                state.banner_error = Some(BannerErrorState {
+                    repo_id: Some(repo_id),
+                    message: util::format_failure_summary("Submodule trust check", &error),
+                });
+                Vec::new()
+            }
+        },
         Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
             repo_id,
             commit_id,
@@ -1323,6 +1411,19 @@ pub(super) fn reduce(
             side,
             result,
         }) => diff_selection::diff_preview_text_file_loaded(state, repo_id, target, side, result),
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id,
+            target,
+            result,
+        }) => diff_selection::submodule_summary_loaded(state, repo_id, target, result),
+        Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
+            repo_id,
+            inline_rev,
+            target,
+            result,
+        }) => {
+            diff_selection::inline_submodule_diff_loaded(state, repo_id, inline_rev, target, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id,
             target,

@@ -1082,6 +1082,9 @@ fn diff_row(
             .on_click(on_click);
         let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
             cx.stop_propagation();
+            if this.is_inline_submodule_diff_active() {
+                return;
+            }
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
@@ -1358,6 +1361,9 @@ fn patch_split_header_row(
                 .on_click(on_click);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
+                if this.is_inline_submodule_diff_active() {
+                    return;
+                }
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
                 };

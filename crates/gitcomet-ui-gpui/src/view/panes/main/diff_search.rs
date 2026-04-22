@@ -364,6 +364,9 @@ impl MainPaneView {
         std::path::PathBuf,
         Option<gitcomet_core::domain::FileConflictKind>,
     )> {
+        if self.is_inline_submodule_diff_active() {
+            return None;
+        }
         let repo = self.active_repo()?;
         let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
             return None;
@@ -562,7 +565,7 @@ impl MainPaneView {
         &mut self,
         query: AsciiCaseInsensitiveNeedle<'_>,
     ) -> bool {
-        let diff = match self.active_repo().map(|repo| &repo.diff_state.diff) {
+        let diff = match self.rendered_patch_diff_loadable() {
             Some(Loadable::Ready(diff)) => Arc::clone(diff),
             _ => return false,
         };
@@ -700,7 +703,7 @@ impl MainPaneView {
             return false;
         }
 
-        let Some(diff) = self.active_repo().map(|repo| &repo.diff_state.diff) else {
+        let Some(diff) = self.rendered_patch_diff_loadable() else {
             return false;
         };
         let Loadable::Ready(diff) = diff else {

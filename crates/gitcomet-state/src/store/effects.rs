@@ -42,6 +42,25 @@ fn selected_conflict_file_path(
         .and_then(|repo| repo.conflict_state.conflict_file_path.clone())
 }
 
+fn selected_inline_submodule_diff(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+) -> Option<(std::path::PathBuf, DiffTarget, u64)> {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.diff_state.inline_submodule_diff.as_ref())
+        .map(|inline| {
+            (
+                inline.submodule_repo_path.clone(),
+                inline.target.clone(),
+                inline.rev,
+            )
+        })
+}
+
 fn effect_requires_available_git(effect: &Effect) -> bool {
     !matches!(
         effect,
@@ -284,6 +303,34 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadSubmoduleSummary { repo_id, target } => send(Msg::Internal(
+            crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                repo_id,
+                target,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::LoadInlineSubmoduleSelectedDiff {
+            repo_id,
+            inline_rev,
+        } => {
+            let Some((_, target, current_rev)) =
+                selected_inline_submodule_diff(thread_state, repo_id)
+            else {
+                return;
+            };
+            if current_rev != inline_rev {
+                return;
+            }
+            send(Msg::Internal(
+                crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
+                    repo_id,
+                    inline_rev,
+                    target,
+                    result: Err(git_unavailable_error(runtime)),
+                },
+            ))
+        }
         Effect::LoadDiffFileImage { repo_id, target } => send(Msg::Internal(
             crate::msg::InternalMsg::DiffFileImageLoaded {
                 repo_id,
@@ -296,11 +343,21 @@ fn send_unavailable_git_effect_result(
             load_patch_diff,
             load_file_text,
             preview_text_side,
+            load_submodule_summary,
             load_file_image,
         } => {
             let Some(target) = selected_diff_target(thread_state, repo_id) else {
                 return;
             };
+            if load_submodule_summary {
+                send(Msg::Internal(
+                    crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                        repo_id,
+                        target: target.clone(),
+                        result: Err(git_unavailable_error(runtime)),
+                    },
+                ));
+            }
             if load_file_image {
                 send(Msg::Internal(
                     crate::msg::InternalMsg::DiffFileImageLoaded {
@@ -452,6 +509,39 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::UpdateSubmodules { approved_sources },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::CheckSubmoduleLoadTrust { repo_id, path } => send(Msg::Internal(
+            crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
+                repo_id,
+                path,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::LoadSubmodule {
+            repo_id,
+            path,
+            approved_sources,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::LoadSubmodule {
+                    path,
+                    approved_sources,
+                },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::ChangeSubmodulePointer {
+            repo_id,
+            path,
+            reference,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::ChangeSubmodulePointer { path, reference },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -891,6 +981,22 @@ pub(super) fn schedule_effect(
                 executor, repos, msg_tx, repo_id, target, side,
             );
         }
+        Effect::LoadSubmoduleSummary { repo_id, target } => {
+            repo_load::schedule_load_submodule_summary(executor, repos, msg_tx, repo_id, target);
+        }
+        Effect::LoadInlineSubmoduleSelectedDiff {
+            repo_id,
+            inline_rev,
+        } => {
+            repo_load::schedule_load_inline_submodule_selected_diff(
+                executor,
+                backend.clone(),
+                msg_tx,
+                repo_id,
+                inline_rev,
+                selected_inline_submodule_diff(thread_state, repo_id),
+            );
+        }
         Effect::LoadDiffFileImage { repo_id, target } => {
             repo_load::schedule_load_diff_file_image(executor, repos, msg_tx, repo_id, target);
         }
@@ -899,6 +1005,7 @@ pub(super) fn schedule_effect(
             load_patch_diff,
             load_file_text,
             preview_text_side,
+            load_submodule_summary,
             load_file_image,
         } => {
             if let Some(target) = selected_diff_target(thread_state, repo_id) {
@@ -911,6 +1018,7 @@ pub(super) fn schedule_effect(
                     load_patch_diff,
                     load_file_text,
                     preview_text_side,
+                    load_submodule_summary,
                     load_file_image,
                 );
             }
@@ -1012,6 +1120,11 @@ pub(super) fn schedule_effect(
         Effect::CheckSubmoduleUpdateTrust { repo_id } => {
             repo_commands::schedule_check_submodule_update_trust(executor, repos, msg_tx, repo_id);
         }
+        Effect::CheckSubmoduleLoadTrust { repo_id, path } => {
+            repo_commands::schedule_check_submodule_load_trust(
+                executor, repos, msg_tx, repo_id, path,
+            );
+        }
         Effect::AddSubmodule {
             repo_id,
             url,
@@ -1050,6 +1163,31 @@ pub(super) fn schedule_effect(
                 repo_id,
                 approved_sources,
                 auth,
+            );
+        }
+        Effect::LoadSubmodule {
+            repo_id,
+            path,
+            approved_sources,
+            auth,
+        } => {
+            repo_commands::schedule_load_submodule(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                path,
+                approved_sources,
+                auth,
+            );
+        }
+        Effect::ChangeSubmodulePointer {
+            repo_id,
+            path,
+            reference,
+        } => {
+            repo_commands::schedule_change_submodule_pointer(
+                executor, repos, msg_tx, repo_id, path, reference,
             );
         }
         Effect::RemoveSubmodule { repo_id, path } => {

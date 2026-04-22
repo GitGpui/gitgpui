@@ -168,9 +168,18 @@ pub(crate) fn build_synthetic_repo_state(
 
     let mut submodules_vec = Vec::with_capacity(submodules);
     for ix in 0..submodules {
+        let recorded_head = CommitId(format!("{:040x}", 200_000usize.saturating_add(ix)).into());
+        let checked_out_head = if ix % 5 == 0 {
+            Some(CommitId(
+                format!("{:040x}", 400_000usize.saturating_add(ix)).into(),
+            ))
+        } else {
+            Some(recorded_head.clone())
+        };
         submodules_vec.push(Submodule {
             path: std::path::PathBuf::from(format!("deps/submodule_{ix}")),
-            head: CommitId(format!("{:040x}", 200_000usize.saturating_add(ix)).into()),
+            recorded_head,
+            checked_out_head,
             status: if ix % 5 == 0 {
                 SubmoduleStatus::HeadMismatch
             } else {
@@ -315,6 +324,7 @@ pub(crate) fn build_repo_switch_repo_state(
                     } else {
                         FileStatusKind::Modified
                     },
+                    is_submodule: false,
                 })
                 .collect(),
         }));
@@ -769,7 +779,11 @@ pub(crate) fn build_synthetic_commit_details_with_message(
         }
         path.push(format!("file_{ix}.rs"));
 
-        out.push(CommitFileChange { path, kind });
+        out.push(CommitFileChange {
+            path,
+            kind,
+            is_submodule: false,
+        });
     }
 
     CommitDetails {
@@ -819,7 +833,11 @@ pub(crate) fn build_synthetic_commit_details_unique_paths(
             path.push(format!("dir{}_{}_{}", d, ix / 256, ix % 256));
         }
         path.push(format!("file_{ix}.rs"));
-        out.push(CommitFileChange { path, kind });
+        out.push(CommitFileChange {
+            path,
+            kind,
+            is_submodule: false,
+        });
     }
     CommitDetails {
         id,
