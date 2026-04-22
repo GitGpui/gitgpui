@@ -23,21 +23,20 @@ jobs:
     name: Windows Tests (aarch64-windows)
     runs-on: windows-11-arm
     timeout-minutes: 60
+
     steps:
       - uses: actions/checkout@v6
+
       - name: Show Git version
         shell: pwsh
         run: git --version
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
-      - name: Show path behavior (PowerShell + Git Bash)
-        shell: pwsh
-        run: |
-          Write-Host "PowerShell path: $pwd"
-          $bashPwd = bash -lc "pwd"
-          Write-Host "Git Bash path: $bashPwd"
+
       - name: Enable WER full dumps for Windows ARM test crashes
         shell: pwsh
         run: |
@@ -45,6 +44,7 @@ jobs:
           reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpFolder /t REG_EXPAND_SZ /d C:\CrashDumps /f
           reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpType /t REG_DWORD /d 2 /f
           reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpCount /t REG_DWORD /d 10 /f
+
       - name: Run headless test suite (PowerShell)
         shell: pwsh
         run: |
@@ -55,22 +55,41 @@ jobs:
             --features gix `
             --locked `
             --verbose
-      - name: Upload Windows ARM crash artifacts
-        if: always()
+
+      - name: Wait for WER crash dumps and log contents
+        if: failure()
+        shell: pwsh
+        run: |
+          $dumpDir = 'C:\CrashDumps'
+          $deadline = (Get-Date).AddSeconds(60)
+
+          do {
+            $dumps = @(Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue)
+            if ($dumps.Count -gt 0) { break }
+            Start-Sleep -Seconds 5
+          } while ((Get-Date) -lt $deadline)
+
+          Write-Host 'Crash dump directory contents:'
+          if (Test-Path $dumpDir) {
+            Get-ChildItem -Path $dumpDir -Force | Format-Table -AutoSize Name,Length,LastWriteTime
+          } else {
+            Write-Host 'C:\CrashDumps does not exist.'
+          }
+
+      - name: Upload Windows ARM crash dumps
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-arm64-crash-artifacts
+          name: windows-arm64-crash-dumps
+          if-no-files-found: warn
+          path: C:\CrashDumps\*.dmp
+
+      - name: Upload Windows ARM symbols and binaries
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-arm64-symbols
           if-no-files-found: warn
           path: |
-            C:\CrashDumps\*.dmp
             target\**\*.pdb
             target\**\gitcomet*.exe
-      - name: Run standalone smoke test in CMD
-        shell: cmd
-        run: cargo test -p gitcomet --no-default-features --features gix --test standalone_tool_mode_integration help_flag_exits_zero -- --exact
-      - name: Show path behavior (CMD + Git Bash)
-        shell: cmd
-        run: |
-          echo CMD path: %CD%
-          for /f "delims=" %%i in ('bash -lc "pwd"') do set BASH_PWD=%%i
-          echo Git Bash path: %BASH_PWD%
