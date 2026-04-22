@@ -248,6 +248,14 @@ jobs:
           Write-Host "PowerShell path: $pwd"
           $bashPwd = bash -lc "pwd"
           Write-Host "Git Bash path: $bashPwd"
+      - name: Enable WER full dumps for Windows ARM test crashes
+        if: matrix.target_platform == 'aarch64-windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\CrashDumps | Out-Null
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpFolder /t REG_EXPAND_SZ /d C:\CrashDumps /f
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpType /t REG_DWORD /d 2 /f
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpCount /t REG_DWORD /d 10 /f
       - name: Run headless test suite (PowerShell)
         shell: pwsh
         run: |
@@ -258,6 +266,16 @@ jobs:
             --features gix `
             --locked `
             --verbose
+      - name: Upload Windows ARM crash artifacts
+        if: always() && matrix.target_platform == 'aarch64-windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-arm64-crash-artifacts
+          if-no-files-found: warn
+          path: |
+            C:\CrashDumps\*.dmp
+            target\**\*.pdb
+            target\**\gitcomet*.exe
       - name: Run standalone smoke test in CMD
         shell: cmd
         run: cargo test -p gitcomet --no-default-features --features gix --test standalone_tool_mode_integration help_flag_exits_zero -- --exact
