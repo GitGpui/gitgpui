@@ -578,6 +578,7 @@ impl GitCometView {
 
         let restored_sidebar_width = ui_session.sidebar_width;
         let restored_details_width = ui_session.details_width;
+        let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_session
             .theme_mode
             .as_deref()
