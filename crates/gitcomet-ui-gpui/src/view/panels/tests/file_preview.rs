@@ -1423,7 +1423,7 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
                         styled.highlights.iter().any(|(range, style)| {
                             range.start == 0
                                 && range.end == comment_line.len()
-                                && style.color == Some(pane.theme.colors.text_muted.into())
+                                && style.color == Some(pane.theme.syntax.comment.into())
                         })
                     })
         },
@@ -1453,7 +1453,7 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
             styled.highlights.iter().any(|(range, style)| {
                 range.start == 0
                     && range.end == comment_line.len()
-                    && style.color == Some(pane.theme.colors.text_muted.into())
+                    && style.color == Some(pane.theme.syntax.comment.into())
             }),
             "multiline comment row should upgrade to comment highlighting after background parsing"
         );
