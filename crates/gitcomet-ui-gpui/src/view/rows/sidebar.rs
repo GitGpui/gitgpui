@@ -901,11 +901,6 @@ impl SidebarPaneView {
                     let branch_for_indicator = branch.as_ref().map(|name| name.to_string());
                     let branch_for_menu = branch.as_ref().map(|name| name.to_string());
                     let path_label = this.cached_path_display(&path);
-                    let label = super::super::branch_sidebar::branch_sidebar_worktree_label(
-                        branch.as_ref().map(SharedString::as_ref),
-                        detached,
-                        path_label.as_ref(),
-                    );
                     let context_menu_invoker: SharedString =
                         format!("worktree_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
@@ -954,9 +949,75 @@ impl SidebarPaneView {
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .text_sm()
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .child(label.clone()),
+                                .flex()
+                                .items_center()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .min_w(px(0.0))
+                                        .when_some(branch.clone(), |this, branch| {
+                                            let mut prefix = div()
+                                                .min_w(px(0.0))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap();
+                                            prefix.style().flex_shrink = Some(1.0);
+                                            this.child(
+                                                prefix.child(
+                                                    components::TruncatedText::new(branch)
+                                                        .profile(
+                                                            components::TextTruncationProfile::End,
+                                                        )
+                                                        .render(cx),
+                                                ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .whitespace_nowrap()
+                                                    .child("  "),
+                                            )
+                                        })
+                                        .when(branch.is_none() && detached, |this| {
+                                            let mut prefix = div()
+                                                .min_w(px(0.0))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap();
+                                            prefix.style().flex_shrink = Some(1.0);
+                                            this.child(
+                                                prefix.child(
+                                                    components::TruncatedText::new("(detached)")
+                                                        .profile(
+                                                            components::TextTruncationProfile::End,
+                                                        )
+                                                        .render(cx),
+                                                ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .whitespace_nowrap()
+                                                    .child("  "),
+                                            )
+                                        })
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.0))
+                                                .child(
+                                                    components::TruncatedText::new(
+                                                        path_label.clone(),
+                                                    )
+                                                    .profile(
+                                                        components::TextTruncationProfile::Path,
+                                                    )
+                                                    .tooltip_host(this.tooltip_host.clone())
+                                                    .tooltip_mode(
+                                                        components::TruncatedTextTooltipMode::FullTextIfTruncated,
+                                                    )
+                                                    .render(cx),
+                                                ),
+                                        ),
+                                ),
                         )
                         .child(
                             context_menu_indicator(
@@ -1019,18 +1080,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this
-                                    .set_tooltip_text_if_changed(Some(label.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&label, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }))
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulesHeader {

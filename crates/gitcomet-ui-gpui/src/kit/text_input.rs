@@ -1,6 +1,7 @@
 use super::text_model::{TextModel, TextModelSnapshot};
 use crate::theme::AppTheme;
 use crate::view::components::CONTROL_HEIGHT_PX;
+use crate::view::text_truncation::{TextTruncationProfile, TruncatedLineLayout, shape_truncated_line_cached};
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler,
@@ -418,6 +419,7 @@ struct InterpolatedWrapPatch {
 #[derive(Debug)]
 enum TextInputLayout {
     Plain(Vec<ShapedLine>),
+    TruncatedSingleLine(Arc<TruncatedLineLayout>),
     Wrapped {
         lines: Vec<WrappedLine>,
         y_offsets: Vec<Pixels>,
@@ -433,6 +435,7 @@ pub struct TextInput {
     read_only: bool,
     chromeless: bool,
     soft_wrap: bool,
+    display_truncation: Option<TextTruncationProfile>,
     masked: bool,
     line_ending: &'static str,
     style: TextInputStyle,
@@ -494,6 +497,7 @@ impl TextInput {
             read_only: options.read_only,
             chromeless: options.chromeless,
             soft_wrap: options.soft_wrap,
+            display_truncation: None,
             masked: false,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
@@ -552,6 +556,7 @@ impl TextInput {
             read_only: options.read_only,
             chromeless: options.chromeless,
             soft_wrap: options.soft_wrap,
+            display_truncation: None,
             masked: false,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
@@ -801,6 +806,29 @@ impl TextInput {
             return;
         }
         self.read_only = read_only;
+        if !self.read_only && self.display_truncation.is_some() {
+            self.display_truncation = None;
+            self.invalidate_layout_caches();
+        }
+        cx.notify();
+    }
+
+    pub fn set_display_truncation(
+        &mut self,
+        display_truncation: Option<TextTruncationProfile>,
+        cx: &mut Context<Self>,
+    ) {
+        debug_assert!(
+            display_truncation.is_none() || (self.read_only && !self.multiline),
+            "display truncation is only supported for single-line read-only text inputs"
+        );
+        let next = display_truncation.filter(|_| self.read_only && !self.multiline);
+        if self.display_truncation == next {
+            return;
+        }
+        self.display_truncation = next;
+        self.scroll_x = px(0.0);
+        self.invalidate_layout_caches();
         cx.notify();
     }
 
@@ -1571,6 +1599,10 @@ impl TextInput {
                 let y = line_height * line_ix as f32 + line_height / 2.0;
                 Some(point(bounds.left() + x, bounds.top() + y))
             }
+            TextInputLayout::TruncatedSingleLine(line) => Some(point(
+                bounds.left() + truncated_line_x_for_source_offset(line, cursor),
+                bounds.top() + line_height / 2.0,
+            )),
             TextInputLayout::Wrapped {
                 lines, y_offsets, ..
             } => {
@@ -1645,6 +1677,7 @@ impl TextInput {
                 let bottom = top + line_height;
                 Some((top, bottom))
             }
+            TextInputLayout::TruncatedSingleLine(_) => Some((Pixels::ZERO, line_height)),
             TextInputLayout::Wrapped {
                 lines, y_offsets, ..
             } => {
@@ -2513,6 +2546,10 @@ impl TextInput {
                 let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
                 doc_ix.min(self.content.len())
             }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                let local_x = position.x - bounds.left();
+                truncated_line_source_offset_for_x(line, local_x).min(self.content.len())
+            }
             TextInputLayout::Wrapped {
                 lines,
                 y_offsets,
@@ -2563,6 +2600,10 @@ impl TextInput {
                 let local_ix = lines[line_ix].closest_index_for_x(local_x);
                 let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
                 doc_ix.min(self.content.len())
+            }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                let local_x = position.x - bounds.left();
+                truncated_line_source_offset_for_x(line, local_x).min(self.content.len())
             }
             TextInputLayout::Wrapped {
                 lines,
@@ -2762,6 +2803,7 @@ impl EntityInputHandler for TextInput {
                 let (line_ix, local_ix) = line_for_offset(starts, lines, offset);
                 (line_ix, local_ix, line_height * line_ix as f32)
             }
+            TextInputLayout::TruncatedSingleLine(_) => (0, 0, Pixels::ZERO),
             TextInputLayout::Wrapped {
                 lines, y_offsets, ..
             } => {
@@ -2784,6 +2826,9 @@ impl EntityInputHandler for TextInput {
             TextInputLayout::Plain(lines) => {
                 let line = lines.get(line_ix)?;
                 (line.x_for_index(local_ix) - self.scroll_x, y_offset)
+            }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                (truncated_line_x_for_source_offset(line, offset), Pixels::ZERO)
             }
             TextInputLayout::Wrapped { lines, .. } => {
                 let line = lines.get(line_ix)?;
@@ -2822,6 +2867,9 @@ impl EntityInputHandler for TextInput {
                 let doc_offset = starts.get(line_ix).copied().unwrap_or(0) + idx;
                 Some(self.offset_to_utf16(doc_offset))
             }
+            TextInputLayout::TruncatedSingleLine(line) => Some(self.offset_to_utf16(
+                truncated_line_source_offset_for_x(line, local.x).min(self.content.len()),
+            )),
             TextInputLayout::Wrapped {
                 lines,
                 y_offsets,
@@ -2988,6 +3036,75 @@ impl Element for TextElement {
             };
 
             if !soft_wrap {
+                if !input.multiline
+                    && input.read_only
+                    && input.display_truncation.is_some()
+                    && has_content
+                    && !input.masked
+                {
+                    let mut base_text_style = style.clone();
+                    base_text_style.color = text_color;
+                    let truncated_line = shape_truncated_line_cached(
+                        window,
+                        cx,
+                        &base_text_style,
+                        &display_text,
+                        Some(bounds.size.width.max(px(0.0))),
+                        input
+                            .display_truncation
+                            .unwrap_or(TextTruncationProfile::End),
+                        highlight_slice.unwrap_or(&[]),
+                        None,
+                    );
+                    let mut selections = Vec::with_capacity(4);
+                    let cursor_quad = if selected_range.is_empty() {
+                        let control_height =
+                            crate::ui_scale::design_px_from_window(CONTROL_HEIGHT_PX, window);
+                        let x = truncated_line_x_for_source_offset(&truncated_line, cursor);
+                        let caret_inset_y = px(3.0);
+                        let caret_h = if !input.chromeless {
+                            (control_height - px(2.0) - caret_inset_y * 2.0).max(px(2.0))
+                        } else {
+                            (line_height - caret_inset_y * 2.0).max(px(2.0))
+                        };
+                        let caret_top_inset = (line_height - caret_h) / 2.0;
+                        let top = bounds.top() + caret_top_inset;
+                        Some(fill(
+                            Bounds::new(point(bounds.left() + x, top), size(px(1.0), caret_h)),
+                            style_colors.cursor,
+                        ))
+                    } else {
+                        for range in truncated_line
+                            .projection
+                            .selection_display_ranges(selected_range.clone())
+                        {
+                            let x0 = truncated_line.shaped_line.x_for_index(range.start);
+                            let x1 = truncated_line.shaped_line.x_for_index(range.end);
+                            if x1 <= x0 {
+                                continue;
+                            }
+                            selections.push(fill(
+                                Bounds::from_corners(
+                                    point(bounds.left() + x0, bounds.top()),
+                                    point(bounds.left() + x1, bounds.top() + line_height),
+                                ),
+                                style_colors.selection,
+                            ));
+                        }
+                        None
+                    };
+
+                    return PrepaintState {
+                        layout: Some(TextInputLayout::TruncatedSingleLine(truncated_line)),
+                        cursor: cursor_quad,
+                        selections,
+                        line_starts: Some(line_starts),
+                        wrap_cache: None,
+                        scroll_x: px(0.0),
+                        visible_line_range: 0..1,
+                    };
+                }
+
                 let mut scroll_x = if input.multiline {
                     px(0.0)
                 } else {
@@ -3525,6 +3642,26 @@ impl Element for TextElement {
                             "TextInput plain line paint failed at line index {ix}"
                         );
                     }
+                }
+                TextInputLayout::TruncatedSingleLine(line) => {
+                    if line.has_background_highlights {
+                        let _ = line.shaped_line.paint_background(
+                            point(bounds.origin.x, bounds.origin.y),
+                            line.line_height,
+                            TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
+                    let _ = line.shaped_line.paint(
+                        point(bounds.origin.x, bounds.origin.y),
+                        line.line_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
                 }
                 TextInputLayout::Wrapped {
                     lines, y_offsets, ..
@@ -4860,6 +4997,44 @@ fn mask_text_for_display(text: &str) -> String {
     masked
 }
 
+fn truncated_line_x_for_source_offset(line: &TruncatedLineLayout, source_offset: usize) -> Pixels {
+    if let Some((hidden_range, display_range)) = line
+        .projection
+        .ellipsis_segment_for_source_offset(source_offset)
+    {
+        let hidden_mid =
+            hidden_range.start + (hidden_range.end.saturating_sub(hidden_range.start) / 2);
+        let display_offset = if source_offset <= hidden_mid {
+            display_range.start
+        } else {
+            display_range.end
+        };
+        return line.shaped_line.x_for_index(display_offset);
+    }
+
+    let display_offset = line.projection.source_to_display_offset(source_offset);
+    line.shaped_line.x_for_index(display_offset)
+}
+
+fn truncated_line_source_offset_for_x(line: &TruncatedLineLayout, x: Pixels) -> usize {
+    let display_offset = line.shaped_line.closest_index_for_x(x.max(px(0.0)));
+    if let Some((hidden_range, display_range)) =
+        line.projection.ellipsis_segment_at_display_offset(display_offset)
+    {
+        let x0 = line.shaped_line.x_for_index(display_range.start);
+        let x1 = line.shaped_line.x_for_index(display_range.end);
+        let midpoint = x0 + (x1 - x0) / 2.0;
+        return if x <= midpoint {
+            hidden_range.start
+        } else {
+            hidden_range.end
+        };
+    }
+
+    line.projection
+        .display_to_source_start_offset(display_offset)
+}
+
 fn line_for_offset(starts: &[usize], lines: &[ShapedLine], offset: usize) -> (usize, usize) {
     let mut ix = starts.partition_point(|&s| s <= offset);
     if ix == 0 {
@@ -5647,6 +5822,78 @@ mod tests {
             .iter()
             .map(|entry| entry.byte_start..entry.byte_end)
             .collect()
+    }
+
+    #[gpui::test]
+    fn truncated_read_only_select_all_returns_full_source_text(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let text = "0123456789abcdef0123456789abcdef";
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: false,
+                    read_only: true,
+                    chromeless: true,
+                    soft_wrap: false,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text(text, cx);
+                input.set_display_truncation(Some(TextTruncationProfile::Middle), cx);
+                input.select_all_text(cx);
+
+                assert_eq!(input.selected_text(), Some(text.to_string()));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn truncated_line_hit_testing_snaps_ellipsis_to_hidden_range_boundaries(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let text: SharedString = "0123456789abcdef0123456789abcdef".into();
+        let (_view, cx) = cx.add_window_view(|_window, _cx| gpui::Empty);
+
+        cx.update(|window, app| {
+            let line = shape_truncated_line_cached(
+                window,
+                app,
+                &window.text_style(),
+                &text,
+                Some(px(80.0)),
+                TextTruncationProfile::Middle,
+                &[],
+                None,
+            );
+
+            assert!(line.truncated, "expected the line to truncate");
+            let (hidden_range, display_range) = line
+                .projection
+                .ellipsis_segment_for_source_offset(text.len() / 2)
+                .expect("expected a middle ellipsis segment");
+
+            let start_x = line.shaped_line.x_for_index(display_range.start);
+            let end_x = line.shaped_line.x_for_index(display_range.end);
+            let span = end_x - start_x;
+            let left_x = start_x + span / 4.0;
+            let right_x = start_x + (span * 3.0) / 4.0;
+
+            assert_eq!(
+                truncated_line_source_offset_for_x(&line, left_x),
+                hidden_range.start
+            );
+            assert_eq!(
+                truncated_line_source_offset_for_x(&line, right_x),
+                hidden_range.end
+            );
+        });
     }
 
     struct DualProviders {

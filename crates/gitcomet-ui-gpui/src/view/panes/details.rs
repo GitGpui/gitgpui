@@ -12,7 +12,7 @@ pub(in super::super) struct DetailsPaneView {
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     change_tracking_height_design: Option<f32>,
@@ -60,7 +60,7 @@ pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) untracked_height: Option<u32>,
     pub(in super::super) ui_scale_percent: u32,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
-    pub(in super::super) tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
 
 pub(in super::super) struct StatusSectionResizeTracker {
@@ -238,7 +238,7 @@ impl DetailsPaneView {
         });
 
         let commit_details_sha_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "".into(),
                     multiline: false,
@@ -248,7 +248,9 @@ impl DetailsPaneView {
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
+            input
         });
 
         let commit_details_date_input = cx.new(|cx| {
@@ -266,7 +268,7 @@ impl DetailsPaneView {
         });
 
         let commit_details_parent_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "".into(),
                     multiline: false,
@@ -276,7 +278,9 @@ impl DetailsPaneView {
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
+            input
         });
 
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {

@@ -88,6 +88,7 @@ mod splash;
 mod state_apply;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub(crate) mod text_truncation;
 mod toast_host;
 mod tooltip;
 mod tooltip_host;
@@ -789,6 +790,7 @@ impl GitCometView {
                 show_timezone,
                 change_tracking_view,
                 weak_view.clone(),
+                tooltip_host.downgrade(),
                 main_pane.clone(),
                 details_pane.clone(),
                 window,

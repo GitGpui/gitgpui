@@ -33,9 +33,15 @@ pub(super) fn panel(
                     div()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
-                        .line_clamp(1)
-                        .whitespace_nowrap()
-                        .child(title),
+                        .child(
+                            components::TruncatedText::new(title.clone())
+                                .profile(components::TextTruncationProfile::Path)
+                                .tooltip_host(this.tooltip_host.clone())
+                                .tooltip_mode(
+                                    components::TruncatedTextTooltipMode::FullTextIfTruncated,
+                                )
+                                .render(cx),
+                        ),
                 )
                 .child(
                     div()
@@ -57,15 +63,43 @@ pub(super) fn panel(
         );
 
     let body: AnyElement = match repo.map(|r| &r.history_state.blame) {
-        None => components::context_menu_label(theme, "No repository").into_any_element(),
+        None => components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            "No repository",
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+        .into_any_element(),
         Some(Loadable::Loading) => {
-            components::context_menu_label(theme, "Loading").into_any_element()
+            components::context_menu_label(
+                theme,
+                ui_scale_percent,
+                "Loading",
+                Some(this.tooltip_host.clone()),
+                cx,
+            )
+            .into_any_element()
         }
         Some(Loadable::Error(e)) => {
-            components::context_menu_label(theme, e.clone()).into_any_element()
+            components::context_menu_label(
+                theme,
+                ui_scale_percent,
+                e.clone(),
+                Some(this.tooltip_host.clone()),
+                cx,
+            )
+            .into_any_element()
         }
         Some(Loadable::NotLoaded) => {
-            components::context_menu_label(theme, "Not loaded").into_any_element()
+            components::context_menu_label(
+                theme,
+                ui_scale_percent,
+                "Not loaded",
+                Some(this.tooltip_host.clone()),
+                cx,
+            )
+            .into_any_element()
         }
         Some(Loadable::Ready(lines)) => {
             let count = lines.len();

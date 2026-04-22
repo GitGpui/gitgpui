@@ -123,6 +123,7 @@ pub(in super::super) struct PopoverHost {
     _stash_message_input_subscription: gpui::Subscription,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitCometView>,
+    tooltip_host: WeakEntity<TooltipHost>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,
 
@@ -458,6 +459,7 @@ impl PopoverHost {
         show_timezone: bool,
         change_tracking_view: ChangeTrackingView,
         root_view: WeakEntity<GitCometView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
         details_pane: Entity<DetailsPaneView>,
         window: &mut Window,
@@ -837,6 +839,7 @@ impl PopoverHost {
             _stash_message_input_subscription: stash_message_input_subscription,
             notify_fingerprint: 0,
             root_view,
+            tooltip_host,
             main_pane,
             details_pane,
             popover: None,

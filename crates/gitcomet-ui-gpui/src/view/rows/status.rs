@@ -411,6 +411,7 @@ fn render_status_rows_for_section(
                 section,
                 repo.id,
                 is_selected,
+                this.tooltip_host.clone(),
                 this.active_context_menu_invoker.as_ref(),
                 cx,
             )
@@ -428,6 +429,7 @@ fn status_row(
     section: StatusSection,
     repo_id: RepoId,
     selected: bool,
+    tooltip_host: WeakEntity<TooltipHost>,
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
@@ -458,7 +460,6 @@ fn status_row(
             DiffArea::Staged => "Unstage",
         }
     };
-    let row_tooltip = path_display.clone();
     let stage_tooltip: SharedString = match stage_label {
         "Stage" => "Stage file".into(),
         "Unstage" => "Unstage file".into(),
@@ -558,17 +559,6 @@ fn status_row(
             }
         })
         .active(move |s| s.bg(theme.colors.active))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let mut changed = false;
-            if *hovering {
-                changed |= this.set_tooltip_text_if_changed(Some(row_tooltip.clone()), cx);
-            } else {
-                changed |= this.clear_tooltip_if_matches(&row_tooltip, cx);
-            }
-            if changed {
-                cx.notify();
-            }
-        }))
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -630,8 +620,15 @@ fn status_row(
                 .line_height(scaled_px(18.0))
                 .flex_1()
                 .min_w(px(0.0))
-                .line_clamp(1)
-                .child(path_display_for_label.clone()),
+                .child(
+                    components::TruncatedText::new(path_display_for_label.clone())
+                        .profile(components::TextTruncationProfile::Path)
+                        .tooltip_host(tooltip_host)
+                        .tooltip_mode(
+                            components::TruncatedTextTooltipMode::FullTextIfTruncated,
+                        )
+                        .render(cx),
+                ),
         )
         .child(
             div()

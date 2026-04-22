@@ -70,6 +70,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     if let Some(search) = this.diff_hunk_picker_search_input.clone() {
         components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
             .items(items)
+            .tooltip_host(this.tooltip_host.clone())
             .empty_text("No hunks")
             .max_height(scaled_px(260.0))
             .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
