@@ -1387,6 +1387,15 @@ mod tests {
                 .is_some(),
             "standalone prepared document should expose a ready first line"
         );
+        let multiline_tokens =
+            syntax::syntax_tokens_for_prepared_document_line(multiline_document.inner, 1)
+                .expect("multiline continuation tokens should remain available");
+        assert!(
+            multiline_tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment && token.range.start == 0),
+            "multiline continuation tokens should start with a comment token, got: {multiline_tokens:?}"
+        );
 
         let build = |document, line_ix| {
             match build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
