@@ -27,8 +27,8 @@ Download the latest Windows installer or portable binary from [GitHub Releases](
 
 Install from the Microsoft Store:
 
-<a href="https://get.microsoft.com/installer/download/XPFD182V1H793R?referrer=appbadge" target="_self">
-  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Download from Microsoft Store" />
+<a href="https://apps.microsoft.com/detail/XPFD182V1H793R?referrer=appbadge&mode=full" target="_blank"  rel="noopener noreferrer">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200"/>
 </a>
 
 </details>
