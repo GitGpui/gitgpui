@@ -4174,8 +4174,11 @@ mod tests {
         );
 
         let function_text = "use foo::bar;";
-        let function_tokens =
-            syntax_tokens_for_line(function_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        let function_tokens = syntax_tokens_for_line(
+            function_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
         assert!(
             has_token_kind_and_text(
                 function_text,
@@ -4220,8 +4223,11 @@ mod tests {
         );
 
         let crate_type_text = "use crate::foo::Bar;";
-        let crate_type_tokens =
-            syntax_tokens_for_line(crate_type_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        let crate_type_tokens = syntax_tokens_for_line(
+            crate_type_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
         assert!(
             has_token_kind_and_text(
                 crate_type_text,
@@ -4494,21 +4500,11 @@ mod tests {
         let crate_tokens =
             syntax_tokens_for_line(crate_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
         assert!(
-            has_token_kind_and_text(
-                crate_text,
-                &crate_tokens,
-                SyntaxTokenKind::Keyword,
-                "crate",
-            ),
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Keyword, "crate",),
             "Grouped imports should keep `crate` on the keyword/orange family, got: {crate_tokens:?}"
         );
         assert!(
-            has_token_kind_and_text(
-                crate_text,
-                &crate_tokens,
-                SyntaxTokenKind::Function,
-                "bar",
-            ),
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Function, "bar",),
             "Grouped imports under `crate` should keep lowercase tails blue, got: {crate_tokens:?}"
         );
         assert!(
@@ -4516,21 +4512,11 @@ mod tests {
             "Grouped imports under `crate` should keep uppercase tails green, got: {crate_tokens:?}"
         );
         assert!(
-            !has_token_kind_and_text(
-                crate_text,
-                &crate_tokens,
-                SyntaxTokenKind::Preproc,
-                "foo",
-            ),
+            !has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Preproc, "foo",),
             "Paths under `crate::{{...}}` should not add a violet root accent, got: {crate_tokens:?}"
         );
         assert!(
-            !has_token_kind_and_text(
-                crate_text,
-                &crate_tokens,
-                SyntaxTokenKind::Function,
-                "baz",
-            ),
+            !has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Function, "baz",),
             "Middle grouped modules should stay neutral before imported types, got: {crate_tokens:?}"
         );
     }
