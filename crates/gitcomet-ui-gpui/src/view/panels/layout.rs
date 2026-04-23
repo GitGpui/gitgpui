@@ -415,6 +415,48 @@ impl DetailsPaneView {
         commit_allowed(is_merge_active, staged_count) && !message.trim().is_empty()
     }
 
+    fn submit_commit(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        let Some(repo_id) = self.active_repo_id() else {
+            return false;
+        };
+        let message = self
+            .commit_message_input
+            .read_with(cx, |input, _| input.text().to_string());
+        if !Self::can_submit_commit(self.active_repo(), &message) {
+            return false;
+        }
+
+        self.store.dispatch(Msg::Commit {
+            repo_id,
+            message: message.trim().to_string(),
+        });
+        self.commit_message_programmatic_change = true;
+        self.commit_message_input
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.commit_message_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+        true
+    }
+
+    pub(in super::super) fn handle_commit_submit_shortcut(
+        &mut self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if !self
+            .commit_message_input
+            .read(cx)
+            .focus_handle()
+            .is_focused(window)
+        {
+            return false;
+        }
+
+        let _ = self.submit_commit(cx);
+        true
+    }
+
     fn sync_commit_details_input_value(
         input: &Entity<components::TextInput>,
         value: &str,
@@ -480,18 +522,7 @@ impl DetailsPaneView {
                             }
                             cx.notify();
                         })
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Close commit details".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
+                        .gitcomet_tooltip(theme, "Close commit details".into()),
                 );
 
             let body: AnyElement = match self.active_repo().map(|r| &r.history_state.commit_details)
@@ -952,18 +983,7 @@ impl DetailsPaneView {
                 });
                 cx.notify();
             })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Stage all changes".into();
-                let mut changed = false;
-                if *hovering {
-                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                } else {
-                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-            }));
+            .gitcomet_tooltip(theme, "Stage all changes".into());
 
         let stage_selected = components::Button::new(
             "stage_selected",
@@ -1177,18 +1197,7 @@ impl DetailsPaneView {
                 });
                 cx.notify();
             })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Unstage all changes".into();
-                let mut changed = false;
-                if *hovering {
-                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                } else {
-                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-            }));
+            .gitcomet_tooltip(theme, "Unstage all changes".into());
 
         let unstage_selected =
             components::Button::new("unstage_selected", format!("Unstage ({selected_staged})"))
@@ -1935,36 +1944,9 @@ impl DetailsPaneView {
                         .render(theme, ui_scale_percent)
                         .debug_selector(|| "commit_button".to_string())
                         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                            let Some(repo_id) = this.active_repo_id() else {
-                                return;
-                            };
-                            let message = this
-                                .commit_message_input
-                                .read_with(cx, |i, _| i.text().to_string());
-                            if !Self::can_submit_commit(this.active_repo(), &message) {
-                                return;
-                            }
-                            let message = message.trim().to_string();
-                            this.store.dispatch(Msg::Commit { repo_id, message });
-                            this.commit_message_programmatic_change = true;
-                            this.commit_message_input
-                                .update(cx, |i, cx| i.set_text(String::new(), cx));
-                            this.commit_message_scroll
-                                .set_offset(point(px(0.0), px(0.0)));
-                            cx.notify();
+                            let _ = this.submit_commit(cx);
                         }))
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Commit staged changes".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
+                        .gitcomet_tooltip(theme, "Commit staged changes".into()),
                 ),
             ),
         )
