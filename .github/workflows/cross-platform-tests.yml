@@ -79,7 +79,7 @@ jobs:
             --locked `
             --verbose
 
-      - name: Run gitcomet test harness under ProcDump
+      - name: Capture gitcomet test harness crash dump with ProcDump
         shell: pwsh
         run: |
           $dumpDir = $env:CRASH_DUMP_DIR
@@ -94,25 +94,11 @@ jobs:
             throw 'gitcomet test harness executable was not found under target\debug\deps.'
           }
 
-          Write-Host "Running $($harness.Name)"
-          & $harness.FullName --nocapture
-          $harnessExitCode = $LASTEXITCODE
-
-          if ($harnessExitCode -eq 0) {
-            Write-Host 'gitcomet test harness completed successfully.'
-            return
-          }
-
-          $unsignedExitCode = [uint32]$harnessExitCode
-          if ($unsignedExitCode -ne 0xC0000005) {
-            throw "gitcomet test harness exited with code $harnessExitCode"
-          }
-
-          Write-Host "gitcomet test harness crashed with access violation ($harnessExitCode); rerunning under ProcDump."
-
           Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
           Remove-Item $procDumpStdoutLog, $procDumpStderrLog -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Running $($harness.Name) directly under ProcDump."
 
           $procDumpArgs = @(
             '-accepteula'
@@ -134,14 +120,14 @@ jobs:
             -RedirectStandardOutput $procDumpStdoutLog `
             -RedirectStandardError $procDumpStderrLog
 
-          Write-Host "ProcDump rerun exited with code $($procDump.ExitCode)"
+          Write-Host "ProcDump exited with code $($procDump.ExitCode)"
 
           $dumps = @(Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue)
           if ($dumps.Count -eq 0) {
-            throw 'ProcDump rerun did not produce a crash dump.'
+            throw 'ProcDump did not produce a crash dump.'
           }
 
-          throw "gitcomet test harness crashed with access violation ($harnessExitCode); crash dump captured for stack trace extraction."
+          throw "ProcDump captured crash dump(s) for $($harness.Name); collecting artifacts and stack trace next."
 
       - name: Collect crash dump and print stack trace
         if: failure()
