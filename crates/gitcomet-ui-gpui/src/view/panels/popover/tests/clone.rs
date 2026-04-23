@@ -225,8 +225,20 @@ fn clone_repo_popover_tabs_between_inputs_buttons_and_wraps(cx: &mut gpui::TestA
         assert_window_focus(
             window,
             app,
+            host.clone_repo_cancel_focus_handle.clone(),
+            "expected Tab to move from Browse to Cancel",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
             host.clone_repo_submit_focus_handle.clone(),
-            "expected Tab to move from Browse to Clone",
+            "expected Tab to move from Cancel to Clone",
         );
     });
 

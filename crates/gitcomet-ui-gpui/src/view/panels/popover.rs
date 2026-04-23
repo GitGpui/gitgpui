@@ -129,6 +129,8 @@ pub(in super::super) struct PopoverHost {
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
     context_menu_focus_handle: FocusHandle,
+    prompt_tab_group_focus_handle: FocusHandle,
+    prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
@@ -854,6 +856,8 @@ impl PopoverHost {
         });
 
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let prompt_tab_group_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let prompt_tab_wrap_end_focus_handle = cx.focus_handle().tab_index(1).tab_stop(false);
         let create_branch_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_branch_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_branch_from_ref_checkout_focus_handle =
@@ -911,6 +915,8 @@ impl PopoverHost {
             popover: None,
             popover_anchor: None,
             context_menu_focus_handle,
+            prompt_tab_group_focus_handle,
+            prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             repo_picker_search_input: None,
             recent_repo_picker_search_input: None,
@@ -1068,166 +1074,48 @@ impl PopoverHost {
         self.popover.is_some()
     }
 
-    fn prompt_focus_handles(&self, cx: &mut gpui::Context<Self>) -> Option<Vec<FocusHandle>> {
-        match &self.popover {
-            Some(PopoverKind::CreateBranch) => {
-                let mut handles = vec![
-                    self.create_branch_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                ];
-                if self.can_submit_create_branch(cx) {
-                    handles.push(self.create_branch_submit_focus_handle.clone());
-                }
-                Some(handles)
-            }
-            Some(PopoverKind::CreateBranchFromRefPrompt { .. }) => {
-                let mut handles = vec![
-                    self.create_branch_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                    self.create_branch_from_ref_checkout_focus_handle.clone(),
-                ];
-                if self.can_submit_create_branch(cx) {
-                    handles.push(self.create_branch_from_ref_submit_focus_handle.clone());
-                }
-                Some(handles)
-            }
-            Some(PopoverKind::CheckoutRemoteBranchPrompt { .. }) => Some(vec![
-                self.create_branch_input
-                    .read_with(cx, |input, _| input.focus_handle()),
-                self.checkout_remote_branch_submit_focus_handle.clone(),
-            ]),
-            Some(PopoverKind::StashPrompt) => {
-                let mut handles = vec![
-                    self.stash_message_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                ];
-                if self.can_submit_stash(cx) {
-                    handles.push(self.stash_submit_focus_handle.clone());
-                }
-                Some(handles)
-            }
-            Some(PopoverKind::CloneRepo) => {
-                let mut handles = vec![
-                    self.clone_repo_url_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                    self.clone_repo_parent_dir_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                    self.clone_repo_browse_focus_handle.clone(),
-                ];
-                if self.can_submit_clone_repo(cx) {
-                    handles.push(self.clone_repo_submit_focus_handle.clone());
-                }
-                Some(handles)
-            }
-            Some(PopoverKind::CreateTagPrompt { .. }) => {
-                let mut handles = vec![
-                    self.create_tag_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                ];
-                if self.can_submit_create_tag(cx) {
-                    handles.push(self.create_tag_submit_focus_handle.clone());
-                }
-                Some(handles)
-            }
-            Some(PopoverKind::Repo {
-                kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
-                ..
-            }) => Some(vec![
-                self.remote_name_input
-                    .read_with(cx, |input, _| input.focus_handle()),
-                self.remote_url_input
-                    .read_with(cx, |input, _| input.focus_handle()),
-                self.remote_add_submit_focus_handle.clone(),
-            ]),
-            Some(PopoverKind::Repo {
-                kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { .. }),
-                ..
-            }) => Some(vec![
-                self.remote_url_edit_input
-                    .read_with(cx, |input, _| input.focus_handle()),
-                self.remote_edit_submit_focus_handle.clone(),
-            ]),
-            Some(PopoverKind::PushSetUpstreamPrompt { .. }) => Some(vec![
-                self.push_upstream_branch_input
-                    .read_with(cx, |input, _| input.focus_handle()),
-                self.push_upstream_submit_focus_handle.clone(),
-            ]),
-            Some(PopoverKind::Repo {
-                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
-                ..
-            }) => Some(vec![
-                self.worktree_path_input
-                    .read_with(cx, |input, _| input.focus_handle()),
-                self.worktree_browse_focus_handle.clone(),
-                self.worktree_ref_input
-                    .read_with(cx, |input, _| input.focus_handle()),
-                self.worktree_submit_focus_handle.clone(),
-            ]),
-            Some(PopoverKind::Repo {
-                kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
-                ..
-            }) => {
-                let mut handles = vec![
-                    self.submodule_url_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                    self.submodule_path_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                    self.submodule_branch_input
-                        .read_with(cx, |input, _| input.focus_handle()),
-                    self.submodule_advanced_focus_handle.clone(),
-                ];
-                if self.submodule_add_advanced_expanded {
-                    handles.push(
-                        self.submodule_name_input
-                            .read_with(cx, |input, _| input.focus_handle()),
-                    );
-                    handles.push(self.submodule_force_focus_handle.clone());
-                }
-                handles.push(self.submodule_submit_focus_handle.clone());
-                Some(handles)
-            }
-            _ => None,
-        }
+    fn prompt_tab_navigation_enabled(&self) -> bool {
+        matches!(
+            self.popover,
+            Some(PopoverKind::CreateBranch)
+                | Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
+                | Some(PopoverKind::StashPrompt)
+                | Some(PopoverKind::CloneRepo)
+                | Some(PopoverKind::CreateTagPrompt { .. })
+                | Some(PopoverKind::PushSetUpstreamPrompt { .. })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+                    ..
+                })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { .. }),
+                    ..
+                })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                    ..
+                })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+                    ..
+                })
+        )
     }
 
-    fn focus_prompt_relative(
+    fn wrap_prompt_focus(
         &mut self,
         forward: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(handles) = self.prompt_focus_handles(cx) else {
-            return;
-        };
-        if handles.is_empty() {
-            return;
+        if forward {
+            window.focus(&self.prompt_tab_group_focus_handle, cx);
+            window.focus_next(cx);
+        } else {
+            window.focus(&self.prompt_tab_wrap_end_focus_handle, cx);
+            window.focus_prev(cx);
         }
-
-        let next_ix = match window.focused(cx) {
-            Some(current) => handles
-                .iter()
-                .position(|handle| handle == &current)
-                .map(|ix| {
-                    if forward {
-                        (ix + 1) % handles.len()
-                    } else if ix == 0 {
-                        handles.len() - 1
-                    } else {
-                        ix - 1
-                    }
-                })
-                .unwrap_or_else(|| if forward { 0 } else { handles.len() - 1 }),
-            None => {
-                if forward {
-                    0
-                } else {
-                    handles.len() - 1
-                }
-            }
-        };
-
-        window.focus(&handles[next_ix], cx);
-        cx.stop_propagation();
     }
 
     fn focus_next_prompt_field(
@@ -1236,7 +1124,18 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.focus_prompt_relative(true, window, cx);
+        if !self.prompt_tab_navigation_enabled() {
+            return;
+        }
+
+        window.focus_next(cx);
+        if !self
+            .prompt_tab_group_focus_handle
+            .contains_focused(window, cx)
+        {
+            self.wrap_prompt_focus(true, window, cx);
+        }
+        cx.stop_propagation();
     }
 
     fn focus_prev_prompt_field(
@@ -1245,7 +1144,18 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.focus_prompt_relative(false, window, cx);
+        if !self.prompt_tab_navigation_enabled() {
+            return;
+        }
+
+        window.focus_prev(cx);
+        if !self
+            .prompt_tab_group_focus_handle
+            .contains_focused(window, cx)
+        {
+            self.wrap_prompt_focus(false, window, cx);
+        }
+        cx.stop_propagation();
     }
 
     pub(in super::super) fn dismiss_prompt_popover(
@@ -1287,7 +1197,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.prompt_focus_handles(cx).is_none() {
+        if !self.prompt_tab_navigation_enabled() {
             return;
         }
 
@@ -2338,7 +2248,22 @@ impl PopoverHost {
             panel.into_any_element()
         };
 
-        let prompt_tab_navigation_enabled = self.prompt_focus_handles(cx).is_some();
+        let prompt_tab_navigation_enabled = self.prompt_tab_navigation_enabled();
+        let panel = if prompt_tab_navigation_enabled {
+            div()
+                .track_focus(&self.prompt_tab_group_focus_handle)
+                .tab_group()
+                .child(panel)
+                .child(
+                    div()
+                        .track_focus(&self.prompt_tab_wrap_end_focus_handle)
+                        .w(px(0.0))
+                        .h(px(0.0)),
+                )
+                .into_any_element()
+        } else {
+            panel
+        };
 
         let mut popover_container = div()
             .id("app_popover")

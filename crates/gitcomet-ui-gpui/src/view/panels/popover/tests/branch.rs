@@ -464,8 +464,20 @@ fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::Test
         assert_window_focus(
             window,
             app,
+            host.create_branch_from_ref_cancel_focus_handle.clone(),
+            "expected Tab to move from Checkout to Cancel",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
             host.create_branch_from_ref_submit_focus_handle.clone(),
-            "expected Tab to move from Checkout to Create",
+            "expected Tab to move from Cancel to Create",
         );
     });
 

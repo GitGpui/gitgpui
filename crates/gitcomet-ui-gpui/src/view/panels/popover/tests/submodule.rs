@@ -122,8 +122,20 @@ fn submodule_add_popover_tabs_through_advanced_fields_and_wraps(cx: &mut gpui::T
         assert_window_focus(
             window,
             app,
+            host.submodule_cancel_focus_handle.clone(),
+            "expected Tab to move from Force reuse to Cancel",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
             host.submodule_submit_focus_handle.clone(),
-            "expected Tab to move from Force reuse to Add",
+            "expected Tab to move from Cancel to Add",
         );
     });
 
