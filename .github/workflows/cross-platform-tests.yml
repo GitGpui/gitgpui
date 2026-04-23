@@ -55,12 +55,14 @@ jobs:
             throw "ProcDump ARM64 binary not found at $procDumpExe"
           }
 
-          & $procDumpExe -accepteula -ma -i $dumpDir
+          "CRASH_DUMP_DIR=$dumpDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PROCDUMP_EXE=$procDumpExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Run headless test suite (PowerShell)
+      - name: Run workspace tests except gitcomet harness
         shell: pwsh
         run: |
           cargo test --workspace `
+            --exclude gitcomet `
             --exclude gitcomet-ui `
             --exclude gitcomet-ui-gpui `
             --no-default-features `
@@ -68,11 +70,89 @@ jobs:
             --locked `
             --verbose
 
-      - name: Wait for ProcDump crash dumps and log contents
-        if: failure()
+      - name: Build gitcomet test harness
         shell: pwsh
         run: |
-          $dumpDir = 'C:\CrashDumps'
+          cargo test -p gitcomet `
+            --bin gitcomet `
+            --no-run `
+            --no-default-features `
+            --features gix `
+            --locked `
+            --verbose
+
+      - name: Run gitcomet test harness under ProcDump
+        shell: pwsh
+        run: |
+          $dumpDir = $env:CRASH_DUMP_DIR
+          $procDumpExe = $env:PROCDUMP_EXE
+          $procDumpStdoutLog = Join-Path $dumpDir 'procdump.stdout.log'
+          $procDumpStderrLog = Join-Path $dumpDir 'procdump.stderr.log'
+
+          $harness = Get-ChildItem -Path 'target\debug\deps' -Filter 'gitcomet-*.exe' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $harness) {
+            throw 'gitcomet test harness executable was not found under target\debug\deps.'
+          }
+
+          Write-Host "Running $($harness.Name)"
+          & $harness.FullName --nocapture
+          $harnessExitCode = $LASTEXITCODE
+
+          if ($harnessExitCode -eq 0) {
+            Write-Host 'gitcomet test harness completed successfully.'
+            return
+          }
+
+          $unsignedExitCode = [uint32]$harnessExitCode
+          if ($unsignedExitCode -ne 0xC0000005) {
+            throw "gitcomet test harness exited with code $harnessExitCode"
+          }
+
+          Write-Host "gitcomet test harness crashed with access violation ($harnessExitCode); rerunning under ProcDump."
+
+          Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+          Remove-Item $procDumpStdoutLog, $procDumpStderrLog -Force -ErrorAction SilentlyContinue
+
+          $procDumpArgs = @(
+            '-accepteula'
+            '-ma'
+            '-e'
+            '-n'
+            '1'
+            '-x'
+            $dumpDir
+            $harness.FullName
+            '--nocapture'
+          )
+
+          $procDump = Start-Process -FilePath $procDumpExe `
+            -ArgumentList $procDumpArgs `
+            -PassThru `
+            -WindowStyle Hidden `
+            -Wait `
+            -RedirectStandardOutput $procDumpStdoutLog `
+            -RedirectStandardError $procDumpStderrLog
+
+          Write-Host "ProcDump rerun exited with code $($procDump.ExitCode)"
+
+          $dumps = @(Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue)
+          if ($dumps.Count -eq 0) {
+            throw 'ProcDump rerun did not produce a crash dump.'
+          }
+
+          throw "gitcomet test harness crashed with access violation ($harnessExitCode); crash dump captured for stack trace extraction."
+
+      - name: Collect crash dump and print stack trace
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $dumpDir = if ($env:CRASH_DUMP_DIR) { $env:CRASH_DUMP_DIR } else { 'C:\CrashDumps' }
+          $procDumpStdoutLog = Join-Path $dumpDir 'procdump.stdout.log'
+          $procDumpStderrLog = Join-Path $dumpDir 'procdump.stderr.log'
           $deadline = (Get-Date).AddSeconds(60)
 
           do {
@@ -83,10 +163,83 @@ jobs:
 
           Write-Host 'Crash dump directory contents:'
           if (Test-Path $dumpDir) {
-            Get-ChildItem -Path $dumpDir -Force | Format-Table -AutoSize Name,Length,LastWriteTime
+            Get-ChildItem -Path $dumpDir -Force |
+              Sort-Object Name |
+              Format-Table -AutoSize Name,Length,LastWriteTime
           } else {
-            Write-Host 'C:\CrashDumps does not exist.'
+            Write-Host "$dumpDir does not exist."
           }
+
+          if (Test-Path $procDumpStdoutLog) {
+            Write-Host 'ProcDump stdout:'
+            Get-Content $procDumpStdoutLog
+          }
+
+          if (Test-Path $procDumpStderrLog) {
+            Write-Host 'ProcDump stderr:'
+            Get-Content $procDumpStderrLog
+          }
+
+          $dump = Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $dump) {
+            Write-Host 'No crash dump was captured.'
+            return
+          }
+
+          function Find-Cdb {
+            $command = Get-Command cdb.exe -ErrorAction SilentlyContinue
+            if ($command) {
+              return $command.Source
+            }
+
+            $searchRoots = @(
+              'C:\Program Files (x86)\Windows Kits\10\Debuggers'
+              'C:\Program Files\Windows Kits\10\Debuggers'
+            ) | Where-Object { Test-Path $_ }
+
+            $candidates = @()
+            foreach ($root in $searchRoots) {
+              $candidates += Get-ChildItem -Path $root -Filter cdb.exe -Recurse -ErrorAction SilentlyContinue
+            }
+
+            if ($candidates.Count -eq 0) {
+              return $null
+            }
+
+            $arm64 = $candidates |
+              Where-Object { $_.FullName -match '\\arm64\\' } |
+              Select-Object -First 1
+            if ($arm64) {
+              return $arm64.FullName
+            }
+
+            return ($candidates | Select-Object -First 1).FullName
+          }
+
+          $cdb = Find-Cdb
+          if (-not $cdb) {
+            Write-Host 'cdb.exe was not found on the runner; skipping automated stack trace extraction.'
+            return
+          }
+
+          $stackTracePath = Join-Path $dumpDir 'latest-dump-stack.txt'
+          $workspace = (Get-Location).Path
+          $symbolCache = Join-Path $env:RUNNER_TEMP 'symbols'
+          New-Item -ItemType Directory -Force $symbolCache | Out-Null
+
+          $symbolPath = "srv*$symbolCache*https://msdl.microsoft.com/download/symbols;$workspace\target\debug\deps;$workspace\target\debug"
+          $imagePath = "$workspace\target\debug;$workspace\target\debug\deps"
+
+          Write-Host "Analyzing $($dump.Name) with $cdb"
+          $analysis = & $cdb `
+            -y $symbolPath `
+            -i $imagePath `
+            -z $dump.FullName `
+            -c "!analyze -v; .ecxr; kb; ~*kb; q" 2>&1
+
+          $analysis | Tee-Object -FilePath $stackTracePath
 
       - name: Upload Windows ARM crash dumps
         if: failure()
@@ -94,7 +247,9 @@ jobs:
         with:
           name: windows-arm64-crash-dumps
           if-no-files-found: warn
-          path: C:\CrashDumps\*.dmp
+          path: |
+            C:\CrashDumps\*.dmp
+            C:\CrashDumps\*.txt
 
       - name: Upload Windows ARM symbols and binaries
         if: failure()
