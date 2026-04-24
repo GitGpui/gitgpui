@@ -4393,8 +4393,8 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libmimalloc-sys"
-version = "0.1.46"
-source = "git+https://github.com/havunen/mimalloc_rust.git?rev=85f35a3ae48441af1a306f1e40102024a056e0cb#85f35a3ae48441af1a306f1e40102024a056e0cb"
+version = "0.1.47"
+source = "git+https://github.com/havunen/mimalloc_rust.git?rev=21deed2f30ae821b3146e29d88eb494db7b63ce9#21deed2f30ae821b3146e29d88eb494db7b63ce9"
 dependencies = [
  "cc",
 ]
@@ -4647,8 +4647,8 @@ dependencies = [
 
 [[package]]
 name = "mimalloc"
-version = "0.1.49"
-source = "git+https://github.com/havunen/mimalloc_rust.git?rev=85f35a3ae48441af1a306f1e40102024a056e0cb#85f35a3ae48441af1a306f1e40102024a056e0cb"
+version = "0.1.50"
+source = "git+https://github.com/havunen/mimalloc_rust.git?rev=21deed2f30ae821b3146e29d88eb494db7b63ce9#21deed2f30ae821b3146e29d88eb494db7b63ce9"
 dependencies = [
  "libmimalloc-sys",
 ]
