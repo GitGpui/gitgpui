@@ -175,7 +175,7 @@ impl SidebarPaneView {
         const BRANCH_BADGE_GAP_PX: f32 = 4.0;
         const BRANCH_MENU_GAP_PX: f32 = 6.0;
         const CONTEXT_MENU_INDICATOR_SIZE_PX: f32 = 18.0;
-        const CONTEXT_MENU_INDICATOR_RIGHT_PX: f32 = 6.0;
+        const CONTEXT_MENU_INDICATOR_RIGHT_PX: f32 = 2.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
