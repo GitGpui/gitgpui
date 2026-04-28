@@ -26,10 +26,10 @@ pub use tab_bar::TabBar;
 pub use toast::{ToastKind, toast};
 pub use tokens::*;
 pub(crate) use truncated_text::{
-    TruncatedText, TruncatedTextPathAlignmentGroup, TruncatedTextTooltipMode,
+    PathTruncationAlignmentGroup, TruncatedText, TruncatedTextTooltipMode,
 };
 
+pub(crate) use crate::kit::text_truncation::TextTruncationProfile;
 pub use crate::kit::{
     Scrollbar, ScrollbarAxis, ScrollbarMarker, ScrollbarMarkerKind, TextInput, TextInputOptions,
 };
-pub(crate) use crate::view::text_truncation::TextTruncationProfile;

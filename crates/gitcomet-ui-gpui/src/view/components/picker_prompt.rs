@@ -2,7 +2,6 @@ use super::control_height_md;
 use crate::kit::{Scrollbar, ScrollbarAxis, TextInput};
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
-use crate::view::text_truncation::TextTruncationProfile;
 use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
@@ -12,7 +11,7 @@ use gpui::{
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::{TruncatedText, TruncatedTextTooltipMode};
+use super::{TextTruncationProfile, TruncatedText};
 
 pub struct PickerPrompt {
     query_input: Entity<TextInput>,
@@ -251,10 +250,6 @@ impl PickerPromptItemPart {
         Self::new(text).profile(TextTruncationProfile::Path)
     }
 
-    pub fn middle(text: impl Into<SharedString>) -> Self {
-        Self::new(text).profile(TextTruncationProfile::Middle)
-    }
-
     pub fn profile(mut self, profile: TextTruncationProfile) -> Self {
         self.profile = profile;
         self
@@ -384,16 +379,16 @@ fn picker_item_label<V: 'static>(
             container = container.flex_shrink_0();
         }
 
-        let mut text = TruncatedText::new(part.text.clone()).profile(part.profile);
+        let mut text = TruncatedText::new(part.text.clone())
+            .id(("picker_prompt_label_part_text", ix))
+            .profile(part.profile);
         if let Some(highlight_range) = highlight_range.clone() {
             text = text
                 .focus_range(Some(highlight_range.clone()))
                 .highlights([(highlight_range, match_highlight)]);
         }
         if let Some(tooltip_host) = tooltip_host.clone() {
-            text = text
-                .tooltip_host(tooltip_host)
-                .tooltip_mode(TruncatedTextTooltipMode::FullTextIfTruncated);
+            text = text.full_text_tooltip(tooltip_host);
         }
 
         label = label.child(

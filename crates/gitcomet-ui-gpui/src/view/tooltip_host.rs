@@ -61,6 +61,26 @@ impl TooltipHost {
         true
     }
 
+    pub(crate) fn clear_tooltip(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        let had_tooltip = self.tooltip_text.is_some()
+            || self.tooltip_candidate_last.is_some()
+            || self.tooltip_visible_text.is_some()
+            || self.tooltip_pending_pos.is_some()
+            || self.tooltip_visible_pos.is_some();
+        if !had_tooltip {
+            return false;
+        }
+
+        self.tooltip_text = None;
+        self.tooltip_candidate_last = None;
+        self.tooltip_visible_text = None;
+        self.tooltip_pending_pos = None;
+        self.tooltip_visible_pos = None;
+        self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
+        cx.notify();
+        true
+    }
+
     pub(crate) fn on_mouse_moved(&mut self, pos: Point<Pixels>, cx: &mut gpui::Context<Self>) {
         self.last_mouse_pos = pos;
         self.maybe_restart_tooltip_delay(cx);

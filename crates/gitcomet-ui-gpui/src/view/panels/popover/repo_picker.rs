@@ -31,9 +31,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     if let Some(&repo_id) = repo_ids.get(ix) {
                         this.store.dispatch(Msg::SetActiveRepo { repo_id });
                     }
-                    this.popover = None;
-                    this.popover_anchor = None;
-                    cx.notify();
+                    this.close_popover(cx);
                 }),
         )
         .w(scaled_px(420.0))

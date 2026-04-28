@@ -31,9 +31,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                 if let Some(name) = branch_names.get(ix).cloned() {
                                     this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                                 }
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
+                                this.close_popover(cx);
                             }),
                     );
                 } else {
@@ -58,9 +56,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                         repo_id,
                                         name: name.clone(),
                                     });
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
+                                    this.close_popover(cx);
                                 },
                             )),
                         );

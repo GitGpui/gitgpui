@@ -89,7 +89,6 @@ mod splash;
 mod state_apply;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub(crate) mod text_truncation;
 mod toast_host;
 mod tooltip;
 mod tooltip_host;

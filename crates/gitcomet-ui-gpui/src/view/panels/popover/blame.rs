@@ -34,12 +34,9 @@ pub(super) fn panel(
                         .text_xs()
                         .text_color(theme.colors.text_muted)
                         .child(
-                            components::TruncatedText::new(title.clone())
-                                .profile(components::TextTruncationProfile::Path)
-                                .tooltip_host(this.tooltip_host.clone())
-                                .tooltip_mode(
-                                    components::TruncatedTextTooltipMode::FullTextIfTruncated,
-                                )
+                            components::TruncatedText::path(title.clone())
+                                .id(("blame_title_path", repo_id.0))
+                                .full_text_tooltip(this.tooltip_host.clone())
                                 .render(cx),
                         ),
                 )
@@ -55,11 +52,7 @@ pub(super) fn panel(
         .child(
             components::Button::new("blame_close", "Close")
                 .style(components::ButtonStyle::Outlined)
-                .on_click(theme, cx, |this, _e, _w, cx| {
-                    this.popover = None;
-                    this.popover_anchor = None;
-                    cx.notify();
-                }),
+                .on_click(theme, cx, |this, _e, _w, cx| this.close_popover(cx)),
         );
 
     let body: AnyElement = match repo.map(|r| &r.history_state.blame) {
@@ -234,9 +227,7 @@ fn render_blame_popover_rows(
                             path: Some(path.clone()),
                         },
                     });
-                    this.popover = None;
-                    this.popover_anchor = None;
-                    cx.notify();
+                    this.close_popover(cx);
                 }))
                 .into_any_element(),
         );

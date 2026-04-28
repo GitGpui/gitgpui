@@ -1,6 +1,6 @@
 use super::super::path_display;
-use super::super::text_truncation::path_alignment_visible_signature;
 use super::super::*;
+use crate::kit::text_truncation::path_alignment_visible_signature;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -52,12 +52,11 @@ pub(in super::super) struct DetailsPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
-    pub(in super::super) untracked_path_alignment_group:
-        components::TruncatedTextPathAlignmentGroup,
-    pub(in super::super) unstaged_path_alignment_group: components::TruncatedTextPathAlignmentGroup,
-    pub(in super::super) staged_path_alignment_group: components::TruncatedTextPathAlignmentGroup,
+    pub(in super::super) untracked_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) unstaged_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) staged_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) commit_files_path_alignment_group:
-        components::TruncatedTextPathAlignmentGroup,
+        components::PathTruncationAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -351,11 +350,10 @@ impl DetailsPaneView {
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
-            untracked_path_alignment_group: components::TruncatedTextPathAlignmentGroup::default(),
-            unstaged_path_alignment_group: components::TruncatedTextPathAlignmentGroup::default(),
-            staged_path_alignment_group: components::TruncatedTextPathAlignmentGroup::default(),
-            commit_files_path_alignment_group: components::TruncatedTextPathAlignmentGroup::default(
-            ),
+            untracked_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            unstaged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            staged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            commit_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
         };
         pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
@@ -521,7 +519,7 @@ impl DetailsPaneView {
     pub(in super::super) fn status_path_alignment_group(
         &self,
         section: StatusSection,
-    ) -> &components::TruncatedTextPathAlignmentGroup {
+    ) -> &components::PathTruncationAlignmentGroup {
         match section {
             StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
                 &self.unstaged_path_alignment_group

@@ -1,9 +1,9 @@
 use super::text_model::{TextModel, TextModelSnapshot};
-use crate::theme::AppTheme;
-use crate::view::components::CONTROL_HEIGHT_PX;
-use crate::view::text_truncation::{
+use crate::kit::text_truncation::{
     TextTruncationProfile, TruncatedLineLayout, shape_truncated_line_cached,
 };
+use crate::theme::AppTheme;
+use crate::view::components::CONTROL_HEIGHT_PX;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler,

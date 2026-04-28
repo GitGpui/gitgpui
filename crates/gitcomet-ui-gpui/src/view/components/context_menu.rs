@@ -2,7 +2,7 @@ use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
 use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
-use gpui::{CursorStyle, Div, ElementId, SharedString, Stateful, WeakEntity, div, px};
+use gpui::{CursorStyle, Div, ElementId, Rgba, SharedString, Stateful, WeakEntity, div, px};
 
 use super::control_height_md;
 use super::{TextTruncationProfile, TruncatedText, TruncatedTextTooltipMode};
@@ -28,13 +28,6 @@ impl ContextMenuText {
     pub fn path_single_line(text: impl Into<SharedString>) -> Self {
         Self::new(text)
             .profile(TextTruncationProfile::Path)
-            .max_lines(1)
-            .tooltip_mode(TruncatedTextTooltipMode::FullTextIfTruncated)
-    }
-
-    pub fn middle_single_line(text: impl Into<SharedString>) -> Self {
-        Self::new(text)
-            .profile(TextTruncationProfile::Middle)
             .max_lines(1)
             .tooltip_mode(TruncatedTextTooltipMode::FullTextIfTruncated)
     }
@@ -120,6 +113,7 @@ pub fn context_menu_header<V: 'static>(
             tooltip_host,
             cx,
             max_lines,
+            theme.colors.text_muted,
         ))
 }
 
@@ -144,7 +138,13 @@ pub fn context_menu_label<V: 'static>(
         .text_color(theme.colors.text)
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
-        .child(context_menu_text_content(text, tooltip_host, cx, max_lines))
+        .child(context_menu_text_content(
+            text,
+            tooltip_host,
+            cx,
+            max_lines,
+            theme.colors.text,
+        ))
 }
 
 pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> Div {
@@ -175,6 +175,11 @@ pub fn context_menu_entry(
         .as_ref()
         .and_then(|icon| context_menu_icon_path(icon.as_ref(), label.as_ref()));
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
+    let text_color = if disabled {
+        theme.colors.text_muted
+    } else {
+        theme.colors.text
+    };
 
     let mut row = div()
         .id(id)
@@ -188,7 +193,7 @@ pub fn context_menu_entry(
         .justify_between()
         .gap(scaled_px(8.0))
         .rounded(px(theme.radii.row))
-        .text_color(theme.colors.text)
+        .text_color(text_color)
         .when(selected, |s| s.bg(theme.colors.hover))
         .when(!disabled, |s| {
             s.cursor(CursorStyle::PointingHand)
@@ -222,6 +227,7 @@ pub fn context_menu_entry(
                         .min_w(px(0.0))
                         .text_sm()
                         .line_height(scaled_px(18.0))
+                        .text_color(text_color)
                         .line_clamp(1)
                         .child(label),
                 ),
@@ -379,18 +385,24 @@ fn context_menu_text_content<V: 'static>(
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     cx: &gpui::Context<V>,
     max_lines: usize,
+    text_color: Rgba,
 ) -> impl IntoElement {
     if max_lines == 1 {
-        let mut truncated = TruncatedText::new(text.text.clone()).profile(text.profile);
-        if let Some(tooltip_host) = tooltip_host {
-            truncated = truncated
-                .tooltip_host(tooltip_host)
-                .tooltip_mode(text.tooltip_mode);
+        let mut truncated = TruncatedText::new(text.text.clone())
+            .profile(text.profile)
+            .text_color(text_color);
+        if let (Some(tooltip_host), TruncatedTextTooltipMode::FullTextIfTruncated) =
+            (tooltip_host, text.tooltip_mode)
+        {
+            truncated = truncated.full_text_tooltip(tooltip_host);
         }
         return truncated.render(cx).into_any_element();
     }
 
-    div().child(text.text).into_any_element()
+    div()
+        .text_color(text_color)
+        .child(text.text)
+        .into_any_element()
 }
 
 #[cfg(test)]

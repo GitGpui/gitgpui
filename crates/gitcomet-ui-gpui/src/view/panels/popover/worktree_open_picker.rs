@@ -85,9 +85,7 @@ pub(super) fn panel(
                                     return;
                                 };
                                 this.store.dispatch(Msg::OpenRepo(path));
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
+                                this.close_popover(cx);
                             }),
                     )
                     .w(scaled_px(520.0))

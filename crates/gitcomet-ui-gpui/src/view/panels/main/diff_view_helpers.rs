@@ -63,12 +63,9 @@ impl MainPaneView {
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
                             .child(
-                                components::TruncatedText::new(text)
-                                    .profile(components::TextTruncationProfile::Path)
-                                    .tooltip_host(self.tooltip_host.clone())
-                                    .tooltip_mode(
-                                        components::TruncatedTextTooltipMode::FullTextIfTruncated,
-                                    )
+                                components::TruncatedText::path(text)
+                                    .id(("diff_title_path", 0usize))
+                                    .full_text_tooltip(self.tooltip_host.clone())
                                     .render(cx),
                             ),
                     )
