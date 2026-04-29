@@ -13,7 +13,7 @@ fn write_text_platform_fallback(text: &str) {
     // so mouse-triggered copies can be rejected by the compositor.
     thread_local! {
         static X11_CLIPBOARD: std::cell::RefCell<Option<x11_clipboard::Clipboard>> =
-            std::cell::RefCell::new(None);
+            const { std::cell::RefCell::new(None) };
     }
 
     X11_CLIPBOARD.with(|clipboard| {

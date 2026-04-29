@@ -930,6 +930,7 @@ impl PopoverHost {
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
         let model_for_keys = model.clone();
         let model_for_mouse = model.clone();
+        let tooltip_host = self.tooltip_host.clone();
 
         let focus = self.context_menu_focus_handle.clone();
         let current_selected = self.context_menu_selected_ix;
@@ -1028,16 +1029,24 @@ impl PopoverHost {
                                 .id(("context_menu_sep", ix))
                                 .into_any_element()
                         }
-                        ContextMenuItem::Header(title) => {
-                            components::context_menu_header(theme, ui_scale, title)
-                                .id(("context_menu_header", ix))
-                                .into_any_element()
-                        }
-                        ContextMenuItem::Label(text) => {
-                            components::context_menu_label(theme, ui_scale, text)
-                                .id(("context_menu_label", ix))
-                                .into_any_element()
-                        }
+                        ContextMenuItem::Header(title) => components::context_menu_header(
+                            theme,
+                            ui_scale,
+                            title,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_header", ix))
+                        .into_any_element(),
+                        ContextMenuItem::Label(text) => components::context_menu_label(
+                            theme,
+                            ui_scale,
+                            text,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_label", ix))
+                        .into_any_element(),
                         ContextMenuItem::Entry {
                             label,
                             icon,
