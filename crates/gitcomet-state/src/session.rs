@@ -146,6 +146,16 @@ struct UiSessionFile {
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
+    survey_prompt: Option<SurveyPromptSession>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+struct SurveyPromptSession {
+    survey_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opened_at_unix_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    postponed_until_unix_seconds: Option<u64>,
 }
 
 const SESSION_FILE_VERSION_V1: u32 = 1;
@@ -851,6 +861,122 @@ pub fn persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
     persist_to_path(session_file_path, &file)
 }
 
+pub fn should_show_survey_prompt(survey_id: &str) -> bool {
+    let Some(session_file_path) = default_session_file_path() else {
+        return false;
+    };
+    should_show_survey_prompt_from_path(&session_file_path, survey_id, current_unix_seconds())
+}
+
+pub fn should_show_survey_prompt_from_path(
+    session_file_path: &Path,
+    survey_id: &str,
+    now_unix_seconds: u64,
+) -> bool {
+    let Some(file) = load_file(session_file_path) else {
+        return false;
+    };
+    if !has_recorded_session_repository(&file) {
+        return false;
+    }
+
+    let Some(prompt) = file.survey_prompt else {
+        return true;
+    };
+    if prompt.survey_id != survey_id {
+        return true;
+    }
+    if prompt.opened_at_unix_seconds.is_some() {
+        return false;
+    }
+
+    prompt
+        .postponed_until_unix_seconds
+        .is_none_or(|postponed_until| postponed_until <= now_unix_seconds)
+}
+
+pub fn persist_survey_prompt_opened(survey_id: &str) -> io::Result<()> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_survey_prompt_opened_to_path(&session_file_path, survey_id, current_unix_seconds())
+}
+
+pub fn persist_survey_prompt_opened_to_path(
+    session_file_path: &Path,
+    survey_id: &str,
+    now_unix_seconds: u64,
+) -> io::Result<()> {
+    let mut file = load_file(session_file_path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    file.survey_prompt = Some(SurveyPromptSession {
+        survey_id: survey_id.to_string(),
+        opened_at_unix_seconds: Some(now_unix_seconds),
+        postponed_until_unix_seconds: None,
+    });
+
+    persist_to_path(session_file_path, &file)
+}
+
+pub fn persist_survey_prompt_postponed(survey_id: &str, postpone_seconds: u64) -> io::Result<()> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_survey_prompt_postponed_to_path(
+        &session_file_path,
+        survey_id,
+        postpone_seconds,
+        current_unix_seconds(),
+    )
+}
+
+pub fn persist_survey_prompt_postponed_to_path(
+    session_file_path: &Path,
+    survey_id: &str,
+    postpone_seconds: u64,
+    now_unix_seconds: u64,
+) -> io::Result<()> {
+    let mut file = load_file(session_file_path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    file.survey_prompt = Some(SurveyPromptSession {
+        survey_id: survey_id.to_string(),
+        opened_at_unix_seconds: None,
+        postponed_until_unix_seconds: Some(now_unix_seconds.saturating_add(postpone_seconds)),
+    });
+
+    persist_to_path(session_file_path, &file)
+}
+
+fn current_unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+// Survey eligibility only needs a usage signal. A recorded repository means the user has used
+// GitComet before; it does not need to prove the repository still exists on disk.
+fn has_recorded_session_repository(file: &UiSessionFile) -> bool {
+    if file.open_repos.iter().any(|path| !path.trim().is_empty()) {
+        return true;
+    }
+    if file
+        .active_repo
+        .as_deref()
+        .is_some_and(|path| !path.trim().is_empty())
+    {
+        return true;
+    }
+    if file
+        .recent_repos
+        .as_ref()
+        .is_some_and(|paths| paths.iter().any(|path| !path.trim().is_empty()))
+    {
+        return true;
+    }
+    false
+}
+
 fn parse_repos(
     open_repos_raw: Vec<String>,
     active_repo_raw: Option<String>,
@@ -1466,6 +1592,270 @@ mod tests {
                 .repo_fetch_prune_deleted_remote_tracking_branches
                 .get(&path_storage_key(&repo_c)),
             Some(&true)
+        );
+    }
+
+    #[test]
+    fn survey_prompt_requires_recorded_repository() {
+        const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
+        let dir = unique_session_test_dir("survey-empty-session");
+        let session_file = dir.join("session.json");
+
+        assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        fs::write(&session_file, b"{not-json").expect("write malformed session");
+        assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        fs::write(&session_file, br#"{"version":3}"#).expect("write version-only session");
+        assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                survey_prompt: Some(SurveyPromptSession {
+                    survey_id: SURVEY_ID.to_string(),
+                    opened_at_unix_seconds: None,
+                    postponed_until_unix_seconds: Some(50),
+                }),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist survey-only session");
+        assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                window_width: Some(1200),
+                window_height: Some(800),
+                theme_mode: Some("dark".to_string()),
+                repo_history_scopes: Some(BTreeMap::from([(
+                    "/tmp/repo".to_string(),
+                    HistoryScopeSetting::AllBranches,
+                )])),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist non-repo session data");
+        assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+    }
+
+    #[test]
+    fn survey_prompt_accepts_recorded_repository_sources() {
+        const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
+        let dir = unique_session_test_dir("survey-repository-sources");
+        let session_file = dir.join("session.json");
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: vec![" /tmp/open-repo ".to_string()],
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist open repo session");
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                active_repo: Some("/tmp/active-repo".to_string()),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist active repo session");
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                recent_repos: Some(vec!["\t/tmp/recent-repo\n".to_string()]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist recent repo session");
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+    }
+
+    #[test]
+    fn survey_prompt_respects_id_opened_and_postponed_state() {
+        const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
+        const NEXT_SURVEY_ID: &str = "gitcomet_user_survey_2026_05";
+        const POSTPONE_SECONDS: u64 = 60 * 60 * 24 * 7;
+        let dir = unique_session_test_dir("survey-prompt-state");
+        let session_file = dir.join("session.json");
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: vec!["/tmp/repo".to_string()],
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist eligible session");
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        persist_survey_prompt_postponed_to_path(&session_file, SURVEY_ID, POSTPONE_SECONDS, 100)
+            .expect("persist postponed survey");
+        let postponed_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&session_file).expect("read postponed session"))
+                .expect("postponed session json parses");
+        assert_eq!(
+            postponed_json
+                .pointer("/survey_prompt/survey_id")
+                .and_then(|value| value.as_str()),
+            Some(SURVEY_ID)
+        );
+        assert_eq!(
+            postponed_json
+                .pointer("/survey_prompt/postponed_until_unix_seconds")
+                .and_then(|value| value.as_u64()),
+            Some(100 + POSTPONE_SECONDS)
+        );
+        assert!(
+            postponed_json
+                .pointer("/survey_prompt/opened_at_unix_seconds")
+                .is_none()
+        );
+        assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100 + POSTPONE_SECONDS - 1
+        ));
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100 + POSTPONE_SECONDS
+        ));
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            NEXT_SURVEY_ID,
+            100
+        ));
+
+        persist_survey_prompt_opened_to_path(&session_file, SURVEY_ID, 200)
+            .expect("persist opened survey");
+        let opened_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&session_file).expect("read opened session"))
+                .expect("opened session json parses");
+        assert_eq!(
+            opened_json
+                .pointer("/survey_prompt/survey_id")
+                .and_then(|value| value.as_str()),
+            Some(SURVEY_ID)
+        );
+        assert_eq!(
+            opened_json
+                .pointer("/survey_prompt/opened_at_unix_seconds")
+                .and_then(|value| value.as_u64()),
+            Some(200)
+        );
+        assert!(
+            opened_json
+                .pointer("/survey_prompt/postponed_until_unix_seconds")
+                .is_none()
+        );
+        assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            300
+        ));
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            NEXT_SURVEY_ID,
+            300
+        ));
+    }
+
+    #[test]
+    fn survey_prompt_persistence_preserves_existing_session_fields() {
+        const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
+        let dir = unique_session_test_dir("survey-preserves-session");
+        let session_file = dir.join("session.json");
+        let repo = dir.join("repo");
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: vec![path_storage_key(&repo)],
+                active_repo: Some(path_storage_key(&repo)),
+                recent_repos: Some(vec![path_storage_key(&repo)]),
+                theme_mode: Some("dark".to_string()),
+                repo_history_scopes: Some(BTreeMap::from([(
+                    path_storage_key(&repo),
+                    HistoryScopeSetting::AllBranches,
+                )])),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_survey_prompt_opened_to_path(&session_file, SURVEY_ID, 123)
+            .expect("persist survey opened");
+
+        let file = load_file(&session_file).expect("load session file");
+        assert_eq!(file.open_repos, vec![path_storage_key(&repo)]);
+        assert_eq!(
+            file.active_repo.as_deref(),
+            Some(path_storage_key(&repo).as_str())
+        );
+        assert_eq!(file.theme_mode.as_deref(), Some("dark"));
+        assert_eq!(
+            file.repo_history_scopes
+                .as_ref()
+                .and_then(|scopes| scopes.get(&path_storage_key(&repo))),
+            Some(&HistoryScopeSetting::AllBranches)
+        );
+        assert_eq!(
+            file.survey_prompt,
+            Some(SurveyPromptSession {
+                survey_id: SURVEY_ID.to_string(),
+                opened_at_unix_seconds: Some(123),
+                postponed_until_unix_seconds: None,
+            })
         );
     }
 

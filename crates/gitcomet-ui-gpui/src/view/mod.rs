@@ -96,6 +96,7 @@ mod toast_host;
 mod tooltip;
 mod tooltip_host;
 mod update_check;
+mod user_survey;
 mod word_diff;
 
 use app_model::AppUiModel;
@@ -984,6 +985,7 @@ impl GitCometView {
         view.maybe_auto_install_linux_desktop_integration(cx);
 
         view.drive_focused_mergetool_bootstrap();
+        view.maybe_show_user_survey_on_startup(cx);
         view.maybe_check_for_updates_on_startup(cx);
 
         crate::app::sync_gitcomet_window_state(
