@@ -344,6 +344,99 @@ fn prepared_streamed_diff_text_spec(
     streamed_diff_text_spec_with_syntax(raw_text, query, word_ranges, word_color, syntax)
 }
 
+fn build_file_diff_cached_styled_text(
+    theme: AppTheme,
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    word_ranges: &[Range<usize>],
+    context_prefix: &str,
+    language: Option<DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    word_color: Option<gpui::Rgba>,
+) -> CachedDiffStyledText {
+    if should_truncate_file_diff_display(raw_text) {
+        let display = file_diff_display_text(raw_text);
+        return build_cached_diff_styled_text(
+            theme,
+            display.as_ref(),
+            &[],
+            context_prefix,
+            None,
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+    }
+
+    build_cached_diff_styled_text(
+        theme,
+        raw_text.as_ref(),
+        word_ranges,
+        context_prefix,
+        language,
+        syntax_mode,
+        word_color,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+    theme: AppTheme,
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    word_ranges: &[Range<usize>],
+    context_prefix: &str,
+    syntax: DiffSyntaxConfig,
+    word_color: Option<gpui::Rgba>,
+    projected: rows::PreparedDiffSyntaxLine,
+) -> (CachedDiffStyledText, bool) {
+    if should_truncate_file_diff_display(raw_text) {
+        let display = file_diff_display_text(raw_text);
+        return (
+            build_cached_diff_styled_text(
+                theme,
+                display.as_ref(),
+                &[],
+                context_prefix,
+                None,
+                DiffSyntaxMode::HeuristicOnly,
+                None,
+            ),
+            false,
+        );
+    }
+
+    build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+        theme,
+        raw_text.as_ref(),
+        word_ranges,
+        context_prefix,
+        syntax,
+        word_color,
+        projected,
+    )
+    .into_parts()
+}
+
+fn file_diff_split_side_text(
+    row: &FileDiffRow,
+    is_left: bool,
+) -> Option<&gitcomet_core::file_diff::FileDiffLineText> {
+    if is_left {
+        row.old.as_ref()
+    } else {
+        row.new.as_ref()
+    }
+}
+
+fn file_diff_split_side_text_owned(
+    row: &FileDiffRow,
+    is_left: bool,
+) -> Option<gitcomet_core::file_diff::FileDiffLineText> {
+    file_diff_split_side_text(row, is_left).cloned()
+}
+
+fn file_diff_split_side_line(row: &FileDiffRow, is_left: bool) -> Option<u32> {
+    if is_left { row.old_line } else { row.new_line }
+}
+
 impl MainPaneView {
     fn diff_text_segments_cache_get_for_query(
         &mut self,
@@ -409,7 +502,6 @@ impl MainPaneView {
             let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
             let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
             let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
-            let syntax_mode = this.patch_diff_syntax_mode();
             let pinned_hunk_shell_width = collapsed_hunk_shell_width(&this.diff_scroll, min_width);
             let pinned_hunk_shell_scroll = this.diff_scroll.clone();
 
@@ -427,61 +519,25 @@ impl MainPaneView {
                     };
 
                     match row {
-                        CollapsedDiffVisibleRow::HunkHeader { src_ix, .. } => {
+                        CollapsedDiffVisibleRow::HunkHeader {
+                            src_ix,
+                            expansion_kind,
+                            hidden_rows,
+                            ..
+                        } => {
                             let display_src_ix = row.header_display_src_ix();
-                            let expansion_kind = row
-                                .expansion_kind()
-                                .unwrap_or(CollapsedDiffExpansionKind::None);
                             let display = display_src_ix
                                 .and_then(|display_src_ix| {
                                     this.collapsed_diff_hunk_header_display(display_src_ix)
                                 })
                                 .unwrap_or_default();
-                            let header_key: Option<usize> = None;
-                            if !query.is_empty()
-                                && let Some(header_key) = header_key
-                                && this.diff_text_segments_cache_get(header_key, 0).is_none()
-                            {
-                                let computed = build_cached_diff_styled_text(
-                                    theme,
-                                    display.as_ref(),
-                                    &[],
-                                    "",
-                                    None,
-                                    syntax_mode,
-                                    None,
-                                );
-                                this.diff_text_segments_cache_set(header_key, 0, computed);
-                            }
                             let context_menu_active = display_src_ix.is_some()
                                 && this.active_repo_id().is_some_and(|repo_id| {
                                     let invoker: SharedString =
                                         format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                                     this.active_context_menu_invoker.as_ref() == Some(&invoker)
                                 });
-                            let hidden_rows = match expansion_kind {
-                                CollapsedDiffExpansionKind::Down => {
-                                    this.collapsed_diff_hidden_down_rows(src_ix)
-                                }
-                                CollapsedDiffExpansionKind::Up
-                                | CollapsedDiffExpansionKind::Both
-                                | CollapsedDiffExpansionKind::Short => {
-                                    this.collapsed_diff_hidden_up_rows(src_ix)
-                                }
-                                CollapsedDiffExpansionKind::None => 0,
-                            };
                             let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
-                            let styled = if !query.is_empty() {
-                                header_key.and_then(|header_key| {
-                                    this.diff_text_segments_cache_get_for_query(
-                                        header_key,
-                                        query.as_ref(),
-                                        0,
-                                    )
-                                })
-                            } else {
-                                None
-                            };
 
                             collapsed_inline_header_row(
                                 theme,
@@ -495,7 +551,7 @@ impl MainPaneView {
                                 collapsed_hunk,
                                 None,
                                 display,
-                                styled,
+                                None,
                                 context_menu_active,
                                 src_ix,
                                 expansion_kind,
@@ -504,22 +560,21 @@ impl MainPaneView {
                             )
                         }
                         CollapsedDiffVisibleRow::FileRow { row_ix } => {
-                            let row_word_ranges = this
-                                .file_diff_inline_modify_pair_texts(row_ix)
-                                .map(|(old, new, kind)| {
-                                    let (old_ranges, new_ranges) =
-                                        capped_word_diff_ranges(old.as_ref(), new.as_ref());
-                                    match kind {
-                                        DiffLineKind::Remove => old_ranges,
-                                        DiffLineKind::Add => new_ranges,
-                                        DiffLineKind::Context
-                                        | DiffLineKind::Header
-                                        | DiffLineKind::Hunk => Vec::new(),
-                                    }
-                                })
-                                .unwrap_or_default();
-                            let render_data = this.file_diff_inline_render_data(row_ix);
-                            let streamed_spec = render_data.as_ref().and_then(|row| {
+                            let row_word_ranges = this.file_diff_inline_word_ranges(row_ix);
+                            let Some(row) = this.file_diff_inline_render_data(row_ix) else {
+                                return diff_placeholder_row(
+                                    ("collapsed_diff_oob", visible_ix),
+                                    theme,
+                                    ui_scale_percent,
+                                );
+                            };
+                            let line = AnnotatedDiffLine {
+                                kind: row.kind,
+                                text: "".into(),
+                                old_line: row.old_line,
+                                new_line: row.new_line,
+                            };
+                            let streamed_spec = {
                                 let line_language = matches!(
                                     row.kind,
                                     DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -564,8 +619,7 @@ impl MainPaneView {
                                         Arc::clone(&new_line_starts),
                                     ),
                                 };
-                                let syntax_mode =
-                                    syntax_mode_for_prepared_document(prepared_line.document);
+                                let syntax_mode = DiffSyntaxMode::Auto;
                                 prepared_streamed_diff_text_spec(
                                     row.text.clone(),
                                     &query,
@@ -577,79 +631,13 @@ impl MainPaneView {
                                     line_starts,
                                     prepared_line,
                                 )
-                            });
+                            };
 
-                            let (line, styled) = if let Some(row) = render_data.as_ref() {
-                                if streamed_spec.is_some() {
-                                    (
-                                        AnnotatedDiffLine {
-                                            kind: row.kind,
-                                            text: "".into(),
-                                            old_line: row.old_line,
-                                            new_line: row.new_line,
-                                        },
-                                        None,
-                                    )
-                                } else {
-                                    let Some(line) = this.file_diff_inline_row(row_ix) else {
-                                        return diff_placeholder_row(
-                                            ("collapsed_diff_oob", visible_ix),
-                                            theme,
-                                            ui_scale_percent,
-                                        );
-                                    };
-                                    let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
-                                    if this
-                                        .diff_text_segments_cache_get(row_ix, cache_epoch)
-                                        .is_none()
-                                    {
-                                        let word_color = diff_line_word_color(line.kind, theme);
-                                        let is_content_line = matches!(
-                                            line.kind,
-                                            DiffLineKind::Add
-                                                | DiffLineKind::Remove
-                                                | DiffLineKind::Context
-                                        );
-                                        let line_language =
-                                            is_content_line.then_some(language).flatten();
-                                        let projected = this.file_diff_inline_projected_syntax(&line);
-                                        let syntax_mode =
-                                            syntax_mode_for_prepared_document(projected.document);
-                                        let (styled, is_pending) =
-                                            build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
-                                                theme,
-                                                diff_content_text(&line),
-                                                row_word_ranges.as_slice(),
-                                                "",
-                                                DiffSyntaxConfig {
-                                                    language: line_language,
-                                                    mode: syntax_mode,
-                                                },
-                                                word_color,
-                                                projected,
-                                            )
-                                            .into_parts();
-                                        if is_pending {
-                                            this.ensure_prepared_syntax_chunk_poll(cx);
-                                        }
-                                        this.diff_text_segments_cache_set(row_ix, cache_epoch, styled);
-                                    }
-                                    let styled = this.diff_text_segments_cache_get_for_query(
-                                        row_ix,
-                                        query.as_ref(),
-                                        cache_epoch,
-                                    );
-                                    (line, styled)
-                                }
+                            let styled = if streamed_spec.is_some() {
+                                None
                             } else {
-                                let Some(line) = this.file_diff_inline_row(row_ix) else {
-                                    return diff_placeholder_row(
-                                        ("collapsed_diff_oob", visible_ix),
-                                        theme,
-                                        ui_scale_percent,
-                                    );
-                                };
-                                let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
+                                let cache_epoch =
+                                    this.file_diff_style_cache_epochs.inline_epoch(row.kind);
                                 if this
                                     .diff_text_segments_cache_get(row_ix, cache_epoch)
                                     .is_none()
@@ -662,12 +650,11 @@ impl MainPaneView {
                                     let line_language =
                                         is_content_line.then_some(language).flatten();
                                     let projected = this.file_diff_inline_projected_syntax(&line);
-                                    let syntax_mode =
-                                        syntax_mode_for_prepared_document(projected.document);
+                                    let syntax_mode = DiffSyntaxMode::Auto;
                                     let (styled, is_pending) =
-                                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                        build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                             theme,
-                                            diff_content_text(&line),
+                                            &row.text,
                                             row_word_ranges.as_slice(),
                                             "",
                                             DiffSyntaxConfig {
@@ -676,19 +663,17 @@ impl MainPaneView {
                                             },
                                             word_color,
                                             projected,
-                                        )
-                                        .into_parts();
+                                        );
                                     if is_pending {
                                         this.ensure_prepared_syntax_chunk_poll(cx);
                                     }
                                     this.diff_text_segments_cache_set(row_ix, cache_epoch, styled);
                                 }
-                                let styled = this.diff_text_segments_cache_get_for_query(
+                                this.diff_text_segments_cache_get_for_query(
                                     row_ix,
                                     query.as_ref(),
                                     cache_epoch,
-                                );
-                                (line, styled)
+                                )
                             };
 
                             diff_row(
@@ -724,21 +709,34 @@ impl MainPaneView {
             // documents instead of parsing a synthetic mixed inline stream.
             // syntax_mode is determined per-row based on projection availability.
             if let Some(language) = language {
+                struct SyntaxOnlyBatchRow {
+                    inline_ix: usize,
+                    cache_epoch: u64,
+                    line: AnnotatedDiffLine,
+                    text: gitcomet_core::file_diff::FileDiffLineText,
+                }
+
                 let mut syntax_only_rows = Vec::new();
                 for visible_ix in range.clone() {
                     let Some(inline_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         continue;
                     };
-                    if this
-                        .file_diff_inline_render_data(inline_ix)
-                        .is_some_and(|row| diff_canvas::is_streamable_diff_text(&row.text))
-                    {
-                        continue;
-                    }
-                    let Some(line) = this.file_diff_inline_row(inline_ix) else {
+                    let Some(row) = this.file_diff_inline_render_data(inline_ix) else {
                         continue;
                     };
-                    let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
+                    if diff_canvas::is_streamable_diff_text(&row.text) {
+                        continue;
+                    }
+                    if should_truncate_file_diff_display(&row.text) {
+                        continue;
+                    }
+                    let line = AnnotatedDiffLine {
+                        kind: row.kind,
+                        text: "".into(),
+                        old_line: row.old_line,
+                        new_line: row.new_line,
+                    };
+                    let cache_epoch = this.file_diff_style_cache_epochs.inline_epoch(row.kind);
                     if this
                         .diff_text_segments_cache_get(inline_ix, cache_epoch)
                         .is_some()
@@ -754,15 +752,20 @@ impl MainPaneView {
                     if this.file_diff_inline_modify_pair_texts(inline_ix).is_some() {
                         continue;
                     }
-                    syntax_only_rows.push((inline_ix, cache_epoch, line));
+                    syntax_only_rows.push(SyntaxOnlyBatchRow {
+                        inline_ix,
+                        cache_epoch,
+                        line,
+                        text: row.text,
+                    });
                 }
 
                 if !syntax_only_rows.is_empty() {
                     let batch_rows = syntax_only_rows
                         .iter()
-                        .map(|(_, _, line)| InlineDiffSyntaxOnlyRow {
-                            text: diff_content_text(line),
-                            line,
+                        .map(|row| InlineDiffSyntaxOnlyRow {
+                            text: row.text.as_ref(),
+                            line: &row.line,
                         })
                         .collect::<Vec<_>>();
                     let batched_styles =
@@ -780,14 +783,13 @@ impl MainPaneView {
                                 ),
                             },
                             batch_rows.as_slice(),
+                            DiffSyntaxMode::Auto,
                         );
                     let mut pending_batch = false;
-                    for ((inline_ix, cache_epoch, _), prepared) in
-                        syntax_only_rows.iter().zip(batched_styles.into_iter())
-                    {
+                    for (row, prepared) in syntax_only_rows.iter().zip(batched_styles.into_iter()) {
                         let (styled, is_pending) = prepared.into_parts();
                         pending_batch |= is_pending;
-                        this.diff_text_segments_cache_set(*inline_ix, *cache_epoch, styled);
+                        this.diff_text_segments_cache_set(row.inline_ix, row.cache_epoch, styled);
                     }
                     if pending_batch {
                         this.ensure_prepared_syntax_chunk_poll(cx);
@@ -808,20 +810,7 @@ impl MainPaneView {
                             ui_scale_percent,
                         );
                     };
-                    let row_word_ranges = this
-                        .file_diff_inline_modify_pair_texts(inline_ix)
-                        .map(|(old, new, kind)| {
-                            let (old_ranges, new_ranges) =
-                                capped_word_diff_ranges(old.as_ref(), new.as_ref());
-                            match kind {
-                                DiffLineKind::Remove => old_ranges,
-                                DiffLineKind::Add => new_ranges,
-                                DiffLineKind::Context
-                                | DiffLineKind::Header
-                                | DiffLineKind::Hunk => Vec::new(),
-                            }
-                        })
-                        .unwrap_or_default();
+                    let row_word_ranges = this.file_diff_inline_word_ranges(inline_ix);
                     let render_data = this.file_diff_inline_render_data(inline_ix);
                     let streamed_spec = render_data.as_ref().and_then(|row| {
                         let line_language = matches!(
@@ -864,7 +853,7 @@ impl MainPaneView {
                                 Arc::clone(&new_line_starts),
                             ),
                         };
-                        let syntax_mode = syntax_mode_for_prepared_document(prepared_line.document);
+                        let syntax_mode = DiffSyntaxMode::Auto;
                         prepared_streamed_diff_text_spec(
                             row.text.clone(),
                             &query,
@@ -879,26 +868,14 @@ impl MainPaneView {
                     });
 
                     let (line, cache_epoch, styled) = if let Some(row) = render_data.as_ref() {
-                        if streamed_spec.is_some() {
-                            (
-                                AnnotatedDiffLine {
-                                    kind: row.kind,
-                                    text: "".into(),
-                                    old_line: row.old_line,
-                                    new_line: row.new_line,
-                                },
-                                this.file_diff_style_cache_epochs.inline_epoch(row.kind),
-                                None,
-                            )
-                        } else {
-                            let Some(line) = this.file_diff_inline_row(inline_ix) else {
-                                return diff_placeholder_row(
-                                    ("diff_oob", visible_ix),
-                                    theme,
-                                    ui_scale_percent,
-                                );
-                            };
-                            let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
+                        let line = AnnotatedDiffLine {
+                            kind: row.kind,
+                            text: "".into(),
+                            old_line: row.old_line,
+                            new_line: row.new_line,
+                        };
+                        let cache_epoch = this.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                        if streamed_spec.is_none() {
                             if this
                                 .diff_text_segments_cache_get(inline_ix, cache_epoch)
                                 .is_none()
@@ -910,12 +887,11 @@ impl MainPaneView {
                                 );
                                 let line_language = is_content_line.then_some(language).flatten();
                                 let projected = this.file_diff_inline_projected_syntax(&line);
-                                let syntax_mode =
-                                    syntax_mode_for_prepared_document(projected.document);
+                                let syntax_mode = DiffSyntaxMode::Auto;
                                 let (styled, is_pending) =
-                                    build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                    build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                         theme,
-                                        diff_content_text(&line),
+                                        &row.text,
                                         row_word_ranges.as_slice(),
                                         "",
                                         DiffSyntaxConfig {
@@ -924,24 +900,27 @@ impl MainPaneView {
                                         },
                                         word_color,
                                         projected,
-                                    )
-                                    .into_parts();
+                                    );
                                 if is_pending {
                                     this.ensure_prepared_syntax_chunk_poll(cx);
                                 }
                                 this.diff_text_segments_cache_set(inline_ix, cache_epoch, styled);
                             }
-                            let styled = this.diff_text_segments_cache_get_for_query(
+                        }
+                        let styled = if streamed_spec.is_none() {
+                            this.diff_text_segments_cache_get_for_query(
                                 inline_ix,
                                 query.as_ref(),
                                 cache_epoch,
-                            );
-                            debug_assert!(
-                                styled.is_some(),
-                                "diff text segment cache missing for inline row {inline_ix} after populate"
-                            );
-                            (line, cache_epoch, styled)
-                        }
+                            )
+                        } else {
+                            None
+                        };
+                        debug_assert!(
+                            streamed_spec.is_some() || styled.is_some(),
+                            "diff text segment cache missing for inline row {inline_ix} after populate"
+                        );
+                        (line, cache_epoch, styled)
                     } else {
                         let Some(line) = this.file_diff_inline_row(inline_ix) else {
                             return diff_placeholder_row(
@@ -962,8 +941,7 @@ impl MainPaneView {
                             );
                             let line_language = is_content_line.then_some(language).flatten();
                             let projected = this.file_diff_inline_projected_syntax(&line);
-                            let syntax_mode =
-                                syntax_mode_for_prepared_document(projected.document);
+                            let syntax_mode = DiffSyntaxMode::Auto;
                             let (styled, is_pending) =
                                 build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                                     theme,
@@ -1196,7 +1174,7 @@ impl MainPaneView {
             let language = this.file_diff_cache_language;
             let cache_epoch = this.file_diff_split_style_cache_epoch(region);
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
-            let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
+            let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
                 this.file_diff_old_text.clone().into()
             } else {
@@ -1228,60 +1206,24 @@ impl MainPaneView {
                     };
 
                     match visible_row {
-                        CollapsedDiffVisibleRow::HunkHeader { src_ix, .. } => {
+                        CollapsedDiffVisibleRow::HunkHeader {
+                            src_ix,
+                            expansion_kind,
+                            hidden_rows,
+                            ..
+                        } => {
                             let display_src_ix = visible_row.header_display_src_ix();
-                            let expansion_kind = visible_row
-                                .expansion_kind()
-                                .unwrap_or(CollapsedDiffExpansionKind::None);
                             let display = display_src_ix
                                 .and_then(|display_src_ix| {
                                     this.collapsed_diff_hunk_header_display(display_src_ix)
                                 })
                                 .unwrap_or_default();
-                            let header_key: Option<usize> = None;
-                            if !query.is_empty()
-                                && let Some(header_key) = header_key
-                                && this.diff_text_segments_cache_get(header_key, 0).is_none()
-                            {
-                                let computed = build_cached_diff_styled_text(
-                                    theme,
-                                    display.as_ref(),
-                                    &[],
-                                    "",
-                                    None,
-                                    this.patch_diff_syntax_mode(),
-                                    None,
-                                );
-                                this.diff_text_segments_cache_set(header_key, 0, computed);
-                            }
                             let context_menu_active = display_src_ix.is_some()
                                 && this.active_repo_id().is_some_and(|repo_id| {
                                     let invoker: SharedString =
                                         format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                                     this.active_context_menu_invoker.as_ref() == Some(&invoker)
                                 });
-                            let hidden_rows = match expansion_kind {
-                                CollapsedDiffExpansionKind::Down => {
-                                    this.collapsed_diff_hidden_down_rows(src_ix)
-                                }
-                                CollapsedDiffExpansionKind::Up
-                                | CollapsedDiffExpansionKind::Both
-                                | CollapsedDiffExpansionKind::Short => {
-                                    this.collapsed_diff_hidden_up_rows(src_ix)
-                                }
-                                CollapsedDiffExpansionKind::None => 0,
-                            };
-                            let styled = if !query.is_empty() {
-                                header_key.and_then(|header_key| {
-                                    this.diff_text_segments_cache_get_for_query(
-                                        header_key,
-                                        query.as_ref(),
-                                        0,
-                                    )
-                                })
-                            } else {
-                                None
-                            };
 
                             collapsed_split_header_row(
                                 theme,
@@ -1295,7 +1237,7 @@ impl MainPaneView {
                                 pinned_hunk_shell_scroll.clone(),
                                 None,
                                 display,
-                                styled,
+                                None,
                                 context_menu_active,
                                 src_ix,
                                 expansion_kind,
@@ -1304,58 +1246,42 @@ impl MainPaneView {
                             )
                         }
                         CollapsedDiffVisibleRow::FileRow { row_ix } => {
-                            let Some(row) = this.file_diff_split_row(row_ix) else {
+                            let Some(row) = this.file_diff_split_render_data(row_ix) else {
                                 return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
                             };
-                            let row_word_ranges = this
-                                .file_diff_split_modify_pair_texts(row_ix)
-                                .map(|(old, new)| {
-                                    let (old_ranges, new_ranges) =
-                                        capped_word_diff_ranges(old.as_ref(), new.as_ref());
-                                    if is_left {
-                                        old_ranges
-                                    } else {
-                                        new_ranges
-                                    }
-                                })
-                                .unwrap_or_default();
+                            let row_word_ranges =
+                                this.file_diff_split_word_ranges(row_ix, region);
                             let row_word_color = file_diff_split_word_color(column, row.kind, theme);
-                            let streamed_spec = if is_left {
-                                row.old.clone()
-                            } else {
-                                row.new.clone()
-                            }
-                            .and_then(|raw_text| {
-                                prepared_streamed_diff_text_spec(
-                                    raw_text,
-                                    &query,
-                                    row_word_ranges.clone(),
-                                    row_word_color,
-                                    language,
-                                    syntax_mode,
-                                    Arc::clone(&document_text),
-                                    Arc::clone(&line_starts),
-                                    rows::prepared_diff_syntax_line_for_one_based_line(
-                                        syntax_document,
-                                        if is_left { row.old_line } else { row.new_line },
-                                    ),
-                                )
-                            });
+                            let streamed_spec =
+                                file_diff_split_side_text_owned(&row, is_left).and_then(
+                                    |raw_text| {
+                                        prepared_streamed_diff_text_spec(
+                                            raw_text,
+                                            &query,
+                                            row_word_ranges.clone(),
+                                            row_word_color,
+                                            language,
+                                            syntax_mode,
+                                            Arc::clone(&document_text),
+                                            Arc::clone(&line_starts),
+                                            rows::prepared_diff_syntax_line_for_one_based_line(
+                                                syntax_document,
+                                                file_diff_split_side_line(&row, is_left),
+                                            ),
+                                        )
+                                    },
+                                );
                             let key = this.file_diff_split_cache_key(row_ix, region);
                             if let Some(key) = key
                                 && streamed_spec.is_none()
                                 && this.diff_text_segments_cache_get(key, cache_epoch).is_none()
                             {
-                                let text = if is_left {
-                                    row.old.as_deref()
-                                } else {
-                                    row.new.as_deref()
-                                };
-                                if let Some(text) = text {
+                                let raw_text = file_diff_split_side_text(&row, is_left);
+                                if let Some(raw_text) = raw_text {
                                     let (styled, is_pending) =
-                                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                        build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                             theme,
-                                            text,
+                                            raw_text,
                                             row_word_ranges.as_slice(),
                                             "",
                                             DiffSyntaxConfig {
@@ -1365,10 +1291,9 @@ impl MainPaneView {
                                             row_word_color,
                                             rows::prepared_diff_syntax_line_for_one_based_line(
                                                 syntax_document,
-                                                if is_left { row.old_line } else { row.new_line },
+                                                file_diff_split_side_line(&row, is_left),
                                             ),
-                                        )
-                                        .into_parts();
+                                        );
                                     if is_pending {
                                         this.ensure_prepared_syntax_chunk_poll(cx);
                                     }
@@ -1376,11 +1301,7 @@ impl MainPaneView {
                                 }
                             }
 
-                            let row_has_content = if is_left {
-                                row.old.is_some()
-                            } else {
-                                row.new.is_some()
-                            };
+                            let row_has_content = file_diff_split_side_text(&row, is_left).is_some();
                             let styled = if row_has_content && streamed_spec.is_none() {
                                 if let Some(key) = key {
                                     this.diff_text_segments_cache_get_for_query(
@@ -1418,7 +1339,7 @@ impl MainPaneView {
             let language = this.file_diff_cache_language;
             let cache_epoch = this.file_diff_split_style_cache_epoch(region);
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
-            let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
+            let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
                 this.file_diff_old_text.clone().into()
             } else {
@@ -1439,57 +1360,39 @@ impl MainPaneView {
                     let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
                     };
-                    let Some(row) = this.file_diff_split_row(row_ix) else {
+                    let Some(row) = this.file_diff_split_render_data(row_ix) else {
                         return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
                     };
-                    let row_word_ranges = this
-                        .file_diff_split_modify_pair_texts(row_ix)
-                        .map(|(old, new)| {
-                            let (old_ranges, new_ranges) =
-                                capped_word_diff_ranges(old.as_ref(), new.as_ref());
-                            if is_left {
-                                old_ranges
-                            } else {
-                                new_ranges
-                            }
-                        })
-                        .unwrap_or_default();
+                    let row_word_ranges = this.file_diff_split_word_ranges(row_ix, region);
                     let row_word_color = file_diff_split_word_color(column, row.kind, theme);
-                    let streamed_spec = if is_left {
-                        row.old.clone()
-                    } else {
-                        row.new.clone()
-                    }
-                    .and_then(|raw_text| {
-                        prepared_streamed_diff_text_spec(
-                            raw_text,
-                            &query,
-                            row_word_ranges.clone(),
-                            row_word_color,
-                            language,
-                            syntax_mode,
-                            Arc::clone(&document_text),
-                            Arc::clone(&line_starts),
-                            rows::prepared_diff_syntax_line_for_one_based_line(
-                                syntax_document,
-                                if is_left { row.old_line } else { row.new_line },
-                            ),
-                        )
-                    });
+                    let streamed_spec = file_diff_split_side_text_owned(&row, is_left).and_then(
+                        |raw_text| {
+                            prepared_streamed_diff_text_spec(
+                                raw_text,
+                                &query,
+                                row_word_ranges.clone(),
+                                row_word_color,
+                                language,
+                                syntax_mode,
+                                Arc::clone(&document_text),
+                                Arc::clone(&line_starts),
+                                rows::prepared_diff_syntax_line_for_one_based_line(
+                                    syntax_document,
+                                    file_diff_split_side_line(&row, is_left),
+                                ),
+                            )
+                        },
+                    );
                     let key = this.file_diff_split_cache_key(row_ix, region);
                     if let Some(key) = key
                         && streamed_spec.is_none()
                         && this.diff_text_segments_cache_get(key, cache_epoch).is_none()
                     {
-                        let text = if is_left {
-                            row.old.as_deref()
-                        } else {
-                            row.new.as_deref()
-                        };
-                        if let Some(text) = text {
-                            let (styled, is_pending) = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                        let raw_text = file_diff_split_side_text(&row, is_left);
+                        if let Some(raw_text) = raw_text {
+                            let (styled, is_pending) = build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                 theme,
-                                text,
+                                raw_text,
                                 row_word_ranges.as_slice(),
                                 "",
                                 DiffSyntaxConfig {
@@ -1499,10 +1402,9 @@ impl MainPaneView {
                                 row_word_color,
                                 rows::prepared_diff_syntax_line_for_one_based_line(
                                     syntax_document,
-                                    if is_left { row.old_line } else { row.new_line },
+                                    file_diff_split_side_line(&row, is_left),
                                 ),
-                            )
-                            .into_parts();
+                            );
                             if is_pending {
                                 this.ensure_prepared_syntax_chunk_poll(cx);
                             }
@@ -1510,11 +1412,7 @@ impl MainPaneView {
                         }
                     }
 
-                    let row_has_content = if is_left {
-                        row.old.is_some()
-                    } else {
-                        row.new.is_some()
-                    };
+                    let row_has_content = file_diff_split_side_text(&row, is_left).is_some();
                     let styled = if row_has_content && streamed_spec.is_none() {
                         if let Some(key) = key {
                             this.diff_text_segments_cache_get_for_query(
@@ -1587,41 +1485,45 @@ impl MainPaneView {
                             let word_color = this
                                 .patch_diff_row(src_ix)
                                 .and_then(|line| diff_line_word_color(line.kind, theme));
-                            let streamed_spec = if is_left {
-                                row.old.clone()
-                            } else {
-                                row.new.clone()
-                            }
-                            .and_then(|raw_text| {
-                                heuristic_streamed_diff_text_spec(
-                                    raw_text,
-                                    &query,
-                                    word_ranges.clone(),
-                                    word_color,
-                                    language,
-                                    syntax_mode,
-                                )
-                            });
+                            let streamed_spec = file_diff_split_side_text_owned(&row, is_left)
+                                .and_then(|raw_text| {
+                                    heuristic_streamed_diff_text_spec(
+                                        raw_text,
+                                        &query,
+                                        word_ranges.clone(),
+                                        word_color,
+                                        language,
+                                        syntax_mode,
+                                    )
+                                });
                             if streamed_spec.is_none()
                                 && this
                                     .diff_text_segments_cache_get(src_ix, cache_epoch)
                                     .is_none()
                             {
-                                let text = if is_left {
-                                    row.old.as_deref()
+                                let computed = if let Some(raw_text) =
+                                    file_diff_split_side_text(&row, is_left)
+                                {
+                                    build_file_diff_cached_styled_text(
+                                        theme,
+                                        raw_text,
+                                        word_ranges.as_slice(),
+                                        "",
+                                        language,
+                                        syntax_mode,
+                                        word_color,
+                                    )
                                 } else {
-                                    row.new.as_deref()
-                                }
-                                .unwrap_or("");
-                                let computed = build_cached_diff_styled_text(
-                                    theme,
-                                    text,
-                                    word_ranges.as_slice(),
-                                    "",
-                                    language,
-                                    syntax_mode,
-                                    word_color,
-                                );
+                                    build_cached_diff_styled_text(
+                                        theme,
+                                        "",
+                                        word_ranges.as_slice(),
+                                        "",
+                                        language,
+                                        syntax_mode,
+                                        word_color,
+                                    )
+                                };
                                 this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                             }
 

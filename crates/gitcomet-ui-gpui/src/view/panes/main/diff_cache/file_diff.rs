@@ -1108,6 +1108,10 @@ impl PagedFileDiffRows {
     )> {
         self.source.split_row_texts(row_ix)
     }
+
+    pub(in crate::view) fn render_data(&self, row_ix: usize) -> Option<FileDiffRow> {
+        self.source.split_row(row_ix)
+    }
 }
 
 impl gitcomet_core::domain::DiffRowProvider for PagedFileDiffRows {

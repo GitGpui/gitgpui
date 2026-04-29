@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(test)]
 use std::borrow::Cow;
 use std::io::Read;
 
@@ -522,6 +523,7 @@ impl MainPaneView {
         ))
     }
 
+    #[cfg(test)]
     pub(in crate::view) fn worktree_preview_line_text(
         &self,
         line_ix: usize,

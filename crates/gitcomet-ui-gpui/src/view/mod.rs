@@ -65,6 +65,7 @@ mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+mod file_diff_display;
 mod fingerprint;
 mod history_graph;
 pub(crate) mod history_mode;
@@ -112,7 +113,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
-use word_diff::capped_word_diff_ranges;
+use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
@@ -125,6 +126,10 @@ use diff_utils::{
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
     parse_diff_git_header_path, parse_unified_hunk_header_for_display,
     scrollbar_markers_from_flags, scrollbar_markers_from_visible_ranges,
+};
+use file_diff_display::{
+    LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
+    file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
 use mod_helpers::*;
 pub use mod_helpers::{

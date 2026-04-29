@@ -1081,9 +1081,12 @@ impl MainPaneView {
             file_diff_inline_cache: Vec::new(),
             file_diff_inline_row_provider: None,
             file_diff_inline_text: SharedString::default(),
-            file_diff_inline_word_highlights: Vec::new(),
-            file_diff_split_word_highlights_old: Vec::new(),
-            file_diff_split_word_highlights_new: Vec::new(),
+            file_diff_inline_word_highlights: rows::new_lru_cache(
+                FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES,
+            ),
+            file_diff_split_word_highlights: rows::new_lru_cache(
+                FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES,
+            ),
             file_diff_cache_seq: 0,
             file_diff_cache_inflight: None,
             file_diff_syntax_generation: 0,
@@ -3594,11 +3597,11 @@ impl MainPaneView {
                         };
                     return match self.diff_view {
                         DiffViewMode::Inline => self
-                            .file_diff_inline_row(row_ix)
+                            .file_diff_inline_render_data(row_ix)
                             .map(|line| lookup_change(line.old_line, line.new_line))
                             .unwrap_or_default(),
                         DiffViewMode::Split => self
-                            .file_diff_split_row(row_ix)
+                            .file_diff_split_render_data(row_ix)
                             .map(|row| lookup_change(row.old_line, row.new_line))
                             .unwrap_or_default(),
                     };

@@ -92,6 +92,406 @@ fn large_file_diff_keeps_prepared_syntax_documents_above_old_line_gate(
 }
 
 #[gpui::test]
+fn source_backed_file_diff_uses_auto_fallback_highlighting_in_full_and_collapsed(
+    cx: &mut gpui::TestAppContext,
+) {
+    #[derive(Clone, Debug, PartialEq)]
+    struct LineSyntaxSnapshot {
+        text: String,
+        highlights: Vec<(
+            std::ops::Range<usize>,
+            Option<gpui::Hsla>,
+            Option<gpui::Hsla>,
+        )>,
+    }
+
+    fn source_text(changed_value: usize) -> String {
+        let mut lines = (1..=70usize)
+            .map(|line| format!("let filler_{line}: usize = {line};"))
+            .collect::<Vec<_>>();
+        lines[33] = "pub fn stable_context(value: usize) -> usize { value + 1 }".to_string();
+        lines[34] = format!("let changed_value: usize = {changed_value};");
+        format!("{}\n", lines.join("\n"))
+    }
+
+    fn unified_patch(path: &std::path::Path, old_text: &str, new_text: &str) -> String {
+        let old_lines = old_text.lines().collect::<Vec<_>>();
+        let new_lines = new_text.lines().collect::<Vec<_>>();
+        let path = path.to_string_lossy();
+        format!(
+            "\
+diff --git a/{path} b/{path}
+index 1111111..2222222 100644
+--- a/{path}
++++ b/{path}
+@@ -32,7 +32,7 @@
+ {}
+ {}
+ {}
+-{}
++{}
+ {}
+ {}
+ {}
+",
+            old_lines[31],
+            old_lines[32],
+            old_lines[33],
+            old_lines[34],
+            new_lines[34],
+            old_lines[35],
+            old_lines[36],
+            old_lines[37],
+        )
+    }
+
+    fn highlight_snapshot(
+        highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
+    ) -> Vec<(
+        std::ops::Range<usize>,
+        Option<gpui::Hsla>,
+        Option<gpui::Hsla>,
+    )> {
+        highlights
+            .iter()
+            .map(|(range, style)| (range.clone(), style.color, style.background_color))
+            .collect()
+    }
+
+    fn syntax_snapshot(
+        theme: AppTheme,
+        text: &str,
+        mode: rows::DiffSyntaxMode,
+    ) -> LineSyntaxSnapshot {
+        LineSyntaxSnapshot {
+            text: text.to_string(),
+            highlights: highlight_snapshot(
+                rows::syntax_highlights_for_line(theme, text, rows::DiffSyntaxLanguage::Rust, mode)
+                    .as_slice(),
+            ),
+        }
+    }
+
+    fn paint_snapshot(record: &rows::DiffPaintRecord) -> LineSyntaxSnapshot {
+        LineSyntaxSnapshot {
+            text: record.text.to_string(),
+            highlights: record.highlights.clone(),
+        }
+    }
+
+    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+        (0..pane.diff_visible_len()).find(|&visible_ix| {
+            pane.diff_mapped_ix_for_visible_ix(visible_ix)
+                .and_then(|row_ix| pane.file_diff_split_render_data(row_ix))
+                .is_some_and(|row| row.new_line == Some(new_line))
+        })
+    }
+
+    fn inline_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+        (0..pane.diff_visible_len()).find(|&visible_ix| {
+            pane.diff_mapped_ix_for_visible_ix(visible_ix)
+                .and_then(|row_ix| pane.file_diff_inline_render_data(row_ix))
+                .is_some_and(|row| row.new_line == Some(new_line))
+        })
+    }
+
+    fn visible_ix_by_new_line(
+        pane: &MainPaneView,
+        diff_view: DiffViewMode,
+        new_line: u32,
+    ) -> Option<usize> {
+        match diff_view {
+            DiffViewMode::Inline => inline_visible_ix_by_new_line(pane, new_line),
+            DiffViewMode::Split => split_visible_ix_by_new_line(pane, new_line),
+        }
+    }
+
+    fn draw_paint_record_for_visible_ix(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::GitCometView>,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> rows::DiffPaintRecord {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
+                    cx.notify();
+                });
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, app| {
+            rows::clear_diff_paint_log_for_tests();
+            let _ = window.draw(app);
+            rows::diff_paint_log_for_tests()
+                .into_iter()
+                .find(|record| record.visible_ix == visible_ix && record.region == region)
+                .unwrap_or_else(|| {
+                    panic!("expected paint record for visible_ix={visible_ix} region={region:?}")
+                })
+        })
+    }
+
+    fn activate_file_diff_mode(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::GitCometView>,
+        diff_view: DiffViewMode,
+        content_mode: DiffContentMode,
+        target_line: u32,
+    ) {
+        set_diff_content_mode_for_test(cx, view, DiffContentMode::Full);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_view = diff_view;
+                    pane.clear_diff_text_style_caches();
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+
+        if content_mode == DiffContentMode::Collapsed {
+            set_diff_content_mode_for_test(cx, view, DiffContentMode::Collapsed);
+            wait_for_main_pane_condition(
+                cx,
+                view,
+                "source-backed collapsed projection for syntax fallback",
+                |pane| {
+                    pane.is_collapsed_diff_projection_active()
+                        && visible_ix_by_new_line(pane, diff_view, target_line).is_some()
+                },
+                |pane| {
+                    format!(
+                        "mode={:?} view={:?} visible_len={} collapsed_rows={} target_visible={:?}",
+                        pane.diff_content_mode,
+                        pane.diff_view,
+                        pane.diff_visible_len(),
+                        pane.collapsed_diff_visible_rows.len(),
+                        visible_ix_by_new_line(pane, diff_view, target_line),
+                    )
+                },
+            );
+        }
+    }
+
+    fn assert_mode_highlights(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::GitCometView>,
+        label: &str,
+        diff_view: DiffViewMode,
+        content_mode: DiffContentMode,
+        region: DiffTextRegion,
+        target_line: u32,
+        expected: &LineSyntaxSnapshot,
+    ) {
+        activate_file_diff_mode(cx, view, diff_view, content_mode, target_line);
+        let visible_ix = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            visible_ix_by_new_line(pane, diff_view, target_line).unwrap_or_else(|| {
+                panic!(
+                    "expected visible row for {label} line {target_line}; visible_len={}",
+                    pane.diff_visible_len()
+                )
+            })
+        });
+        let record = draw_paint_record_for_visible_ix(cx, view, visible_ix, region);
+        assert_eq!(
+            paint_snapshot(&record),
+            *expected,
+            "{label} should use Auto syntax fallback for source-backed file rows"
+        );
+    }
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(88);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_source_backed_file_diff_syntax",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create source-backed file-diff fixture dir");
+
+    let path = std::path::PathBuf::from("src/source_backed.rs");
+    let old_source_path = source_dir.join("old.rs");
+    let new_source_path = source_dir.join("new.rs");
+    let old_text = source_text(1);
+    let new_text = source_text(2);
+    std::fs::write(&old_source_path, &old_text).expect("write old source-backed fixture");
+    std::fs::write(&new_source_path, &new_text).expect("write new source-backed fixture");
+    let unified = unified_patch(&path, &old_text, &new_text);
+    let target_line = 34u32;
+    let target_line_text = "pub fn stable_context(value: usize) -> usize { value + 1 }";
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, &unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "source-backed file-diff cache without resident full text",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_path == Some(workdir.join(&path))
+                && pane.file_diff_cache_language == Some(rows::DiffSyntaxLanguage::Rust)
+                && pane.file_diff_old_text.is_empty()
+                && pane.file_diff_new_text.is_empty()
+                && pane.file_diff_old_line_starts.len() >= 70
+                && pane.file_diff_new_line_starts.len() >= 70
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                    .is_none()
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_none()
+                && pane.file_diff_cache_rows.iter().any(|row| {
+                    row.new_line == Some(target_line)
+                        && row.kind == gitcomet_core::file_diff::FileDiffRowKind::Context
+                })
+        },
+        |pane| {
+            format!(
+                "inflight={:?} path={:?} language={:?} old_text_len={} new_text_len={} old_starts={} new_starts={} left_doc={:?} right_doc={:?} rows={}",
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_path.clone(),
+                pane.file_diff_cache_language,
+                pane.file_diff_old_text.len(),
+                pane.file_diff_new_text.len(),
+                pane.file_diff_old_line_starts.len(),
+                pane.file_diff_new_line_starts.len(),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+                pane.file_diff_cache_rows.len(),
+            )
+        },
+    );
+
+    let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
+    let expected = syntax_snapshot(theme, target_line_text, rows::DiffSyntaxMode::Auto);
+    let heuristic_only =
+        syntax_snapshot(theme, target_line_text, rows::DiffSyntaxMode::HeuristicOnly);
+    assert_ne!(
+        expected, heuristic_only,
+        "the source-backed syntax regression test must cover a line where Auto adds colors"
+    );
+
+    assert_mode_highlights(
+        cx,
+        &view,
+        "full split",
+        DiffViewMode::Split,
+        DiffContentMode::Full,
+        DiffTextRegion::SplitRight,
+        target_line,
+        &expected,
+    );
+    assert_mode_highlights(
+        cx,
+        &view,
+        "full inline",
+        DiffViewMode::Inline,
+        DiffContentMode::Full,
+        DiffTextRegion::Inline,
+        target_line,
+        &expected,
+    );
+    assert_mode_highlights(
+        cx,
+        &view,
+        "collapsed split",
+        DiffViewMode::Split,
+        DiffContentMode::Collapsed,
+        DiffTextRegion::SplitRight,
+        target_line,
+        &expected,
+    );
+    assert_mode_highlights(
+        cx,
+        &view,
+        "collapsed inline",
+        DiffViewMode::Inline,
+        DiffContentMode::Collapsed,
+        DiffTextRegion::Inline,
+        target_line,
+        &expected,
+    );
+}
+
+#[gpui::test]
+fn file_diff_word_highlight_caches_stay_bounded_for_sparse_deep_rows(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                let deep_row = 1_000_000usize;
+
+                assert!(pane.file_diff_inline_word_ranges(deep_row).is_empty());
+                assert!(
+                    pane.file_diff_split_word_ranges(deep_row, DiffTextRegion::SplitLeft)
+                        .is_empty()
+                );
+                assert!(
+                    pane.file_diff_split_word_ranges(deep_row + 1, DiffTextRegion::SplitRight)
+                        .is_empty()
+                );
+
+                assert!(
+                    pane.file_diff_inline_word_highlights.len() <= 1,
+                    "inline word-highlight cache should be keyed sparsely, not resized to deep row"
+                );
+                assert!(
+                    pane.file_diff_split_word_highlights.len() <= 2,
+                    "split word-highlight cache should be keyed sparsely, not resized to deep row"
+                );
+            });
+        });
+    });
+}
+
+#[gpui::test]
 fn oversized_json_file_diff_uses_visible_line_fallback_without_prepared_syntax_documents(
     cx: &mut gpui::TestAppContext,
 ) {

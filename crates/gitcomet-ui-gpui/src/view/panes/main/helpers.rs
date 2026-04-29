@@ -245,6 +245,14 @@ impl FileDiffStyleCacheEpochs {
     }
 }
 
+pub(in crate::view) const FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES: usize = 4_096;
+
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct FileDiffSplitWordHighlights {
+    pub(in crate::view) old: Vec<Range<usize>>,
+    pub(in crate::view) new: Vec<Range<usize>>,
+}
+
 pub(in crate::view) fn versioned_cached_diff_styled_text_is_current(
     entry: Option<&VersionedCachedDiffStyledText>,
     syntax_epoch: u64,
@@ -2200,6 +2208,7 @@ pub(in crate::view) enum CollapsedDiffVisibleRow {
         src_ix: usize,
         expansion_kind: CollapsedDiffExpansionKind,
         display_src_ix: Option<usize>,
+        hidden_rows: usize,
     },
     FileRow {
         row_ix: usize,
@@ -2211,13 +2220,6 @@ impl CollapsedDiffVisibleRow {
         match self {
             Self::FileRow { row_ix } => Some(row_ix),
             Self::HunkHeader { .. } => None,
-        }
-    }
-
-    pub(in crate::view) const fn expansion_kind(self) -> Option<CollapsedDiffExpansionKind> {
-        match self {
-            Self::HunkHeader { expansion_kind, .. } => Some(expansion_kind),
-            Self::FileRow { .. } => None,
         }
     }
 
@@ -2352,9 +2354,9 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_diff_inline_row_provider:
         Option<Arc<super::diff_cache::PagedFileDiffInlineRows>>,
     pub(in crate::view) file_diff_inline_text: SharedString,
-    pub(in crate::view) file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
-    pub(in crate::view) file_diff_split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
-    pub(in crate::view) file_diff_split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
+    pub(in crate::view) file_diff_inline_word_highlights: rows::LruCache<usize, Vec<Range<usize>>>,
+    pub(in crate::view) file_diff_split_word_highlights:
+        rows::LruCache<usize, FileDiffSplitWordHighlights>,
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) file_diff_cache_inflight: Option<u64>,
     pub(in crate::view) file_diff_syntax_generation: u64,

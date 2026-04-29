@@ -8,6 +8,7 @@ use gitcomet_core::domain::DiffRowProvider;
 mod file_diff;
 mod image_cache;
 mod patch_diff;
+mod word_highlight;
 
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
@@ -184,6 +185,17 @@ impl MainPaneView {
     pub(in crate::view) fn file_diff_split_row(&self, row_ix: usize) -> Option<FileDiffRow> {
         if let Some(provider) = self.file_diff_row_provider.as_ref() {
             provider.row(row_ix)
+        } else {
+            self.file_diff_cache_rows.get(row_ix).cloned()
+        }
+    }
+
+    pub(in crate::view) fn file_diff_split_render_data(
+        &self,
+        row_ix: usize,
+    ) -> Option<FileDiffRow> {
+        if let Some(provider) = self.file_diff_row_provider.as_ref() {
+            provider.render_data(row_ix)
         } else {
             self.file_diff_cache_rows.get(row_ix).cloned()
         }
@@ -623,6 +635,24 @@ impl MainPaneView {
         }
     }
 
+    fn collapsed_diff_hidden_rows_for_expansion_kind(
+        &self,
+        src_ix: usize,
+        expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind,
+    ) -> usize {
+        match expansion_kind {
+            crate::view::panes::main::CollapsedDiffExpansionKind::Down => {
+                self.collapsed_diff_hidden_down_rows(src_ix)
+            }
+            crate::view::panes::main::CollapsedDiffExpansionKind::Up
+            | crate::view::panes::main::CollapsedDiffExpansionKind::Both
+            | crate::view::panes::main::CollapsedDiffExpansionKind::Short => {
+                self.collapsed_diff_hidden_up_rows(src_ix)
+            }
+            crate::view::panes::main::CollapsedDiffExpansionKind::None => 0,
+        }
+    }
+
     fn merge_collapsed_diff_hunks_up(&mut self, hunk_ix: usize) {
         if hunk_ix == 0 || hunk_ix >= self.collapsed_diff_hunks.len() {
             return;
@@ -771,11 +801,14 @@ impl MainPaneView {
             self.collapsed_diff_hunk_visible_indices
                 .push(self.collapsed_diff_visible_rows.len());
             if has_expansion_header {
+                let hidden_rows =
+                    self.collapsed_diff_hidden_rows_for_expansion_kind(hunk.src_ix, expansion_kind);
                 self.collapsed_diff_visible_rows
                     .push(CollapsedDiffVisibleRow::HunkHeader {
                         src_ix: hunk.src_ix,
                         expansion_kind,
                         display_src_ix: Some(hunk.src_ix),
+                        hidden_rows,
                     });
                 for row_ix in up_revealed_rows {
                     self.collapsed_diff_visible_rows
@@ -802,12 +835,14 @@ impl MainPaneView {
                     .push(CollapsedDiffVisibleRow::FileRow { row_ix });
             }
 
-            if self.collapsed_diff_hidden_down_rows(last_hunk.src_ix) > 0 {
+            let hidden_rows = self.collapsed_diff_hidden_down_rows(last_hunk.src_ix);
+            if hidden_rows > 0 {
                 self.collapsed_diff_visible_rows
                     .push(CollapsedDiffVisibleRow::HunkHeader {
                         src_ix: last_hunk.src_ix,
                         expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Down,
                         display_src_ix: None,
+                        hidden_rows,
                     });
             }
         }
@@ -1882,9 +1917,10 @@ impl MainPaneView {
         self.file_diff_inline_cache.clear();
         self.file_diff_inline_row_provider = None;
         self.file_diff_inline_text = SharedString::default();
-        self.file_diff_inline_word_highlights.clear();
-        self.file_diff_split_word_highlights_old.clear();
-        self.file_diff_split_word_highlights_new.clear();
+        self.file_diff_inline_word_highlights =
+            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
+        self.file_diff_split_word_highlights =
+            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
     }
 
     pub(in super::super::super) fn ensure_file_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
