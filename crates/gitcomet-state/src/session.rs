@@ -876,7 +876,7 @@ pub fn should_show_survey_prompt_from_path(
     let Some(file) = load_file(session_file_path) else {
         return false;
     };
-    if !has_meaningful_user_session_data(&file) {
+    if !has_recorded_session_repository(&file) {
         return false;
     }
 
@@ -954,7 +954,9 @@ fn current_unix_seconds() -> u64 {
         .as_secs()
 }
 
-fn has_meaningful_user_session_data(file: &UiSessionFile) -> bool {
+// Survey eligibility only needs a usage signal. A recorded repository means the user has used
+// GitComet before; it does not need to prove the repository still exists on disk.
+fn has_recorded_session_repository(file: &UiSessionFile) -> bool {
     if file.open_repos.iter().any(|path| !path.trim().is_empty()) {
         return true;
     }
@@ -972,80 +974,7 @@ fn has_meaningful_user_session_data(file: &UiSessionFile) -> bool {
     {
         return true;
     }
-    if file
-        .repo_sidebar_collapsed_items
-        .as_ref()
-        .is_some_and(|items| !items.is_empty())
-    {
-        return true;
-    }
-    if file.window_width.is_some()
-        || file.window_height.is_some()
-        || file.sidebar_width.is_some()
-        || file.details_width.is_some()
-        || file.ui_scale_percent.is_some()
-        || file.use_font_ligatures.is_some()
-        || file.show_timezone.is_some()
-        || file.change_tracking_height.is_some()
-        || file.untracked_height.is_some()
-        || file.history_show_graph.is_some()
-        || file.history_show_author.is_some()
-        || file.history_show_date.is_some()
-        || file.history_show_sha.is_some()
-        || file.history_show_tags.is_some()
-        || file.history_tag_fetch_mode.is_some()
-        || file.default_history_mode.is_some()
-    {
-        return true;
-    }
-
-    if file
-        .theme_mode
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-        || file
-            .ui_font_family
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        || file
-            .editor_font_family
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        || file
-            .date_time_format
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        || file
-            .timezone
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        || file
-            .change_tracking_view
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        || file
-            .diff_scroll_sync
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        || file
-            .git_executable_path
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-    {
-        return true;
-    }
-
-    file.repo_history_modes
-        .as_ref()
-        .is_some_and(|items| !items.is_empty())
-        || file
-            .repo_history_scopes
-            .as_ref()
-            .is_some_and(|items| !items.is_empty())
-        || file
-            .repo_fetch_prune_deleted_remote_tracking_branches
-            .as_ref()
-            .is_some_and(|items| !items.is_empty())
+    false
 }
 
 fn parse_repos(
@@ -1667,7 +1596,7 @@ mod tests {
     }
 
     #[test]
-    fn survey_prompt_requires_meaningful_session_data() {
+    fn survey_prompt_requires_recorded_repository() {
         const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
         let dir = unique_session_test_dir("survey-empty-session");
         let session_file = dir.join("session.json");
@@ -1706,6 +1635,79 @@ mod tests {
         )
         .expect("persist survey-only session");
         assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                window_width: Some(1200),
+                window_height: Some(800),
+                theme_mode: Some("dark".to_string()),
+                repo_history_scopes: Some(BTreeMap::from([(
+                    "/tmp/repo".to_string(),
+                    HistoryScopeSetting::AllBranches,
+                )])),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist non-repo session data");
+        assert!(!should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+    }
+
+    #[test]
+    fn survey_prompt_accepts_recorded_repository_sources() {
+        const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
+        let dir = unique_session_test_dir("survey-repository-sources");
+        let session_file = dir.join("session.json");
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: vec![" /tmp/open-repo ".to_string()],
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist open repo session");
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                active_repo: Some("/tmp/active-repo".to_string()),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist active repo session");
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
+
+        persist_to_path(
+            &session_file,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                recent_repos: Some(vec!["\t/tmp/recent-repo\n".to_string()]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("persist recent repo session");
+        assert!(should_show_survey_prompt_from_path(
             &session_file,
             SURVEY_ID,
             100
