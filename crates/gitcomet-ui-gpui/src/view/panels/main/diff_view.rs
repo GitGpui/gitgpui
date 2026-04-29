@@ -712,7 +712,7 @@ impl MainPaneView {
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
-        let title = self.diff_panel_title(theme);
+        let title = self.diff_panel_title(theme, cx);
         let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
 
         let has_submodule_summary = self

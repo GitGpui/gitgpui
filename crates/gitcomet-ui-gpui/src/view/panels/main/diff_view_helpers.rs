@@ -1,7 +1,7 @@
 use super::*;
 
 impl MainPaneView {
-    pub(super) fn diff_panel_title(&self, theme: AppTheme) -> AnyElement {
+    pub(super) fn diff_panel_title(&self, theme: AppTheme, cx: &gpui::Context<Self>) -> AnyElement {
         self.rendered_diff_target()
             .map(|t| {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
@@ -82,9 +82,12 @@ impl MainPaneView {
                             .min_w(px(0.0))
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .child(text),
+                            .child(
+                                components::TruncatedText::path(text)
+                                    .id(("diff_title_path", 0usize))
+                                    .full_text_tooltip(self.tooltip_host.clone())
+                                    .render(cx),
+                            ),
                     )
                     .into_any_element()
             })

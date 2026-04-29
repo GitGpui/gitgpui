@@ -72,7 +72,9 @@ pub(super) fn model(
 ) -> ContextMenuModel {
     let state = menu_state(this, repo_id, path.as_path());
     let mut items = vec![ContextMenuItem::Header("Submodule".into())];
-    items.push(ContextMenuItem::Label(path.display().to_string().into()));
+    items.push(ContextMenuItem::Label(
+        components::ContextMenuText::path_single_line(path.display().to_string()),
+    ));
     if let Some(status_label) = status_label(state.status) {
         items.push(ContextMenuItem::Label(status_label.into()));
     }

@@ -389,6 +389,10 @@ fn render_status_rows_for_section(
     let multi_select_active = !selected_paths.is_empty();
     let theme = this.theme;
     let ui_scale = this.ui_scale();
+    let visible_signature = this.status_visible_signature(repo, section, &range, entries.len());
+    let path_alignment_group = this
+        .status_path_alignment_group(section)
+        .visible_rows(visible_signature);
     range
         .filter_map(|ix| entries.get(ix).map(|entry| (ix, entry)))
         .map(|(ix, entry)| {
@@ -427,6 +431,8 @@ fn render_status_rows_for_section(
                 section,
                 repo.id,
                 is_selected,
+                this.tooltip_host.clone(),
+                path_alignment_group.clone(),
                 this.active_context_menu_invoker.as_ref(),
                 cx,
             )
@@ -446,6 +452,8 @@ fn status_row(
     section: StatusSection,
     repo_id: RepoId,
     selected: bool,
+    tooltip_host: WeakEntity<TooltipHost>,
+    path_alignment_group: components::PathTruncationAlignmentGroup,
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
@@ -493,7 +501,6 @@ fn status_row(
             DiffArea::Staged => "Unstage",
         }
     };
-    let row_tooltip = path_display.clone();
     let stage_tooltip: SharedString = match stage_label {
         "Stage" => "Stage file".into(),
         "Unstage" => "Unstage file".into(),
@@ -583,7 +590,6 @@ fn status_row(
             }
         })
         .active(move |s| s.bg(theme.colors.active))
-        .gitcomet_tooltip(theme, row_tooltip.clone())
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -645,8 +651,15 @@ fn status_row(
                 .line_height(scaled_px(18.0))
                 .flex_1()
                 .min_w(px(0.0))
-                .line_clamp(1)
-                .child(path_display_for_label.clone()),
+                .child(
+                    components::TruncatedText::aligned_path(
+                        path_display_for_label.clone(),
+                        path_alignment_group,
+                    )
+                    .id(("status_row_path", ix))
+                    .full_text_tooltip(tooltip_host)
+                    .render(cx),
+                ),
         )
         .child(
             div()

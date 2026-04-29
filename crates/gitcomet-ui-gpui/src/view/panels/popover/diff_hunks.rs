@@ -53,6 +53,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     if let Some(search) = this.diff_hunk_picker_search_input.clone() {
         components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
             .items(items)
+            .tooltip_host(this.tooltip_host.clone())
             .empty_text("No hunks")
             .max_height(scaled_px(260.0))
             .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
@@ -65,9 +66,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     pane.diff_selection_range = Some((target, target));
                     cx.notify();
                 });
-                this.popover = None;
-                this.popover_anchor = None;
-                cx.notify();
+                this.close_popover(cx);
             })
             .w(scaled_px(520.0))
             .child(div().border_t_1().border_color(theme.colors.border))
@@ -108,9 +107,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             pane.diff_selection_range = Some((target, target));
                             cx.notify();
                         });
-                        this.popover = None;
-                        this.popover_anchor = None;
-                        cx.notify();
+                        this.close_popover(cx);
                     })),
             );
         }

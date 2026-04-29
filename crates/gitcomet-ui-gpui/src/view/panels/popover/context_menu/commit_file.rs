@@ -31,7 +31,9 @@ pub(super) fn model(
             .unwrap_or_else(|| format!("{path:?}"))
             .into(),
     )];
-    items.push(ContextMenuItem::Label(path.display().to_string().into()));
+    items.push(ContextMenuItem::Label(
+        components::ContextMenuText::path_single_line(path.display().to_string()),
+    ));
     if is_submodule {
         let submodule_state = super::submodule::menu_state(this, repo_id, path);
         if let Some(status_label) = super::submodule::status_label(submodule_state.status) {

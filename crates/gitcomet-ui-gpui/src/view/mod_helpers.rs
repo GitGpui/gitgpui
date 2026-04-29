@@ -543,9 +543,40 @@ pub(super) struct ToastState {
     pub(super) kind: components::ToastKind,
     pub(super) input: Entity<components::TextInput>,
     pub(super) is_code_message: bool,
-    pub(super) action_url: Option<String>,
-    pub(super) action_label: Option<String>,
+    pub(super) actions: Vec<ToastAction>,
+    pub(super) dismiss_behavior: ToastDismissBehavior,
     pub(super) ttl: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ToastAction {
+    OpenUrl {
+        url: String,
+        label: String,
+    },
+    OpenSurvey {
+        survey_id: String,
+        survey_name: String,
+        url: String,
+        label: String,
+    },
+    PostponeSurvey {
+        survey_id: String,
+        survey_name: String,
+        postpone_seconds: u64,
+        label: String,
+    },
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) enum ToastDismissBehavior {
+    #[default]
+    Remove,
+    PostponeSurvey {
+        survey_id: String,
+        survey_name: String,
+        postpone_seconds: u64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2962,6 +2993,7 @@ pub struct GitCometView {
     pub(super) repo_tabs_bar: Entity<RepoTabsBarView>,
     pub(super) action_bar: Entity<ActionBarView>,
     pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
+    pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
