@@ -352,13 +352,6 @@ fn diff_search_active(
     cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_active)
 }
 
-fn popover_kind(
-    cx: &mut gpui::VisualTestContext,
-    view: &gpui::Entity<super::super::GitCometView>,
-) -> Option<PopoverKind> {
-    cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app))
-}
-
 fn conflict_navigation_anchor(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -2527,63 +2520,6 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
     assert!(
         commit_message_input_is_focused(cx, &view),
         "expected commit-message input to keep focus after Alt-I/Alt-S/Alt-W"
-    );
-}
-
-#[gpui::test]
-fn commit_message_text_input_alt_h_does_not_open_diff_hunks(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = RepoId(7057);
-    let commit_id = CommitId("1111222233336666".into());
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_commit_message_alt_h",
-        std::process::id()
-    ));
-    let target = DiffTarget::Commit {
-        commit_id: commit_id.clone(),
-        path: None,
-    };
-
-    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
-    repo.history_state.selected_commit = Some(commit_id.clone());
-    repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
-        id: commit_id.clone(),
-        message: "subject".into(),
-        committed_at: "2026-04-14 12:00:00 +0300".into(),
-        parent_ids: vec![],
-        files: vec![CommitFileChange {
-            path: std::path::PathBuf::from("src/lib.rs"),
-            kind: FileStatusKind::Modified,
-            is_submodule: false,
-        }],
-    }));
-    repo.diff_state.diff_target = Some(target.clone());
-    repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
-
-    apply_state(cx, &view, app_state_with_active_repo(repo));
-    focus_commit_message_input(cx, &view);
-
-    assert_eq!(
-        popover_kind(cx, &view),
-        None,
-        "expected no popover before Alt-H from commit-message input"
-    );
-
-    cx.simulate_keystrokes("alt-h");
-    draw_and_drain_test_window(cx);
-
-    assert_eq!(
-        popover_kind(cx, &view),
-        None,
-        "expected Alt-H from commit-message input to avoid opening the diff hunks popover"
-    );
-    assert!(
-        commit_message_input_is_focused(cx, &view),
-        "expected commit-message input to keep focus after Alt-H"
     );
 }
 

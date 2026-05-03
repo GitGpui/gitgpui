@@ -2323,7 +2323,6 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_text_hitboxes: HashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     pub(in crate::view) diff_text_layout_cache_epoch: u64,
     pub(in crate::view) diff_text_layout_cache: HashMap<u64, DiffTextLayoutCacheEntry>,
-    pub(in crate::view) diff_hunk_picker_search_input: Option<Entity<components::TextInput>>,
     pub(in crate::view) diff_search_active: bool,
     pub(in crate::view) diff_search_query: SharedString,
     pub(in crate::view) diff_search_matches: Vec<usize>,

@@ -1142,23 +1142,7 @@ impl MainPaneView {
                     .child(prev_hunk_btn)
                     .child(next_hunk_btn)
                     .when_some(next_file_btn, |d, btn| d.child(btn))
-                    .child(view_toggle)
-                    .when(!wants_file_diff, |controls| {
-                        controls.child(
-                            components::Button::new("diff_hunks", "Hunks")
-                                .style(components::ButtonStyle::Outlined)
-                                .on_click(theme, cx, |this, e, window, cx| {
-                                    this.open_popover_at(
-                                        PopoverKind::DiffHunks,
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                    cx.notify();
-                                })
-                                .gitcomet_tooltip(theme, "Jump to hunk (Alt+H)".into()),
-                        )
-                    });
+                    .child(view_toggle);
             } else {
                 controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
@@ -3830,21 +3814,6 @@ impl MainPaneView {
                                     DiffViewMode::Split
                                 };
                                 this.clear_diff_text_style_caches();
-                                handled = true;
-                            }
-                        }
-                        "h" => {
-                            let is_file_preview = this.is_file_preview_active();
-                            let has_submodule_summary = this.active_repo().is_some_and(|repo| {
-                                !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded)
-                            });
-                            let supports_diff_content_toggle =
-                                (this.is_inline_submodule_diff_active() || !has_submodule_summary)
-                                    && this.supports_diff_content_mode_toggle(is_file_preview);
-                            let wants_file_diff = supports_diff_content_toggle
-                                && this.wants_file_diff_view(is_file_preview);
-                            if !is_file_preview && !wants_file_diff {
-                                this.open_popover_at_cursor(PopoverKind::DiffHunks, window, cx);
                                 handled = true;
                             }
                         }

@@ -2332,7 +2332,6 @@ pub(super) enum PopoverKind {
     PullPicker,
     PushPicker,
     AppMenu,
-    DiffHunks,
     DiffHunkMenu {
         repo_id: RepoId,
         src_ix: usize,

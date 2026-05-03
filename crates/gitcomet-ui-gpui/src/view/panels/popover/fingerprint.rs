@@ -128,7 +128,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
-        | PopoverKind::DiffHunks
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
@@ -217,8 +216,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             view_fingerprint::hash_loadable_arc(&repo.history_state.file_history, hasher);
         }
 
-        PopoverKind::DiffHunks
-        | PopoverKind::DiffHunkMenu { .. }
+        PopoverKind::DiffHunkMenu { .. }
         | PopoverKind::DiffEditorMenu { .. }
         | PopoverKind::DiscardChangesConfirm { .. } => {
             repo.diff_state.diff_rev.hash(hasher);
@@ -398,7 +396,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::PullPicker => 36u8.hash(hasher),
         PopoverKind::PushPicker => 37u8.hash(hasher),
         PopoverKind::AppMenu => 38u8.hash(hasher),
-        PopoverKind::DiffHunks => 39u8.hash(hasher),
         PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
             40u8.hash(hasher);
             repo_id.hash(hasher);

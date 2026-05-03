@@ -10,7 +10,6 @@ mod create_branch;
 mod create_branch_from_ref_prompt;
 mod create_tag_prompt;
 mod delete_remote_branch_confirm;
-mod diff_hunks;
 mod discard_changes_confirm;
 mod file_history;
 mod fingerprint;
@@ -100,7 +99,6 @@ const DIALOG_380_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(380.0);
 const DIALOG_420_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(420.0);
 const DIALOG_440_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(440.0);
 const DIALOG_460_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(460.0);
-const DIALOG_520_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(520.0);
 const DIALOG_540_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(540.0);
 const DIALOG_640_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(640.0);
 const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(200.0);
@@ -144,7 +142,6 @@ pub(in super::super) struct PopoverHost {
     file_history_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
     submodule_picker_search_input: Option<Entity<components::TextInput>>,
-    diff_hunk_picker_search_input: Option<Entity<components::TextInput>>,
     picker_prompt_scroll: ScrollHandle,
 
     clone_repo_url_input: Entity<components::TextInput>,
@@ -425,7 +422,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         }
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
-        PopoverKind::DiffHunks => Some(DIALOG_520_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
@@ -992,7 +988,6 @@ impl PopoverHost {
             file_history_search_input: None,
             worktree_picker_search_input: None,
             submodule_picker_search_input: None,
-            diff_hunk_picker_search_input: None,
             picker_prompt_scroll: ScrollHandle::new(),
             clone_repo_url_input,
             clone_repo_parent_dir_input,
@@ -1101,9 +1096,6 @@ impl PopoverHost {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         if let Some(input) = &self.submodule_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.diff_hunk_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
 
@@ -1817,9 +1809,6 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
-                PopoverKind::DiffHunks => {
-                    let _ = self.ensure_diff_hunk_picker_search_input(window, cx);
-                }
                 _ => {}
             }
             self.popover = Some(kind);
@@ -2200,7 +2189,6 @@ impl PopoverHost {
             PopoverKind::UiScalePicker => self.context_menu_view(PopoverKind::UiScalePicker, cx),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
-            PopoverKind::DiffHunks => diff_hunks::panel(self, cx),
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }

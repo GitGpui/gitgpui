@@ -97,15 +97,14 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
 | Switch to split diff | `Option-S` | `Alt-S` | Raw file diff only. |
 | Toggle whitespace visibility | `Option-W` | `Alt-W` | Raw diff / conflict diff only. |
-| Open the hunk picker | `Option-H` | `Alt-H` | When hunk navigation is available. |
 | Stage or unstage the current working-tree file and advance to the adjacent file | `Space` | `Space` | Raw working-tree file diff only, and not while the diff search input has focus. |
 | Select all diff text | `Cmd-A` | `Ctrl-A` | File preview and text-selection flows. |
 | Copy selected diff text | `Cmd-C` | `Ctrl-C` | File preview and text-selection flows. |
 | Pick conflict result `Base / Ours / Theirs / Both` | `A`, `B`, `C`, `D` | `A`, `B`, `C`, `D` | Conflict resolver only. |
 
 Preview-mode note:
-- Rendered markdown preview hides the raw diff navigation controls and ignores the raw-diff-only view toggles, hunk picker, whitespace toggle, and conflict navigation hotkeys until you return to source mode.
-- The diff navigation keys above still work while a GitComet text input has focus, but search activation, `Escape`, view toggles, hunk picker, and staging `Space` remain tied to the active diff surface rather than text inputs.
+- Rendered markdown preview hides the raw diff navigation controls and ignores the raw-diff-only view toggles, whitespace toggle, and conflict navigation hotkeys until you return to source mode.
+- The diff navigation keys above still work while a GitComet text input has focus, but search activation, `Escape`, view toggles, and staging `Space` remain tied to the active diff surface rather than text inputs.
 
 ## Context menu shortcuts
 

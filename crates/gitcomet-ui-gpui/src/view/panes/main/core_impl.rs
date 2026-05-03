@@ -1056,7 +1056,6 @@ impl MainPaneView {
             diff_text_hitboxes: HashMap::default(),
             diff_text_layout_cache_epoch: 0,
             diff_text_layout_cache: HashMap::default(),
-            diff_hunk_picker_search_input: None,
             diff_search_active: false,
             diff_search_query: "".into(),
             diff_search_matches: Vec::new(),
@@ -1261,9 +1260,6 @@ impl MainPaneView {
                 self.conflict_resolved_preview_line_starts.as_ref(),
             );
             self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
-        }
-        if let Some(input) = &self.diff_hunk_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         self.history_view
             .update(cx, |view, cx| view.set_theme(theme, cx));
@@ -3138,23 +3134,6 @@ impl MainPaneView {
             window,
             cx,
         );
-    }
-
-    pub(in crate::view) fn open_popover_at_cursor(
-        &mut self,
-        kind: PopoverKind,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let root_view = self.root_view.clone();
-        let window_handle = window.window_handle();
-        cx.defer(move |cx| {
-            let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, root.last_mouse_pos, window, cx);
-                });
-            });
-        });
     }
 
     pub(in crate::view) fn clear_status_multi_selection(
