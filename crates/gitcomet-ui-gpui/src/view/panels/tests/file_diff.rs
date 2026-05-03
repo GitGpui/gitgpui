@@ -2380,6 +2380,8 @@ fn collapsed_diff_inline_up_reveal_keeps_header_above_revealed_context(
         old_text,
         new_text,
     );
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    draw_and_drain_test_window(cx);
 
     let (hunk_src_ix, hunk_base_row_start) = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
@@ -2493,6 +2495,8 @@ fn collapsed_diff_split_up_reveal_keeps_header_above_revealed_context(
         old_text,
         new_text,
     );
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    draw_and_drain_test_window(cx);
     set_diff_scroll_sync_for_test(cx, &view, DiffScrollSync::None);
 
     let (hunk_src_ix, hunk_base_row_start) = cx.update(|_window, app| {

@@ -691,18 +691,6 @@ pub fn persist_repo_history_mode_to_path(
     persist_to_path(session_file_path, &file)
 }
 
-pub(crate) fn persist_repo_history_modes_batch(
-    updates: &[(PathBuf, HistoryMode)],
-) -> io::Result<()> {
-    if updates.is_empty() {
-        return Ok(());
-    }
-    let Some(session_file_path) = default_session_file_path() else {
-        return Ok(());
-    };
-    persist_repo_history_modes_batch_to_path(updates, &session_file_path)
-}
-
 pub(crate) fn persist_repo_history_modes_batch_to_path(
     updates: &[(PathBuf, HistoryMode)],
     session_file_path: &Path,
@@ -1275,6 +1263,10 @@ fn default_session_file_path() -> Option<PathBuf> {
     }
 
     Some(app_state_dir()?.join("session.json"))
+}
+
+pub(crate) fn default_session_file_path_for_effect() -> Option<PathBuf> {
+    default_session_file_path()
 }
 
 fn running_under_test_harness() -> bool {

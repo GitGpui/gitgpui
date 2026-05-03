@@ -298,6 +298,15 @@ fn hash_status_select_diff_target(target: &DiffTarget, hasher: &mut FxHasher) {
             commit_id.hash(hasher);
             path.hash(hasher);
         }
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path,
+        } => {
+            from_commit_id.hash(hasher);
+            to_commit_id.hash(hasher);
+            path.hash(hasher);
+        }
     }
 }
 
@@ -370,6 +379,7 @@ impl StatusSelectDiffOpenFixture {
                             load_patch_diff,
                             load_file_text,
                             preview_text_side,
+                            load_submodule_summary,
                             load_file_image,
                         } => {
                             repo_id.0.hash(&mut h);
@@ -381,6 +391,7 @@ impl StatusSelectDiffOpenFixture {
                                 Some(gitcomet_core::domain::DiffPreviewTextSide::New) => 2,
                             };
                             preview_text_side_key.hash(&mut h);
+                            load_submodule_summary.hash(&mut h);
                             load_file_image.hash(&mut h);
                         }
                         Effect::LoadDiff { repo_id, target }

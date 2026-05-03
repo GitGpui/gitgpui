@@ -14,6 +14,22 @@ pub enum Effect {
         repo_id: Option<RepoId>,
         action: &'static str,
     },
+    PersistRecentRepo {
+        repo_id: Option<RepoId>,
+        workdir: PathBuf,
+        action: &'static str,
+    },
+    PersistRepoHistoryMode {
+        repo_id: Option<RepoId>,
+        workdir: PathBuf,
+        mode: HistoryMode,
+        action: &'static str,
+    },
+    PersistRepoHistoryModesBatch {
+        repo_id: Option<RepoId>,
+        updates: Vec<(PathBuf, HistoryMode)>,
+        action: &'static str,
+    },
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,

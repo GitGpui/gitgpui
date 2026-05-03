@@ -1,12 +1,10 @@
 use super::util::{
     SelectedConflictTarget, append_requested_status_refresh_effects, clear_banner_error_for_repo,
-    diff_reload_effects, handle_session_persist_result, push_diagnostic, refresh_full_effects,
-    refresh_primary_effects, selected_conflict_target, start_conflict_target_reload,
-    start_current_conflict_target_reload,
+    diff_reload_effects, push_diagnostic, refresh_full_effects, refresh_primary_effects,
+    selected_conflict_target, start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
-use crate::session;
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use std::sync::Arc;
@@ -188,28 +186,25 @@ pub(super) fn set_history_scope(
         repo_state.set_log_loading_more(false);
         repo_state.spec.workdir.clone()
     };
-    let persist_result = session::persist_repo_history_mode(&workdir, scope);
-    handle_session_persist_result(
-        state,
-        Some(repo_id),
-        "updating history mode",
-        persist_result,
-    );
-
+    let mut effects = vec![Effect::PersistRepoHistoryMode {
+        repo_id: Some(repo_id),
+        workdir,
+        mode: scope,
+        action: "updating history mode",
+    }];
     if state.repos[repo_ix].loads_in_flight.request_log(
         scope,
         super::util::DEFAULT_LOG_PAGE_SIZE,
         None,
     ) {
-        vec![Effect::LoadLog {
+        effects.push(Effect::LoadLog {
             repo_id,
             scope,
             limit: super::util::DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
-        }]
-    } else {
-        Vec::new()
+        });
     }
+    effects
 }
 
 pub(super) fn load_more_history(

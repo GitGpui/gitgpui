@@ -34,6 +34,7 @@ const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_DOWN_DEBUG_SELECTOR: &str =
     "collapsed_diff_split_right_hunk_down";
 const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHORT_DEBUG_SELECTOR: &str =
     "collapsed_diff_split_right_hunk_short";
+const COLLAPSED_HUNK_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CollapsedHunkRevealAction {
@@ -61,6 +62,10 @@ fn diff_hunk_header_height(ui_scale_percent: u32) -> Pixels {
     crate::view::panes::main::diff_hunk_header_height_for_ui_scale(ui_scale_percent)
 }
 
+fn collapsed_hunk_header_row_height(ui_scale_percent: u32) -> Pixels {
+    diff_row_height(ui_scale_percent)
+}
+
 fn collapsed_hunk_shell_width(
     handle: &gpui::UniformListScrollHandle,
     fallback_width: Pixels,
@@ -82,12 +87,24 @@ fn collapsed_hunk_shell_width(
 
 fn scroll_pinned_hunk_shell(
     scroll_handle: gpui::UniformListScrollHandle,
+    background: Option<gpui::Rgba>,
     child: AnyElement,
 ) -> ScrollPinnedHunkShell {
     ScrollPinnedHunkShell {
         child,
         scroll_handle,
+        background,
     }
+}
+
+fn collapsed_hunk_bg_fill_bounds(bounds: gpui::Bounds<Pixels>) -> gpui::Bounds<Pixels> {
+    gpui::Bounds::new(
+        bounds.origin,
+        gpui::size(
+            bounds.size.width,
+            bounds.size.height + px(COLLAPSED_HUNK_BACKGROUND_OVERDRAW_PX),
+        ),
+    )
 }
 
 fn collapsed_hunk_header_bg(theme: AppTheme) -> gpui::Rgba {
@@ -101,28 +118,28 @@ fn collapsed_hunk_header_selected_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(theme.colors.accent, if theme.is_dark { 0.14 } else { 0.10 })
 }
 
-fn collapsed_inline_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
+fn collapsed_inline_hunk_bg(
+    theme: AppTheme,
+    _hunk: Option<CollapsedDiffHunk>,
+    _expansion_kind: CollapsedDiffExpansionKind,
+) -> gpui::Rgba {
     collapsed_hunk_header_bg(theme)
 }
 
-fn collapsed_inline_hunk_fg(theme: AppTheme, hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
-    match hunk.map(|hunk| (hunk.has_removals, hunk.has_additions)) {
-        Some((true, false)) => theme.colors.diff_remove_text,
-        Some((false, true)) => theme.colors.diff_add_text,
-        Some((true, true)) => theme.colors.text,
-        Some((false, false)) | None => theme.colors.text_muted,
-    }
+fn collapsed_inline_hunk_fg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
+    theme.colors.text_muted
 }
 
-fn collapsed_split_hunk_bg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::Rgba {
+fn collapsed_split_hunk_bg(
+    theme: AppTheme,
+    _hunk: Option<CollapsedDiffHunk>,
+    _column: PatchSplitColumn,
+) -> gpui::Rgba {
     collapsed_hunk_header_bg(theme)
 }
 
-fn collapsed_split_hunk_fg(theme: AppTheme, column: PatchSplitColumn) -> gpui::Rgba {
-    match column {
-        PatchSplitColumn::Left => theme.colors.diff_remove_text,
-        PatchSplitColumn::Right => theme.colors.diff_add_text,
-    }
+fn collapsed_split_hunk_fg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::Rgba {
+    theme.colors.text_muted
 }
 
 fn collapsed_hunk_reveal_button(
@@ -185,6 +202,7 @@ fn collapsed_hunk_reveal_button(
 struct ScrollPinnedHunkShell {
     child: AnyElement,
     scroll_handle: gpui::UniformListScrollHandle,
+    background: Option<gpui::Rgba>,
 }
 
 impl gpui::IntoElement for ScrollPinnedHunkShell {
@@ -238,12 +256,18 @@ impl gpui::Element for ScrollPinnedHunkShell {
         &mut self,
         _id: Option<&gpui::GlobalElementId>,
         _inspector_id: Option<&gpui::InspectorElementId>,
-        _bounds: gpui::Bounds<Pixels>,
+        bounds: gpui::Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         _prepaint_state: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut gpui::App,
     ) {
+        if let Some(background) = self.background {
+            window.paint_quad(gpui::fill(
+                collapsed_hunk_bg_fill_bounds(bounds),
+                background,
+            ));
+        }
         self.child.paint(window, cx);
     }
 }
@@ -1228,6 +1252,7 @@ impl MainPaneView {
                                         format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                                     this.active_context_menu_invoker.as_ref() == Some(&invoker)
                                 });
+                            let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
 
                             collapsed_split_header_row(
                                 theme,
@@ -1239,6 +1264,7 @@ impl MainPaneView {
                                 min_width,
                                 pinned_hunk_shell_width,
                                 pinned_hunk_shell_scroll.clone(),
+                                collapsed_hunk,
                                 None,
                                 display,
                                 None,
@@ -2028,17 +2054,18 @@ fn collapsed_inline_header_row(
                 CollapsedDiffExpansionKind::None => div().into_any_element(),
             };
 
+            let row_bg = collapsed_inline_hunk_bg(theme, collapsed_hunk, expansion_kind);
             let mut row = div()
                 .id(("collapsed_diff_hunk_hdr", visible_ix))
                 .debug_selector(|| COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR.to_string())
-                .h(diff_hunk_header_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
                 .overflow_hidden()
                 .flex()
                 .items_center()
-                .bg(collapsed_inline_hunk_bg(theme, collapsed_hunk))
+                .bg(row_bg)
                 .text_xs()
                 .text_color(text_color);
             row = row
@@ -2080,10 +2107,12 @@ fn collapsed_inline_header_row(
             }
 
             div()
-                .h(diff_hunk_header_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(ui_scale_percent))
                 .min_w(min_width)
+                .bg(row_bg)
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
+                    Some(row_bg),
                     row.into_any_element(),
                 ))
                 .into_any_element()
@@ -2329,6 +2358,7 @@ fn collapsed_split_header_row(
     min_width: Pixels,
     pinned_hunk_shell_width: Pixels,
     pinned_hunk_shell_scroll: gpui::UniformListScrollHandle,
+    collapsed_hunk: Option<CollapsedDiffHunk>,
     file_stat: Option<(usize, usize)>,
     display: SharedString,
     styled: Option<&CachedDiffStyledText>,
@@ -2543,17 +2573,18 @@ fn collapsed_split_header_row(
                 CollapsedDiffExpansionKind::None => div().into_any_element(),
             };
 
+            let row_bg = collapsed_split_hunk_bg(theme, collapsed_hunk, column);
             let mut row = div()
                 .id((row_id, visible_ix))
                 .debug_selector(move || shell_debug_selector.to_string())
-                .h(diff_hunk_header_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
                 .overflow_hidden()
                 .flex()
                 .items_center()
-                .bg(collapsed_split_hunk_bg(theme, column))
+                .bg(row_bg)
                 .text_xs()
                 .text_color(text_color)
                 .child(
@@ -2592,10 +2623,12 @@ fn collapsed_split_header_row(
             }
 
             div()
-                .h(diff_hunk_header_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(ui_scale_percent))
                 .min_w(min_width)
+                .bg(row_bg)
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
+                    Some(row_bg),
                     row.into_any_element(),
                 ))
                 .into_any_element()
@@ -2691,33 +2724,164 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_hunk_header_backgrounds_stay_neutral() {
+    fn collapsed_hunk_headers_use_uniform_diff_row_height() {
+        for ui_scale_percent in [75, 100, 125, 150, 200] {
+            assert_eq!(
+                collapsed_hunk_header_row_height(ui_scale_percent),
+                diff_row_height(ui_scale_percent)
+            );
+            assert_ne!(
+                collapsed_hunk_header_row_height(ui_scale_percent),
+                diff_hunk_header_height(ui_scale_percent)
+            );
+        }
+    }
+
+    #[test]
+    fn collapsed_inline_hunk_headers_use_neutral_colors() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             let neutral = collapsed_hunk_header_bg(theme);
 
             assert_eq!(
-                collapsed_inline_hunk_bg(theme, Some(collapsed_hunk(true, false))),
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, false)),
+                    CollapsedDiffExpansionKind::Up,
+                ),
                 neutral
             );
             assert_eq!(
-                collapsed_inline_hunk_bg(theme, Some(collapsed_hunk(false, true))),
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(false, true)),
+                    CollapsedDiffExpansionKind::Up,
+                ),
                 neutral
             );
             assert_eq!(
-                collapsed_inline_hunk_bg(theme, Some(collapsed_hunk(true, true))),
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    CollapsedDiffExpansionKind::Up,
+                ),
                 neutral
             );
             assert_eq!(
-                collapsed_split_hunk_bg(theme, PatchSplitColumn::Left),
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    CollapsedDiffExpansionKind::Both,
+                ),
                 neutral
             );
             assert_eq!(
-                collapsed_split_hunk_bg(theme, PatchSplitColumn::Right),
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    CollapsedDiffExpansionKind::Short,
+                ),
                 neutral
             );
+            assert_eq!(
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    CollapsedDiffExpansionKind::Down,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(theme, None, CollapsedDiffExpansionKind::Up),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, false))),
+                theme.colors.text_muted
+            );
+            assert_eq!(
+                collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(false, true))),
+                theme.colors.text_muted
+            );
+            assert_eq!(
+                collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, true))),
+                theme.colors.text_muted
+            );
+            assert_eq!(
+                collapsed_inline_hunk_fg(theme, None),
+                theme.colors.text_muted
+            );
+        }
+    }
 
-            assert_ne!(neutral, theme.colors.diff_remove_bg);
-            assert_ne!(neutral, theme.colors.diff_add_bg);
+    #[test]
+    fn collapsed_split_hunk_headers_use_neutral_colors_for_both_sides() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let neutral = collapsed_hunk_header_bg(theme);
+
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, false)),
+                    PatchSplitColumn::Left,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, false)),
+                    PatchSplitColumn::Right,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(false, true)),
+                    PatchSplitColumn::Left,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(false, true)),
+                    PatchSplitColumn::Right,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    PatchSplitColumn::Left,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    PatchSplitColumn::Right,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(theme, None, PatchSplitColumn::Left),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(theme, None, PatchSplitColumn::Right),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_fg(theme, PatchSplitColumn::Left),
+                theme.colors.text_muted
+            );
+            assert_eq!(
+                collapsed_split_hunk_fg(theme, PatchSplitColumn::Right),
+                theme.colors.text_muted
+            );
         }
     }
 }

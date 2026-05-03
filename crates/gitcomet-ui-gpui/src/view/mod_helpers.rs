@@ -586,7 +586,7 @@ pub(super) struct CommitDetailsDelayState {
     pub(super) show_loading: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum StatusSection {
     CombinedUnstaged,
     Untracked,
@@ -618,10 +618,16 @@ enum StatusSectionFilter {
     ExcludeUntracked,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct StatusSectionEntries<'a> {
     entries: &'a [FileStatus],
-    filter: StatusSectionFilter,
+    indexes: StatusSectionIndexes,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StatusSectionIndexes {
+    All,
+    Filtered(Vec<usize>),
 }
 
 impl<'a> StatusSectionEntries<'a> {
@@ -640,44 +646,81 @@ impl<'a> StatusSectionEntries<'a> {
             ),
             StatusSection::Staged => (repo.staged_status_entries()?, StatusSectionFilter::All),
         };
-        Some(Self { entries, filter })
+        let indexes = match filter {
+            StatusSectionFilter::All => StatusSectionIndexes::All,
+            StatusSectionFilter::UntrackedOnly | StatusSectionFilter::ExcludeUntracked => {
+                StatusSectionIndexes::Filtered(
+                    entries
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ix, entry)| {
+                            status_section_filter_matches(filter, entry).then_some(ix)
+                        })
+                        .collect(),
+                )
+            }
+        };
+        Some(Self { entries, indexes })
     }
 
-    pub(super) fn iter(self) -> StatusSectionIter<'a> {
-        StatusSectionIter {
-            inner: self.entries.iter(),
-            filter: self.filter,
+    pub(super) fn iter(&self) -> StatusSectionIter<'a, '_> {
+        let inner = match &self.indexes {
+            StatusSectionIndexes::All => StatusSectionIterInner::All(self.entries.iter()),
+            StatusSectionIndexes::Filtered(indexes) => StatusSectionIterInner::Filtered {
+                entries: self.entries,
+                indexes: indexes.iter(),
+            },
+        };
+        StatusSectionIter { inner }
+    }
+
+    pub(super) fn len(&self) -> usize {
+        match &self.indexes {
+            StatusSectionIndexes::All => self.entries.len(),
+            StatusSectionIndexes::Filtered(indexes) => indexes.len(),
         }
     }
 
-    pub(super) fn len(self) -> usize {
-        self.iter().count()
+    pub(super) fn get(&self, index: usize) -> Option<&'a FileStatus> {
+        match &self.indexes {
+            StatusSectionIndexes::All => self.entries.get(index),
+            StatusSectionIndexes::Filtered(indexes) => indexes
+                .get(index)
+                .and_then(|source_ix| self.entries.get(*source_ix)),
+        }
     }
 
-    pub(super) fn get(self, index: usize) -> Option<&'a FileStatus> {
-        self.iter().nth(index)
-    }
-
-    pub(super) fn path_vec(self) -> Vec<std::path::PathBuf> {
+    pub(super) fn path_vec(&self) -> Vec<std::path::PathBuf> {
         self.iter().map(|entry| entry.path.clone()).collect()
     }
 
-    pub(super) fn contains_path(self, path: &std::path::Path) -> bool {
+    pub(super) fn contains_path(&self, path: &std::path::Path) -> bool {
         self.iter().any(|entry| entry.path == path)
     }
 }
 
-pub(super) struct StatusSectionIter<'a> {
-    inner: std::slice::Iter<'a, FileStatus>,
-    filter: StatusSectionFilter,
+pub(super) struct StatusSectionIter<'a, 'indexes> {
+    inner: StatusSectionIterInner<'a, 'indexes>,
 }
 
-impl<'a> Iterator for StatusSectionIter<'a> {
+enum StatusSectionIterInner<'a, 'indexes> {
+    All(std::slice::Iter<'a, FileStatus>),
+    Filtered {
+        entries: &'a [FileStatus],
+        indexes: std::slice::Iter<'indexes, usize>,
+    },
+}
+
+impl<'a, 'indexes> Iterator for StatusSectionIter<'a, 'indexes> {
     type Item = &'a FileStatus;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .find(|entry| status_section_filter_matches(self.filter, entry))
+        match &mut self.inner {
+            StatusSectionIterInner::All(iter) => iter.next(),
+            StatusSectionIterInner::Filtered { entries, indexes } => {
+                indexes.next().and_then(|ix| entries.get(*ix))
+            }
+        }
     }
 }
 

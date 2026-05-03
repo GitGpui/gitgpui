@@ -464,6 +464,7 @@ impl Default for HistoryState {
 #[derive(Clone, Debug)]
 pub struct DiffState {
     pub diff_target: Option<DiffTarget>,
+    pub diff_target_rev: u64,
     pub diff_state_rev: u64,
     pub diff_rev: u64,
     pub diff: Loadable<Shared<Diff>>,
@@ -481,6 +482,7 @@ impl Default for DiffState {
     fn default() -> Self {
         Self {
             diff_target: None,
+            diff_target_rev: 0,
             diff_state_rev: 0,
             diff_rev: 0,
             diff: Loadable::NotLoaded,
@@ -1084,6 +1086,13 @@ impl RepoState {
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
+    pub(crate) fn set_diff_target(&mut self, target: Option<DiffTarget>) {
+        if self.diff_state.diff_target != target {
+            self.diff_state.diff_target_rev = self.diff_state.diff_target_rev.wrapping_add(1);
+        }
+        self.diff_state.diff_target = target;
+    }
+
     pub(crate) fn bump_diff_state_rev(&mut self) {
         self.diff_state.diff_state_rev = self.diff_state.diff_state_rev.wrapping_add(1);
     }
@@ -1580,6 +1589,26 @@ mod tests {
     }
 
     #[test]
+    fn set_diff_target_bumps_target_rev_only_on_change() {
+        let mut repo = new_repo();
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("src/lib.rs"),
+            area: DiffArea::Unstaged,
+        };
+
+        repo.set_diff_target(Some(target.clone()));
+        assert_eq!(repo.diff_state.diff_target, Some(target.clone()));
+        assert_eq!(repo.diff_state.diff_target_rev, 1);
+
+        repo.set_diff_target(Some(target));
+        assert_eq!(repo.diff_state.diff_target_rev, 1);
+
+        repo.set_diff_target(None);
+        assert!(repo.diff_state.diff_target.is_none());
+        assert_eq!(repo.diff_state.diff_target_rev, 2);
+    }
+
+    #[test]
     fn bump_ops_rev_increments() {
         let mut repo = new_repo();
         let before = repo.ops_rev;
@@ -1762,6 +1791,7 @@ mod tests {
             repo.upstream_divergence_rev,
             repo.open_rev,
             repo.conflict_state.conflict_rev,
+            repo.diff_state.diff_target_rev,
             repo.diff_state.diff_state_rev,
             repo.ops_rev,
         );
@@ -1776,8 +1806,9 @@ mod tests {
         assert_eq!(repo.upstream_divergence_rev, snap.6);
         assert_eq!(repo.open_rev, snap.7);
         assert_eq!(repo.conflict_state.conflict_rev, snap.8);
-        assert_eq!(repo.diff_state.diff_state_rev, snap.9);
-        assert_eq!(repo.ops_rev, snap.10);
+        assert_eq!(repo.diff_state.diff_target_rev, snap.9);
+        assert_eq!(repo.diff_state.diff_state_rev, snap.10);
+        assert_eq!(repo.ops_rev, snap.11);
     }
 
     #[test]
@@ -1792,6 +1823,7 @@ mod tests {
         assert_eq!(repo.upstream_divergence_rev, 0);
         assert_eq!(repo.open_rev, 0);
         assert_eq!(repo.conflict_state.conflict_rev, 0);
+        assert_eq!(repo.diff_state.diff_target_rev, 0);
         assert_eq!(repo.diff_state.diff_state_rev, 0);
         assert_eq!(repo.ops_rev, 0);
         assert_eq!(repo.head_branch_rev, 0);

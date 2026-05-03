@@ -1,8 +1,7 @@
 use super::{
     GixRepo,
     conflict_stages::{
-        ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_blob_bytes_optional,
-        gix_index_stage_object_id_optional,
+        ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
 };
 use crate::util::{git_command_failed_error, run_git_parsed_stdout, run_git_raw_output};
@@ -18,6 +17,11 @@ use std::io::{BufReader, Write};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
+
+#[cfg(not(test))]
+const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
+const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 1024;
 
 impl GixRepo {
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
@@ -457,32 +461,38 @@ impl GixRepo {
                 let repo = self._repo.to_thread_local();
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
-                        let old = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
-                            IndexUnconflictedBlob::Present(bytes) => Some(bytes),
-                            IndexUnconflictedBlob::Missing => None,
-                            IndexUnconflictedBlob::Unmerged => {
-                                let ours = gix_index_stage_blob_bytes_optional(&repo, path, 2)?;
-                                let theirs = gix_index_stage_blob_bytes_optional(&repo, path, 3)?;
-                                return Ok(Some(FileDiffImage {
-                                    path: path.clone(),
-                                    old: ours,
-                                    new: theirs,
-                                }));
-                            }
-                        };
-                        let new = read_worktree_file_bytes_optional(&self.spec.workdir, path)?;
+                        let old =
+                            match gix_index_unconflicted_image_blob_bytes_optional(&repo, path)? {
+                                IndexUnconflictedBlob::Present(bytes) => Some(bytes),
+                                IndexUnconflictedBlob::Missing => None,
+                                IndexUnconflictedBlob::Unmerged => {
+                                    let ours =
+                                        gix_index_stage_image_blob_bytes_optional(&repo, path, 2)?;
+                                    let theirs =
+                                        gix_index_stage_image_blob_bytes_optional(&repo, path, 3)?;
+                                    return Ok(Some(FileDiffImage {
+                                        path: path.clone(),
+                                        old: ours,
+                                        new: theirs,
+                                    }));
+                                }
+                            };
+                        let new =
+                            read_worktree_image_file_bytes_optional(&self.spec.workdir, path)?;
                         (old, new)
                     }
                     DiffArea::Staged => {
-                        let old = gix_revision_path_blob_bytes_optional(&repo, "HEAD", path)?;
-                        let new = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
-                            IndexUnconflictedBlob::Present(bytes) => Some(bytes),
-                            IndexUnconflictedBlob::Missing => None,
-                            IndexUnconflictedBlob::Unmerged => {
-                                gix_index_stage_blob_bytes_optional(&repo, path, 2)?
-                                    .or(gix_index_stage_blob_bytes_optional(&repo, path, 3)?)
-                            }
-                        };
+                        let old = gix_revision_path_image_blob_bytes_optional(&repo, "HEAD", path)?;
+                        let new =
+                            match gix_index_unconflicted_image_blob_bytes_optional(&repo, path)? {
+                                IndexUnconflictedBlob::Present(bytes) => Some(bytes),
+                                IndexUnconflictedBlob::Missing => None,
+                                IndexUnconflictedBlob::Unmerged => {
+                                    gix_index_stage_image_blob_bytes_optional(&repo, path, 2)?.or(
+                                        gix_index_stage_image_blob_bytes_optional(&repo, path, 3)?,
+                                    )
+                                }
+                            };
                         (old, new)
                     }
                 };
@@ -502,10 +512,13 @@ impl GixRepo {
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => gix_revision_path_blob_bytes_optional(&repo, &parent, path)?,
+                    Some(parent) => {
+                        gix_revision_path_image_blob_bytes_optional(&repo, &parent, path)?
+                    }
                     None => None,
                 };
-                let new = gix_revision_path_blob_bytes_optional(&repo, commit_id.as_ref(), path)?;
+                let new =
+                    gix_revision_path_image_blob_bytes_optional(&repo, commit_id.as_ref(), path)?;
 
                 Ok(Some(FileDiffImage {
                     path: path.clone(),
@@ -523,10 +536,16 @@ impl GixRepo {
                 };
 
                 let repo = self._repo.to_thread_local();
-                let old =
-                    gix_revision_path_blob_bytes_optional(&repo, from_commit_id.as_ref(), path)?;
-                let new =
-                    gix_revision_path_blob_bytes_optional(&repo, to_commit_id.as_ref(), path)?;
+                let old = gix_revision_path_image_blob_bytes_optional(
+                    &repo,
+                    from_commit_id.as_ref(),
+                    path,
+                )?;
+                let new = gix_revision_path_image_blob_bytes_optional(
+                    &repo,
+                    to_commit_id.as_ref(),
+                    path,
+                )?;
 
                 Ok(Some(FileDiffImage {
                     path: path.clone(),
@@ -706,8 +725,30 @@ fn to_repo_path(path: &Path, workdir: &Path) -> Result<std::path::PathBuf> {
     }
 }
 
-fn read_worktree_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Option<Vec<u8>>> {
-    let full = workdir.join(path);
+fn ensure_image_diff_side_size(path: &Path, bytes: u64) -> Result<()> {
+    if bytes > MAX_IMAGE_DIFF_SIDE_BYTES {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "image diff side '{}' is {bytes} bytes, above the {MAX_IMAGE_DIFF_SIDE_BYTES} byte limit",
+            path.display()
+        ))));
+    }
+    Ok(())
+}
+
+fn read_worktree_image_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Option<Vec<u8>>> {
+    let full = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workdir.join(path)
+    };
+    let metadata = match std::fs::metadata(&full) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+    };
+    ensure_image_diff_side_size(path, metadata.len())?;
+
     match std::fs::read(&full) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -778,6 +819,24 @@ fn gix_blob_bytes_from_object_id_optional(
     })
 }
 
+fn gix_image_blob_bytes_from_object_id_optional(
+    repo: &gix::Repository,
+    object_id: gix::ObjectId,
+    path: &Path,
+) -> Result<Option<Vec<u8>>> {
+    let Some(header) = repo
+        .try_find_header(object_id)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_header: {e}"))))?
+    else {
+        return Ok(None);
+    };
+    if header.kind() != gix::objs::Kind::Blob {
+        return Ok(None);
+    }
+    ensure_image_diff_side_size(path, header.size())?;
+    gix_blob_bytes_from_object_id_optional(repo, object_id)
+}
+
 fn gix_revision_id_optional(
     repo: &gix::Repository,
     revision: &str,
@@ -810,34 +869,6 @@ fn gix_revision_id_optional(
     Ok(Some(id))
 }
 
-fn gix_revision_path_blob_bytes_optional(
-    repo: &gix::Repository,
-    revision: &str,
-    path: &Path,
-) -> Result<Option<Vec<u8>>> {
-    let Some(object_id) = gix_revision_id_optional(repo, revision)? else {
-        return Ok(None);
-    };
-
-    let object = match repo.find_object(object_id) {
-        Ok(object) => object,
-        Err(_) => return Ok(None),
-    };
-    let tree = match object.peel_to_tree() {
-        Ok(tree) => tree,
-        Err(_) => return Ok(None),
-    };
-
-    let Some(entry) = tree
-        .lookup_entry_by_path(path)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix lookup_entry_by_path: {e}"))))?
-    else {
-        return Ok(None);
-    };
-
-    gix_blob_bytes_from_object_id_optional(repo, entry.object_id())
-}
-
 fn gix_revision_path_blob_object_id_optional(
     repo: &gix::Repository,
     revision: &str,
@@ -864,6 +895,17 @@ fn gix_revision_path_blob_object_id_optional(
     };
 
     Ok(Some(entry.object_id()))
+}
+
+fn gix_revision_path_image_blob_bytes_optional(
+    repo: &gix::Repository,
+    revision: &str,
+    path: &Path,
+) -> Result<Option<Vec<u8>>> {
+    let Some(object_id) = gix_revision_path_blob_object_id_optional(repo, revision, path)? else {
+        return Ok(None);
+    };
+    gix_image_blob_bytes_from_object_id_optional(repo, object_id, path)
 }
 
 fn gix_revision_path_blob_entry_optional(
@@ -902,7 +944,7 @@ fn gix_revision_path_blob_entry_optional(
     }))
 }
 
-fn gix_index_unconflicted_blob_bytes_optional(
+fn gix_index_unconflicted_image_blob_bytes_optional(
     repo: &gix::Repository,
     path: &Path,
 ) -> Result<IndexUnconflictedBlob> {
@@ -910,20 +952,21 @@ fn gix_index_unconflicted_blob_bytes_optional(
         .index_or_load_from_head_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
 
-    let path = gix::path::os_str_into_bstr(path.as_os_str())
+    let path_key = gix::path::os_str_into_bstr(path.as_os_str())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
 
-    if let Some(entry) = index.entry_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
+    if let Some(entry) =
+        index.entry_by_path_and_stage(path_key, gix::index::entry::Stage::Unconflicted)
     {
         return Ok(
-            match gix_blob_bytes_from_object_id_optional(repo, entry.id)? {
+            match gix_image_blob_bytes_from_object_id_optional(repo, entry.id, path)? {
                 Some(bytes) => IndexUnconflictedBlob::Present(bytes),
                 None => IndexUnconflictedBlob::Missing,
             },
         );
     }
 
-    if index.entry_range(path).is_some() {
+    if index.entry_range(path_key).is_some() {
         return Ok(IndexUnconflictedBlob::Unmerged);
     }
 
@@ -951,6 +994,17 @@ fn gix_index_unconflicted_blob_id_optional(
     }
 
     Ok(IndexUnconflictedBlobId::Missing)
+}
+
+fn gix_index_stage_image_blob_bytes_optional(
+    repo: &gix::Repository,
+    path: &Path,
+    stage: u8,
+) -> Result<Option<Vec<u8>>> {
+    let Some(object_id) = gix_index_stage_object_id_optional(repo, path, stage)? else {
+        return Ok(None);
+    };
+    gix_image_blob_bytes_from_object_id_optional(repo, object_id, path)
 }
 
 fn worktree_file_path_optional(workdir: &Path, path: &Path) -> Option<std::path::PathBuf> {
@@ -1151,5 +1205,42 @@ fn unified_body_line_count(text: &str) -> usize {
             .filter(|&&byte| byte == b'\n')
             .count()
             + usize::from(!text.ends_with('\n'))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::error::ErrorKind;
+
+    #[test]
+    fn read_worktree_image_file_bytes_rejects_oversized_file_before_reading() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("large.png");
+        let file = std::fs::File::create(&path).expect("create sparse image");
+        file.set_len(MAX_IMAGE_DIFF_SIDE_BYTES + 1)
+            .expect("make sparse image oversized");
+
+        let err = read_worktree_image_file_bytes_optional(tmp.path(), Path::new("large.png"))
+            .expect_err("oversized image should fail");
+
+        let ErrorKind::Backend(message) = err.kind() else {
+            panic!("expected backend size-limit error, got {err:?}");
+        };
+        assert!(message.contains("image diff side"));
+        assert!(message.contains("byte limit"));
+    }
+
+    #[test]
+    fn read_worktree_image_file_bytes_allows_file_at_size_limit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bytes = vec![7; MAX_IMAGE_DIFF_SIDE_BYTES as usize];
+        std::fs::write(tmp.path().join("limit.png"), &bytes).expect("write image at limit");
+
+        let loaded = read_worktree_image_file_bytes_optional(tmp.path(), Path::new("limit.png"))
+            .expect("load image at limit")
+            .expect("image at limit");
+
+        assert_eq!(loaded, bytes);
     }
 }

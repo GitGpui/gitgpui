@@ -1031,6 +1031,73 @@ fn select_diff_bumps_diff_state_rev() {
 }
 
 #[test]
+fn select_and_clear_diff_update_diff_target_rev_only_when_target_changes() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let first = DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    };
+    let second = DiffTarget::WorkingTree {
+        path: PathBuf::from("src/main.rs"),
+        area: DiffArea::Unstaged,
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: first.clone(),
+        },
+    );
+    assert_eq!(state.repos[0].diff_state.diff_target_rev, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: first,
+        },
+    );
+    assert_eq!(
+        state.repos[0].diff_state.diff_target_rev, 1,
+        "reselecting the same target should not invalidate queued selected-diff work"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: second,
+        },
+    );
+    assert_eq!(state.repos[0].diff_state.diff_target_rev, 2);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ClearDiffSelection { repo_id: RepoId(1) },
+    );
+    assert_eq!(state.repos[0].diff_state.diff_target_rev, 3);
+}
+
+#[test]
 fn clear_diff_selection_bumps_diff_state_rev() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);

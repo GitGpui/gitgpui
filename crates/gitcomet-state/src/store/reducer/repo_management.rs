@@ -78,6 +78,27 @@ fn persist_session_effect(
     Effect::PersistSession { repo_id, action }
 }
 
+fn persist_recent_repo_effect(repo_id: Option<RepoId>, workdir: PathBuf) -> Effect {
+    Effect::PersistRecentRepo {
+        repo_id,
+        workdir,
+        action: "updating recent repositories",
+    }
+}
+
+fn persist_repo_history_mode_effect(
+    repo_id: Option<RepoId>,
+    workdir: PathBuf,
+    mode: gitcomet_core::domain::HistoryMode,
+) -> Effect {
+    Effect::PersistRepoHistoryMode {
+        repo_id,
+        workdir,
+        mode,
+        action: "updating history mode",
+    }
+}
+
 fn append_repo_switch_worktree_refresh_effect(
     repo_state: &mut RepoState,
     effects: &mut SetActiveRepoEffects,
@@ -106,14 +127,8 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
     {
         // Re-opening an already open repository should still refresh primary state, so stale
         // status/diff data gets reconciled immediately.
-        let effects = set_active_repo(state, repo_id);
-        let persist_result = session::persist_recent_repo(&path);
-        handle_session_persist_result(
-            state,
-            Some(repo_id),
-            "updating recent repositories",
-            persist_result,
-        );
+        let mut effects = set_active_repo(state, repo_id);
+        effects.push(persist_recent_repo_effect(Some(repo_id), path));
         return effects;
     }
 
@@ -149,31 +164,25 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         repo_state
     });
     state.active_repo = Some(repo_id);
-    let persist_recent_result = session::persist_recent_repo(&spec.workdir);
     let mut effects = vec![Effect::OpenRepo {
         repo_id,
         path: spec.workdir.clone(),
     }];
+    effects.push(persist_recent_repo_effect(
+        Some(repo_id),
+        spec.workdir.clone(),
+    ));
     effects.push(persist_session_effect(
         state,
         Some(repo_id),
         "opening a repository",
     ));
-    handle_session_persist_result(
-        state,
-        Some(repo_id),
-        "updating recent repositories",
-        persist_recent_result,
-    );
     if saved_history_mode.is_none() {
-        let persist_history_mode_result =
-            session::persist_repo_history_mode(&spec.workdir, history_mode);
-        handle_session_persist_result(
-            state,
+        effects.push(persist_repo_history_mode_effect(
             Some(repo_id),
-            "updating history mode",
-            persist_history_mode_result,
-        );
+            spec.workdir.clone(),
+            history_mode,
+        ));
     }
     effects
 }
@@ -263,14 +272,13 @@ pub(super) fn restore_session(
         repo_state.last_active_at = Some(now);
     }
 
-    let persist_history_mode_result =
-        session::persist_repo_history_modes_batch(&history_mode_persist_updates);
-    handle_session_persist_result(
-        state,
-        state.active_repo,
-        "updating history mode",
-        persist_history_mode_result,
-    );
+    if !history_mode_persist_updates.is_empty() {
+        effects.push(Effect::PersistRepoHistoryModesBatch {
+            repo_id: state.active_repo,
+            updates: history_mode_persist_updates,
+            action: "updating history mode",
+        });
+    }
 
     effects.push(persist_session_effect(
         state,
@@ -710,7 +718,7 @@ pub(super) fn repo_opened_ok(
         repo_state.set_submodules(Loadable::NotLoaded);
         repo_state.set_selected_commit(None);
         repo_state.set_commit_details(Loadable::NotLoaded);
-        repo_state.diff_state.diff_target = None;
+        repo_state.set_diff_target(None);
         repo_state.diff_state.diff = Loadable::NotLoaded;
         repo_state.diff_state.diff_file = Loadable::NotLoaded;
         repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;

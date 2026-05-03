@@ -1,7 +1,7 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
+    Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
     FileDiffText, HistoryMode, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
     RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence,
     Worktree,
@@ -97,6 +97,18 @@ struct LogHeadPageCacheEntry {
     page: LogPage,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LogFileFollowCacheKey {
+    head_oid: Option<gix::ObjectId>,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct LogFileFollowCacheEntry {
+    key: LogFileFollowCacheKey,
+    commits: Arc<Vec<Commit>>,
+}
+
 type LogPagedWalk = gix::traverse::commit::Simple<gix::OdbHandleArc, fn(&gix::oid) -> bool>;
 
 struct LogPagedWalkState {
@@ -118,6 +130,7 @@ struct LogPagedWalkCache {
 }
 
 const LOG_HEAD_PAGE_CACHE_LIMIT: usize = 32;
+const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
 const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 
 pub(crate) struct GixRepo {
@@ -127,6 +140,7 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_head_page_cache: std::sync::Mutex<Vec<LogHeadPageCacheEntry>>,
+    log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
 }
 
@@ -139,6 +153,7 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_head_page_cache: std::sync::Mutex::new(Vec::new()),
+            log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
         }
     }

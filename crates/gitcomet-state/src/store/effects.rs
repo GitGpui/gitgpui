@@ -21,13 +21,18 @@ use super::executor::TaskExecutor;
 fn selected_diff_target(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     repo_id: RepoId,
-) -> Option<DiffTarget> {
+) -> Option<(DiffTarget, u64)> {
     let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
     state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.diff_state.diff_target.clone())
+        .and_then(|repo| {
+            repo.diff_state
+                .diff_target
+                .clone()
+                .map(|target| (target, repo.diff_state.diff_target_rev))
+        })
 }
 
 fn selected_conflict_file_path(
@@ -64,7 +69,11 @@ fn selected_inline_submodule_diff(
 fn effect_requires_available_git(effect: &Effect) -> bool {
     !matches!(
         effect,
-        Effect::PersistSession { .. } | Effect::AbortCloneRepo { .. }
+        Effect::PersistSession { .. }
+            | Effect::PersistRecentRepo { .. }
+            | Effect::PersistRepoHistoryMode { .. }
+            | Effect::PersistRepoHistoryModesBatch { .. }
+            | Effect::AbortCloneRepo { .. }
     )
 }
 
@@ -86,7 +95,10 @@ fn send_unavailable_git_effect_result(
     let send = |msg| util::send_or_log(msg_tx, msg);
 
     match effect {
-        Effect::PersistSession { .. } => {}
+        Effect::PersistSession { .. }
+        | Effect::PersistRecentRepo { .. }
+        | Effect::PersistRepoHistoryMode { .. }
+        | Effect::PersistRepoHistoryModesBatch { .. } => {}
         Effect::OpenRepo { repo_id, path } => {
             send(Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
                 repo_id,
@@ -388,7 +400,7 @@ fn send_unavailable_git_effect_result(
             load_submodule_summary,
             load_file_image,
         } => {
-            let Some(target) = selected_diff_target(thread_state, repo_id) else {
+            let Some((target, _target_rev)) = selected_diff_target(thread_state, repo_id) else {
                 return;
             };
             if load_submodule_summary {
@@ -905,12 +917,87 @@ pub(super) fn schedule_effect(
 
     match effect {
         Effect::PersistSession { repo_id, action } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
             let state_snapshot = {
                 let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
                 Arc::clone(&state)
             };
             session_persist_executor.spawn(move || {
-                if let Err(error) = session::persist_from_state(&state_snapshot) {
+                if let Err(error) =
+                    session::persist_from_state_to_path(&state_snapshot, &session_file_path)
+                {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
+        Effect::PersistRecentRepo {
+            repo_id,
+            workdir,
+            action,
+        } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) =
+                    session::persist_recent_repo_to_path(&workdir, &session_file_path)
+                {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
+        Effect::PersistRepoHistoryMode {
+            repo_id,
+            workdir,
+            mode,
+            action,
+        } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) =
+                    session::persist_repo_history_mode_to_path(&workdir, mode, &session_file_path)
+                {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
+        Effect::PersistRepoHistoryModesBatch {
+            repo_id,
+            updates,
+            action,
+        } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) =
+                    session::persist_repo_history_modes_batch_to_path(&updates, &session_file_path)
+                {
                     util::send_or_log(
                         &msg_tx,
                         Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
@@ -1076,13 +1163,15 @@ pub(super) fn schedule_effect(
             load_submodule_summary,
             load_file_image,
         } => {
-            if let Some(target) = selected_diff_target(thread_state, repo_id) {
+            if let Some((target, target_rev)) = selected_diff_target(thread_state, repo_id) {
                 repo_load::schedule_load_selected_diff(
                     executor,
                     repos,
+                    Arc::clone(thread_state),
                     msg_tx,
                     repo_id,
                     target,
+                    target_rev,
                     repo_load::SelectedDiffLoadOptions {
                         load_patch_diff,
                         load_file_text,

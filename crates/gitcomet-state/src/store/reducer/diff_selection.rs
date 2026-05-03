@@ -184,7 +184,7 @@ pub(super) fn fill_select_diff_inline(
     clear_inline_submodule_diff_state(repo_state);
 
     if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
-        repo_state.diff_state.diff_target = Some(target.clone());
+        repo_state.set_diff_target(Some(target.clone()));
         repo_state.diff_state.diff = Loadable::NotLoaded;
         repo_state.diff_state.diff_file = Loadable::NotLoaded;
         repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
@@ -200,7 +200,7 @@ pub(super) fn fill_select_diff_inline(
         return;
     }
 
-    repo_state.diff_state.diff_target = Some(target);
+    repo_state.set_diff_target(Some(target));
     let load_plan = {
         let target = repo_state
             .diff_state
@@ -237,7 +237,7 @@ pub(super) fn select_conflict_diff(
         path: path.clone(),
         area: DiffArea::Unstaged,
     };
-    repo_state.diff_state.diff_target = Some(target);
+    repo_state.set_diff_target(Some(target));
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
     repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
@@ -255,7 +255,7 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
 
     clear_inline_submodule_diff_state(repo_state);
 
-    repo_state.diff_state.diff_target = None;
+    repo_state.set_diff_target(None);
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
     repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;

@@ -76,6 +76,85 @@ fn schedule_effect_for_test(
 }
 
 #[test]
+fn session_update_effects_persist_on_session_executor() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            panic!("session persistence effects should not open repositories")
+        }
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session_file = dir.path().join("session.json");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    let _session_file_override =
+        crate::session::push_test_session_file_path_override(Some(session_file.clone()));
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let session_executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &session_executor,
+        &backend,
+        &repos,
+        msg_tx.clone(),
+        Effect::PersistRecentRepo {
+            repo_id: Some(RepoId(1)),
+            workdir: repo_a.clone(),
+            action: "test recent",
+        },
+    );
+    schedule_effect_for_test(
+        &executor,
+        &session_executor,
+        &backend,
+        &repos,
+        msg_tx.clone(),
+        Effect::PersistRepoHistoryMode {
+            repo_id: Some(RepoId(1)),
+            workdir: repo_a.clone(),
+            mode: LogScope::NoMerges,
+            action: "test history mode",
+        },
+    );
+    schedule_effect_for_test(
+        &executor,
+        &session_executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::PersistRepoHistoryModesBatch {
+            repo_id: Some(RepoId(1)),
+            updates: vec![(repo_b.clone(), LogScope::FirstParent)],
+            action: "test history batch",
+        },
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let session = crate::session::load_from_path(&session_file);
+        let repo_a_mode = crate::session::load_repo_history_mode_from_path(&repo_a, &session_file);
+        let repo_b_mode = crate::session::load_repo_history_mode_from_path(&repo_b, &session_file);
+        if session.recent_repos.first() == Some(&repo_a)
+            && repo_a_mode == Some(LogScope::NoMerges)
+            && repo_b_mode == Some(LogScope::FirstParent)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "session update effects did not persist before timeout"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn unavailable_git_effect_emits_synthetic_repo_command_error() {
     struct Backend;
     impl GitBackend for Backend {

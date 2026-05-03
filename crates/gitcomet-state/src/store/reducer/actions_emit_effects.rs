@@ -555,7 +555,7 @@ pub(super) fn commit_finished(
         Ok(()) => {
             repo_state.last_error = None;
             clear_banner = true;
-            repo_state.diff_state.diff_target = None;
+            repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
@@ -607,7 +607,7 @@ pub(super) fn commit_amend_finished(
         Ok(()) => {
             repo_state.last_error = None;
             clear_banner = true;
-            repo_state.diff_state.diff_target = None;
+            repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
@@ -753,7 +753,7 @@ pub(super) fn repo_command_finished(
                     | RepoCommandKind::RebaseAbort
                     | RepoCommandKind::MergeAbort
             ) {
-                repo_state.diff_state.diff_target = None;
+                repo_state.set_diff_target(None);
                 repo_state.diff_state.diff = Loadable::NotLoaded;
                 repo_state.diff_state.diff_file = Loadable::NotLoaded;
                 repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;

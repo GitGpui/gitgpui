@@ -811,6 +811,17 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
             )),
             "expected LoadLog({target_scope:?}) effect, got {effects:?}"
         );
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::PersistRepoHistoryMode {
+                    repo_id: Some(RepoId(1)),
+                    mode,
+                    ..
+                } if *mode == target_scope
+            )),
+            "expected async history mode persist effect for {target_scope:?}, got {effects:?}"
+        );
     }
 }
 
@@ -901,7 +912,14 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
             scope: LogScope::AllBranches,
         },
     );
-    assert!(effects.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistRepoHistoryMode {
+            repo_id: Some(RepoId(1)),
+            mode: LogScope::AllBranches,
+            ..
+        }]
+    ));
 
     let effects = reduce(
         &mut repos,
@@ -912,7 +930,14 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
             scope: LogScope::NoMerges,
         },
     );
-    assert!(effects.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistRepoHistoryMode {
+            repo_id: Some(RepoId(1)),
+            mode: LogScope::NoMerges,
+            ..
+        }]
+    ));
     assert_eq!(
         state.repos[0].history_state.history_scope,
         LogScope::NoMerges

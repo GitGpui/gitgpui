@@ -410,7 +410,7 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
     let _session_file_override =
         crate::session::push_test_session_file_path_override(Some(session_file.clone()));
 
-    reduce(
+    let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
@@ -421,6 +421,21 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
         state.repos[0].history_state.history_scope,
         LogScope::AllBranches
     );
+    let persist_history = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::PersistRepoHistoryMode { workdir, mode, .. } => Some((workdir, mode)),
+            _ => None,
+        })
+        .expect("expected async history mode persist effect");
+    assert_eq!(persist_history.0, &normalized_repo_path);
+    assert_eq!(*persist_history.1, LogScope::AllBranches);
+    crate::session::persist_repo_history_mode_to_path(
+        persist_history.0,
+        *persist_history.1,
+        &session_file,
+    )
+    .expect("apply async history mode persist effect");
     assert_eq!(
         crate::session::load_repo_history_mode_from_path(&normalized_repo_path, &session_file),
         Some(LogScope::AllBranches)
@@ -1241,7 +1256,7 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
 
     let _session_file_override =
         crate::session::push_test_session_file_path_override(Some(session_file.clone()));
-    reduce(
+    let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
@@ -1277,6 +1292,17 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
             .map(|repo| repo.spec.workdir.clone())),
         Some(normalized_repo_default.clone())
     );
+    let updates = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::PersistRepoHistoryModesBatch { updates, .. } => Some(updates),
+            _ => None,
+        })
+        .expect("expected async history mode batch persist effect");
+    assert!(updates.contains(&(normalized_repo_legacy.clone(), LogScope::FirstParent)));
+    assert!(updates.contains(&(normalized_repo_default.clone(), LogScope::MergesOnly)));
+    crate::session::persist_repo_history_modes_batch_to_path(updates, &session_file)
+        .expect("apply async history mode batch persist effect");
     assert_eq!(
         crate::session::load_repo_history_mode_from_path(&normalized_repo_mode, &session_file),
         Some(LogScope::NoMerges)

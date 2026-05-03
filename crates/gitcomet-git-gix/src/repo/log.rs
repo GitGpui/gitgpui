@@ -1,8 +1,9 @@
 use super::history::gix_head_id_or_none;
 use super::{GixRepo, bstr_to_arc_str, oid_to_arc_str};
 use crate::util::{
-    bytes_to_text_preserving_utf8, parse_git_log_pretty_records, path_buf_from_git_bytes,
-    run_git_capture, unix_seconds_to_system_time, unix_seconds_to_system_time_or_epoch,
+    bytes_to_text_preserving_utf8, parse_git_log_pretty_records_from_reader,
+    path_buf_from_git_bytes, run_git_parsed_stdout, unix_seconds_to_system_time,
+    unix_seconds_to_system_time_or_epoch,
 };
 use gitcomet_core::domain::{
     Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, HistoryMode, LogCursor,
@@ -653,6 +654,49 @@ impl GixRepo {
         });
     }
 
+    fn log_file_follow_cache_key(
+        path: &Path,
+        head_oid: Option<gix::ObjectId>,
+    ) -> super::LogFileFollowCacheKey {
+        super::LogFileFollowCacheKey {
+            head_oid,
+            path: path.to_path_buf(),
+        }
+    }
+
+    fn cached_log_file_follow_commits(
+        &self,
+        key: &super::LogFileFollowCacheKey,
+    ) -> Option<Arc<Vec<Commit>>> {
+        let mut cache = self
+            .log_file_follow_cache
+            .lock()
+            .expect("log file follow cache");
+        let index = cache.iter().position(|entry| &entry.key == key)?;
+        let entry = cache.remove(index);
+        let commits = Arc::clone(&entry.commits);
+        cache.push(entry);
+        Some(commits)
+    }
+
+    fn store_log_file_follow_commits(
+        &self,
+        key: super::LogFileFollowCacheKey,
+        commits: Arc<Vec<Commit>>,
+    ) {
+        let mut cache = self
+            .log_file_follow_cache
+            .lock()
+            .expect("log file follow cache");
+        if let Some(index) = cache.iter().position(|entry| entry.key == key) {
+            cache.remove(index);
+        }
+        if cache.len() >= super::LOG_FILE_FOLLOW_CACHE_LIMIT {
+            cache.remove(0);
+        }
+        cache.push(super::LogFileFollowCacheEntry { key, commits });
+    }
+
     fn take_log_paged_walk(
         &self,
         token: &str,
@@ -704,8 +748,9 @@ impl GixRepo {
         }
         cmd.arg("--").arg(path);
 
-        let output = run_git_capture(cmd, "git log --follow")?;
-        Ok(parse_git_log_pretty_records(&output).commits)
+        run_git_parsed_stdout(cmd, "git log --follow", false, |stdout| {
+            parse_git_log_pretty_records_from_reader(stdout).map(|page| page.commits)
+        })
     }
 
     pub(super) fn log_head_page_impl(
@@ -932,11 +977,24 @@ impl GixRepo {
         }
 
         // Only the first page is bounded. `git log --follow` does not combine
-        // reliably with `--skip` across renames, so cursor pages still need to
-        // scan the full follow history and paginate it in-process.
-        let max_count = cursor.is_none().then_some(limit.saturating_add(1));
-        let commits = self.log_follow_commits(path, max_count)?;
-        paginate_commits(commits.into_iter().map(Ok), limit, cursor)
+        // reliably with `--skip` across renames. Cursor pages cache the full
+        // follow result so repeated "load more" requests do not rescan history.
+        if cursor.is_none() {
+            let commits = self.log_follow_commits(path, Some(limit.saturating_add(1)))?;
+            return paginate_commits(commits.into_iter().map(Ok), limit, cursor);
+        }
+
+        let repo = self._repo.to_thread_local();
+        let head_oid = gix_head_id_or_none(&repo)?;
+        let cache_key = Self::log_file_follow_cache_key(path, head_oid);
+        let commits = if let Some(commits) = self.cached_log_file_follow_commits(&cache_key) {
+            commits
+        } else {
+            let commits = Arc::new(self.log_follow_commits(path, None)?);
+            self.store_log_file_follow_commits(cache_key, Arc::clone(&commits));
+            commits
+        };
+        paginate_commits(commits.iter().cloned().map(Ok), limit, cursor)
     }
 
     pub(super) fn commit_details_impl(&self, id: &CommitId) -> Result<CommitDetails> {
@@ -1009,6 +1067,51 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn git_success(workdir: &Path, args: &[&str]) {
+        let mut cmd = crate::util::git_workdir_cmd_for(workdir);
+        let output = cmd.args(args).output().expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_test_repo(workdir: &Path) {
+        git_success(workdir, &["init"]);
+        for args in [
+            ["config", "core.autocrlf", "false"].as_slice(),
+            ["config", "core.eol", "lf"].as_slice(),
+            ["config", "commit.gpgsign", "false"].as_slice(),
+            ["config", "user.name", "Test User"].as_slice(),
+            ["config", "user.email", "test@example.com"].as_slice(),
+        ] {
+            git_success(workdir, args);
+        }
+    }
+
+    fn write_file(workdir: &Path, relative: &str, contents: &str) {
+        let path = workdir.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directories");
+        }
+        fs::write(path, contents).expect("write file");
+    }
+
+    fn commit_file(workdir: &Path, path: &str, contents: &str, message: &str) {
+        write_file(workdir, path, contents);
+        git_success(workdir, &["add", path]);
+        git_success(workdir, &["commit", "-m", message]);
+    }
+
+    fn open_repo(workdir: &Path) -> GixRepo {
+        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
+        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
 
     #[test]
     fn cursor_gate_skips_until_after_last_seen() {
@@ -1121,5 +1224,64 @@ mod tests {
 
         assert!(Arc::ptr_eq(&parent.0, &reused.0));
         assert_eq!(fresh.as_ref(), "fresh");
+    }
+
+    #[test]
+    fn cursor_file_history_pages_reuse_cached_follow_history() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        commit_file(workdir, "tracked.txt", "one\n", "one");
+        commit_file(workdir, "tracked.txt", "two\n", "two");
+        git_success(workdir, &["mv", "tracked.txt", "renamed.txt"]);
+        git_success(workdir, &["commit", "-m", "rename"]);
+        commit_file(workdir, "renamed.txt", "four\n", "four");
+
+        let repo = open_repo(workdir);
+        let page1 = repo
+            .log_file_page_impl(Path::new("renamed.txt"), 1, None)
+            .expect("first file log page");
+        assert_eq!(page1.commits.len(), 1);
+        assert!(page1.next_cursor.is_some());
+        assert!(
+            repo.log_file_follow_cache
+                .lock()
+                .expect("log file follow cache")
+                .is_empty(),
+            "first page should stay bounded and avoid the full-history cache"
+        );
+
+        let page2 = repo
+            .log_file_page_impl(Path::new("renamed.txt"), 1, page1.next_cursor.as_ref())
+            .expect("second file log page");
+        assert_eq!(page2.commits.len(), 1);
+        assert!(page2.next_cursor.is_some());
+
+        let cached_commits = {
+            let cache = repo
+                .log_file_follow_cache
+                .lock()
+                .expect("log file follow cache");
+            assert_eq!(cache.len(), 1);
+            assert_eq!(cache[0].key.path.as_path(), Path::new("renamed.txt"));
+            assert_eq!(cache[0].commits.len(), 4);
+            Arc::clone(&cache[0].commits)
+        };
+
+        let page3 = repo
+            .log_file_page_impl(Path::new("renamed.txt"), 1, page2.next_cursor.as_ref())
+            .expect("third file log page");
+        assert_eq!(page3.commits.len(), 1);
+
+        let cache = repo
+            .log_file_follow_cache
+            .lock()
+            .expect("log file follow cache");
+        assert_eq!(cache.len(), 1);
+        assert!(
+            Arc::ptr_eq(&cached_commits, &cache[0].commits),
+            "third page should use the cached full follow result"
+        );
     }
 }

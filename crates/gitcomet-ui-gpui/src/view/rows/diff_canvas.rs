@@ -28,6 +28,7 @@ const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 44.0;
 const DIFF_ROW_HORIZONTAL_PADDING_PX: f32 = 8.0;
 const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
+const DIFF_ROW_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
 
 type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
@@ -72,6 +73,16 @@ fn hash_rgba(hasher: &mut FxHasher, color: gpui::Rgba) {
 
 fn hash_shared_string(hasher: &mut FxHasher, text: &SharedString) {
     text.as_ref().hash(hasher);
+}
+
+fn row_bg_fill_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(
+        bounds.origin,
+        size(
+            bounds.size.width,
+            bounds.size.height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX),
+        ),
+    )
 }
 
 fn inline_row_canvas_revision_key(
@@ -712,6 +723,8 @@ pub(super) fn inline_diff_line_row_canvas(
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
 
+            window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
+
             paint_gutter_text(
                 &old,
                 prepaint.bounds.left() + prepaint.pad,
@@ -865,9 +878,12 @@ pub(super) fn split_diff_line_row_canvas(
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.left_hitbox);
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.right_hitbox);
 
-            window.paint_quad(fill(prepaint.left_col, left_bg));
-            window.paint_quad(fill(prepaint.sep_bounds, theme.colors.border));
-            window.paint_quad(fill(prepaint.right_col, right_bg));
+            window.paint_quad(fill(row_bg_fill_bounds(prepaint.left_col), left_bg));
+            window.paint_quad(fill(
+                row_bg_fill_bounds(prepaint.sep_bounds),
+                theme.colors.border,
+            ));
+            window.paint_quad(fill(row_bg_fill_bounds(prepaint.right_col), right_bg));
 
             paint_gutter_text(
                 &old,
@@ -1031,7 +1047,7 @@ pub(super) fn patch_split_column_row_canvas(
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
 
-            window.paint_quad(fill(prepaint.bounds, bg));
+            window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
 
             paint_gutter_text(
                 &line_no,
@@ -1891,6 +1907,19 @@ mod tests {
 
     fn test_bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
+
+    #[test]
+    fn row_bg_fill_bounds_overdraws_bottom_without_changing_origin_or_width() {
+        let bounds = test_bounds(4.0, 8.0, 120.0, 20.0);
+        let painted = row_bg_fill_bounds(bounds);
+
+        assert_eq!(painted.origin, bounds.origin);
+        assert_eq!(painted.size.width, bounds.size.width);
+        assert_eq!(
+            painted.size.height,
+            bounds.size.height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX)
+        );
     }
 
     #[test]
