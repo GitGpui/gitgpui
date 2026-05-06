@@ -746,6 +746,8 @@ impl MainPaneView {
         }
         let wants_file_diff =
             supports_diff_content_toggle && self.wants_file_diff_view(is_file_preview);
+        let wants_collapsed_diff =
+            supports_diff_content_toggle && self.wants_collapsed_diff_view(is_file_preview);
 
         let repo = self.active_repo();
         let conflict_target = (!inline_submodule_diff_active)
@@ -3036,7 +3038,7 @@ impl MainPaneView {
                     }
                 }
             }
-        } else if wants_file_diff {
+        } else if wants_file_diff || wants_collapsed_diff {
             self.render_selected_file_diff(theme, cx)
         } else {
             match repo {
@@ -3066,7 +3068,7 @@ impl MainPaneView {
                             .into_any_element()
                     }
                     Some(Loadable::Ready(diff)) => {
-                        if wants_file_diff {
+                        if wants_file_diff || wants_collapsed_diff {
                             self.render_selected_file_diff(theme, cx)
                         } else {
                             if self.diff_word_wrap {

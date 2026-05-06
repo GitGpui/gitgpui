@@ -1031,6 +1031,7 @@ impl MainPaneView {
             collapsed_diff_visible_rows: Vec::new(),
             collapsed_diff_hunk_visible_indices: Vec::new(),
             collapsed_diff_header_display_cache: HashMap::default(),
+            collapsed_diff_projection_identity: None,
             diff_visible_cache_len: 0,
             diff_visible_view: DiffViewMode::Split,
             diff_visible_is_file_view: false,
@@ -2690,6 +2691,11 @@ impl MainPaneView {
             && self.supports_diff_content_mode_toggle(is_file_preview)
     }
 
+    pub(in crate::view) fn wants_collapsed_diff_view(&self, is_file_preview: bool) -> bool {
+        self.diff_content_mode == DiffContentMode::Collapsed
+            && self.supports_diff_content_mode_toggle(is_file_preview)
+    }
+
     fn current_main_diff_supports_diff_content_toggle(&self) -> bool {
         let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
         let has_submodule_summary = self
@@ -2761,11 +2767,26 @@ impl MainPaneView {
         self.collapsed_diff_visible_rows.get(visible_ix).copied()
     }
 
+    pub(in crate::view) fn current_collapsed_diff_projection_identity(
+        &self,
+    ) -> Option<CollapsedDiffProjectionIdentity> {
+        let (repo_id, _diff_file_rev, diff_target, _workdir, abs_path) =
+            self.rendered_file_diff_identity()?;
+        Some(CollapsedDiffProjectionIdentity {
+            repo_id,
+            diff_target,
+            file_path: abs_path,
+            patch_content_signature: self.diff_cache_content_signature,
+            file_content_signature: self.file_diff_cache_content_signature,
+        })
+    }
+
     pub(in crate::view) fn reset_collapsed_diff_projection(&mut self, clear_reveals: bool) {
         self.collapsed_diff_hunks.clear();
         self.collapsed_diff_hunk_ix_by_src_ix.clear();
         if clear_reveals {
             self.collapsed_diff_reveals.clear();
+            self.collapsed_diff_projection_identity = None;
         }
         self.collapsed_diff_visible_rows.clear();
         self.collapsed_diff_hunk_visible_indices.clear();

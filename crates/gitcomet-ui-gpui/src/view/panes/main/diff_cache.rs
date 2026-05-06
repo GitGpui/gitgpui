@@ -752,6 +752,17 @@ impl MainPaneView {
             return;
         }
 
+        let next_identity = self.current_collapsed_diff_projection_identity();
+        if self.collapsed_diff_projection_identity != next_identity {
+            self.collapsed_diff_hunks.clear();
+            self.collapsed_diff_hunk_ix_by_src_ix.clear();
+            self.collapsed_diff_reveals.clear();
+        }
+        self.collapsed_diff_projection_identity = next_identity;
+        if self.collapsed_diff_projection_identity.is_none() {
+            return;
+        }
+
         let (_, _, total_rows) = self.current_file_diff_line_to_row_maps();
         if total_rows == 0 {
             return;
@@ -2003,7 +2014,13 @@ impl MainPaneView {
         let previous_new_text = same_repo_and_target.then(|| self.file_diff_new_text.clone());
 
         if same_repo_and_target && self.file_diff_cache_rev == diff_file_rev {
-            return;
+            // Reselecting the same file enters Loading with an unchanged file rev; keep the
+            // current cache until a ready file payload proves the effective content changed.
+            let content_changed_without_rev_bump = file_content_signature
+                .is_some_and(|signature| self.file_diff_cache_content_signature != Some(signature));
+            if !content_changed_without_rev_bump {
+                return;
+            }
         }
 
         if same_repo_and_target

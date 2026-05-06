@@ -2202,6 +2202,15 @@ pub(in crate::view) struct CollapsedDiffReveal {
     pub(in crate::view) down_lines: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CollapsedDiffProjectionIdentity {
+    pub(in crate::view) repo_id: RepoId,
+    pub(in crate::view) diff_target: DiffTarget,
+    pub(in crate::view) file_path: std::path::PathBuf,
+    pub(in crate::view) patch_content_signature: Option<u64>,
+    pub(in crate::view) file_content_signature: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum CollapsedDiffVisibleRow {
     HunkHeader {
@@ -2298,6 +2307,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) collapsed_diff_visible_rows: Vec<CollapsedDiffVisibleRow>,
     pub(in crate::view) collapsed_diff_hunk_visible_indices: Vec<usize>,
     pub(in crate::view) collapsed_diff_header_display_cache: HashMap<usize, SharedString>,
+    pub(in crate::view) collapsed_diff_projection_identity: Option<CollapsedDiffProjectionIdentity>,
     pub(in crate::view) diff_visible_cache_len: usize,
     pub(in crate::view) diff_visible_view: DiffViewMode,
     pub(in crate::view) diff_visible_is_file_view: bool,

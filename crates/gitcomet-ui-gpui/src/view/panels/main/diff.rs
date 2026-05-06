@@ -31,18 +31,39 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let rendered_preview_kind =
             crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target());
+        let wants_rendered_file_content = self.diff_content_mode == DiffContentMode::Full;
         let has_image = self
             .rendered_file_image_diff_loadable()
             .is_some_and(|file| !matches!(file, Loadable::NotLoaded));
-        let wants_image = has_image
+        let wants_image = wants_rendered_file_content
+            && has_image
             && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
-        let wants_markdown_preview = rendered_preview_kind == Some(RenderedPreviewKind::Markdown)
+        let wants_markdown_preview = wants_rendered_file_content
+            && rendered_preview_kind == Some(RenderedPreviewKind::Markdown)
             && self
                 .rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown)
                 == RenderedPreviewMode::Rendered;
+
+        if self.diff_content_mode == DiffContentMode::Collapsed {
+            let patch_len = match self.rendered_patch_diff_loadable() {
+                Some(Loadable::Ready(diff)) => Some(diff.lines.len()),
+                _ => None,
+            };
+            if let (Some(repo_id), Some(patch_len)) = (self.active_repo_id(), patch_len) {
+                let diff_rev = self.rendered_patch_diff_rev();
+                let diff_target = self.rendered_diff_target().cloned();
+                if self.diff_cache_repo_id != Some(repo_id)
+                    || self.diff_cache_rev != diff_rev
+                    || self.diff_cache_target != diff_target
+                    || self.patch_diff_row_len() != patch_len
+                {
+                    self.rebuild_diff_cache(cx);
+                }
+            }
+        }
 
         if wants_image {
             enum DiffFileImageState {
@@ -319,12 +340,16 @@ impl MainPaneView {
                     }
                 }
                 DiffFileState::Ready { has_file } => {
+                    let text_cache_active = match self.diff_content_mode {
+                        DiffContentMode::Full => self.is_file_diff_view_active(),
+                        DiffContentMode::Collapsed => self.is_collapsed_diff_projection_active(),
+                    };
                     if !has_file {
                         components::empty_state(theme, "Diff", "No file contents available.")
                             .into_any_element()
                     } else if file_diff_ready_shows_processing(
                         has_file,
-                        self.is_file_diff_view_active(),
+                        text_cache_active,
                         self.file_diff_cache_inflight.is_some(),
                     ) {
                         components::empty_state(theme, "Diff", "Processing file...")
@@ -333,7 +358,10 @@ impl MainPaneView {
                         self.ensure_diff_visible_indices();
                         self.maybe_autoscroll_diff_to_first_change();
 
-                        if self.diff_word_wrap && !self.is_file_diff_view_active() {
+                        if self.diff_word_wrap
+                            && self.diff_content_mode == DiffContentMode::Full
+                            && !self.is_file_diff_view_active()
+                        {
                             self.ensure_file_diff_inline_text_materialized();
                             let raw = self.file_diff_inline_text.clone();
                             self.diff_raw_input.update(cx, |input, cx| {
@@ -358,9 +386,13 @@ impl MainPaneView {
                                 .into_any_element();
                         }
 
-                        let total_len = match self.diff_view {
-                            DiffViewMode::Inline => self.file_diff_inline_row_len(),
-                            DiffViewMode::Split => self.file_diff_split_row_len(),
+                        let total_len = if self.is_collapsed_diff_projection_active() {
+                            self.collapsed_diff_visible_rows.len()
+                        } else {
+                            match self.diff_view {
+                                DiffViewMode::Inline => self.file_diff_inline_row_len(),
+                                DiffViewMode::Split => self.file_diff_split_row_len(),
+                            }
                         };
                         if total_len == 0 {
                             components::empty_state(theme, "Diff", "Empty file.").into_any_element()

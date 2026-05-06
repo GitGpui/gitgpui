@@ -380,6 +380,163 @@ fn activate_collapsed_diff_fixture(
     target
 }
 
+fn push_collapsed_diff_loading_fixture_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    file_ready: bool,
+) -> gitcomet_core::domain::DiffTarget {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_{}_collapsed_loading_root",
+        std::process::id(),
+        fixture_name
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let path = PathBuf::from("src/lib.rs");
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        path: Some(path.clone()),
+    };
+    let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
+    let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
+    let file_diff = gitcomet_core::domain::FileDiffText::new(path, Some(old_text), Some(new_text));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = 1;
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(diff));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = if file_ready {
+                gitcomet_state::model::Loadable::Ready(Some(Arc::new(file_diff)))
+            } else {
+                gitcomet_state::model::Loadable::Loading
+            };
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    target
+}
+
+fn assert_collapsed_diff_hunk_height(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+    expected: gpui::Pixels,
+) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected `{selector}` bounds"));
+    let actual_height: f32 = bounds.size.height.into();
+    let expected_height: f32 = expected.into();
+    assert!(
+        (actual_height - expected_height).abs() < 0.01,
+        "expected `{selector}` height {expected_height}, got {actual_height}"
+    );
+}
+
+fn assert_collapsed_diff_loading_does_not_render_patch_rows(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &'static str,
+    diff_view: DiffViewMode,
+) {
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_content_mode = DiffContentMode::Collapsed;
+            pane.diff_view = diff_view;
+            cx.notify();
+        });
+    });
+
+    let target = push_collapsed_diff_loading_fixture_state(cx, view, repo_id, fixture_name, false);
+    cx.run_until_parked();
+
+    let paint_log = cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        let _ = window.draw(app);
+        rows::diff_paint_log_for_tests()
+    });
+    assert!(
+        paint_log.is_empty(),
+        "collapsed loading should not render raw patch rows, got {paint_log:?}"
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_content_mode, DiffContentMode::Collapsed);
+        assert!(
+            !pane.is_collapsed_diff_projection_active(),
+            "loading file contents must not activate the collapsed projection"
+        );
+        assert!(
+            pane.patch_diff_row_len() > 0,
+            "patch rows should be cached but not rendered while collapsed file contents load"
+        );
+    });
+
+    push_collapsed_diff_loading_fixture_state(cx, view, repo_id, fixture_name, true);
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "collapsed diff loading fixture activates collapsed projection",
+        |pane| {
+            pane.is_collapsed_diff_projection_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && !pane.collapsed_diff_hunk_visible_indices.is_empty()
+        },
+        |pane| {
+            format!(
+                "mode={:?} view={:?} collapsed_active={} inflight={:?} cache_target={:?} patch_rows={} file_rows={} collapsed_rows={} hunk_rows={:?}",
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.is_collapsed_diff_projection_active(),
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_target,
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+                pane.collapsed_diff_visible_rows.len(),
+                pane.collapsed_diff_hunk_visible_indices,
+            )
+        },
+    );
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            let hunk_visible_ix = pane.collapsed_diff_hunk_visible_indices[0];
+            pane.scroll_diff_to_item_strict(hunk_visible_ix, gpui::ScrollStrategy::Top);
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let expected = cx.update(|_window, app| {
+        crate::view::panes::main::diff_row_height_for_ui_scale(
+            crate::ui_scale::UiScale::current(app).percent(),
+        )
+    });
+    match diff_view {
+        DiffViewMode::Inline => {
+            assert_collapsed_diff_hunk_height(cx, "collapsed_diff_inline_hunk_shell", expected);
+        }
+        DiffViewMode::Split => {
+            assert_collapsed_diff_hunk_height(cx, "collapsed_diff_split_left_hunk_shell", expected);
+            assert_collapsed_diff_hunk_height(
+                cx,
+                "collapsed_diff_split_right_hunk_shell",
+                expected,
+            );
+        }
+    }
+}
+
 fn debug_selector_center(
     cx: &mut gpui::VisualTestContext,
     selector: &'static str,
@@ -387,6 +544,38 @@ fn debug_selector_center(
     cx.debug_bounds(selector)
         .unwrap_or_else(|| panic!("expected `{selector}` bounds"))
         .center()
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_loading_does_not_render_patch_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_loading_does_not_render_patch_rows(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(260),
+        "collapsed_inline_loading",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_loading_does_not_render_patch_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_loading_does_not_render_patch_rows(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(261),
+        "collapsed_split_loading",
+        DiffViewMode::Split,
+    );
 }
 
 fn collapsed_hunk_visible_ix_for_src_ix(
@@ -989,6 +1178,161 @@ fn collapsed_diff_reveal_state_resets_when_diff_content_changes(cx: &mut gpui::T
     });
 }
 
+fn assert_collapsed_diff_file_switch_resets_expanded_context(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    let (hunk_src_ix, hidden_up_before, hidden_down_before) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let hunk = pane
+            .collapsed_diff_hunks
+            .first()
+            .copied()
+            .expect("expected initial collapsed fixture to expose one hunk");
+        (
+            hunk.src_ix,
+            pane.collapsed_diff_hidden_up_rows(hunk.src_ix),
+            pane.collapsed_diff_hidden_down_rows(hunk.src_ix),
+        )
+    });
+    assert!(hidden_up_before >= 20 && hidden_down_before >= 20);
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.collapsed_diff_reveal_hunk_up(hunk_src_ix, cx);
+            pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.collapsed_diff_reveals.is_empty(),
+            "fixture should have persisted expanded collapsed-diff context before switching files"
+        );
+        assert!(
+            pane.collapsed_diff_hidden_up_rows(hunk_src_ix) < hidden_up_before,
+            "upward reveal should reduce the hidden-up budget before switching files"
+        );
+        assert!(
+            pane.collapsed_diff_hidden_down_rows(hunk_src_ix) < hidden_down_before,
+            "downward reveal should reduce the hidden-down budget before switching files"
+        );
+    });
+
+    let next_path = PathBuf::from("src/other.rs");
+    let (next_unified, next_old_text, next_new_text) =
+        build_collapsed_diff_multi_hunk_fixture_texts(&[(
+            60,
+            "old other value 60",
+            "new other value 60",
+        )]);
+    let next_path_for_patch = next_path.to_string_lossy().replace('\\', "/");
+    let next_unified = next_unified.replace("src/lib.rs", &next_path_for_patch);
+    let next_target = push_regular_diff_content_mode_state_with_rev(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        next_path.clone(),
+        2,
+        next_unified,
+        next_old_text,
+        next_new_text,
+    );
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "collapsed diff projection switches to the second file",
+        |pane| {
+            pane.is_collapsed_diff_projection_active()
+                && pane.file_diff_cache_target == Some(next_target.clone())
+                && !pane.collapsed_diff_hunks.is_empty()
+        },
+        collapsed_diff_cache_rebuild_snapshot,
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let hunk = pane
+            .collapsed_diff_hunks
+            .first()
+            .copied()
+            .expect("expected second collapsed fixture to expose one hunk");
+        assert_eq!(
+            pane.collapsed_diff_projection_identity
+                .as_ref()
+                .map(|identity| &identity.diff_target),
+            Some(&next_target),
+            "collapsed projection identity should follow the newly selected file target"
+        );
+        assert!(
+            pane.collapsed_diff_reveals.is_empty(),
+            "expanded collapsed-diff context from the previous file must not leak into the next file"
+        );
+        assert!(
+            hunk.base_row_start > 50,
+            "expected the rebuilt collapsed hunk to map to the second file's line-60 change, got {hunk:?}"
+        );
+        assert_eq!(
+            pane.collapsed_diff_hidden_up_rows(hunk.src_ix),
+            hunk.base_row_start,
+            "the second file should start with default hidden context above its hunk"
+        );
+    });
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_file_switch_resets_expanded_context(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_file_switch_resets_expanded_context(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(289),
+        "collapsed_inline_file_switch_resets_context",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_file_switch_resets_expanded_context(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_file_switch_resets_expanded_context(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(290),
+        "collapsed_split_file_switch_resets_context",
+        DiffViewMode::Split,
+    );
+}
+
 #[gpui::test]
 fn collapsed_diff_split_header_shows_stats_without_file_header(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -1221,13 +1565,22 @@ index 1111111..2222222 100644
     wait_for_main_pane_condition(
         cx,
         &view,
-        "regular file diff changed-lines mode activates patch view",
-        |pane| !pane.is_file_diff_view_active() && pane.patch_diff_split_row_len() > 0,
+        "regular file diff collapsed mode activates collapsed projection",
+        |pane| {
+            pane.is_collapsed_diff_projection_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.patch_diff_split_row_len() > 0
+                && pane.file_diff_split_row_len() > 0
+        },
         |pane| {
             format!(
-                "content_mode={:?} file_diff_active={} patch_rows={} file_rows={}",
+                "content_mode={:?} file_diff_active={} collapsed_active={} inflight={:?} cache_target={:?} patch_rows={} file_rows={}",
                 pane.diff_content_mode,
                 pane.is_file_diff_view_active(),
+                pane.is_collapsed_diff_projection_active(),
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_target,
                 pane.patch_diff_split_row_len(),
                 pane.file_diff_split_row_len(),
             )
@@ -1311,18 +1664,24 @@ fn diff_content_mode_switches_inline_submodule_diff_between_patch_and_content(
     wait_for_main_pane_condition(
         cx,
         &view,
-        "inline submodule changed-lines mode activates patch view",
+        "inline submodule collapsed mode activates collapsed projection",
         |pane| {
             pane.is_inline_submodule_diff_active()
-                && !pane.is_file_diff_view_active()
+                && pane.is_collapsed_diff_projection_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
                 && pane.patch_diff_split_row_len() > 0
+                && pane.file_diff_split_row_len() > 0
         },
         |pane| {
             format!(
-                "inline_active={} content_mode={:?} file_diff_active={} patch_rows={} file_rows={}",
+                "inline_active={} content_mode={:?} file_diff_active={} collapsed_active={} inflight={:?} cache_target={:?} patch_rows={} file_rows={}",
                 pane.is_inline_submodule_diff_active(),
                 pane.diff_content_mode,
                 pane.is_file_diff_view_active(),
+                pane.is_collapsed_diff_projection_active(),
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_target,
                 pane.patch_diff_split_row_len(),
                 pane.file_diff_split_row_len(),
             )
@@ -1409,19 +1768,25 @@ fn diff_content_mode_inline_submodule_persist_path_does_not_panic(cx: &mut gpui:
     wait_for_main_pane_condition(
         cx,
         &view,
-        "inline submodule changed-lines toolbar click activates patch view",
+        "inline submodule collapsed toolbar click activates collapsed projection",
         |pane| {
             pane.is_inline_submodule_diff_active()
                 && pane.diff_content_mode == DiffContentMode::Collapsed
-                && !pane.is_file_diff_view_active()
+                && pane.is_collapsed_diff_projection_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
                 && pane.patch_diff_split_row_len() > 0
+                && pane.file_diff_split_row_len() > 0
         },
         |pane| {
             format!(
-                "inline_active={} content_mode={:?} file_diff_active={} patch_rows={} file_rows={}",
+                "inline_active={} content_mode={:?} file_diff_active={} collapsed_active={} inflight={:?} cache_target={:?} patch_rows={} file_rows={}",
                 pane.is_inline_submodule_diff_active(),
                 pane.diff_content_mode,
                 pane.is_file_diff_view_active(),
+                pane.is_collapsed_diff_projection_active(),
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_target,
                 pane.patch_diff_split_row_len(),
                 pane.file_diff_split_row_len(),
             )
@@ -6351,6 +6716,326 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
                 "identical payload refresh should keep the cached right split styling intact"
             );
         });
+    }
+}
+
+#[gpui::test]
+fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
+    cx: &mut gpui::TestAppContext,
+) {
+    fn draw_paint_record_for_visible_ix(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::GitCometView>,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> rows::DiffPaintRecord {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
+                    cx.notify();
+                });
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, app| {
+            rows::clear_diff_paint_log_for_tests();
+            let _ = window.draw(app);
+            rows::diff_paint_log_for_tests()
+                .into_iter()
+                .find(|record| record.visible_ix == visible_ix && record.region == region)
+                .unwrap_or_else(|| {
+                    panic!("expected paint record for visible_ix={visible_ix} region={region:?}")
+                })
+        })
+    }
+
+    fn split_visible_ix_by_old_line(pane: &MainPaneView, old_line: u32) -> Option<usize> {
+        (0..pane.diff_visible_len()).find(|&visible_ix| {
+            let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                return false;
+            };
+            pane.file_diff_split_row(row_ix)
+                .is_some_and(|row| row.old_line == Some(old_line))
+        })
+    }
+
+    fn split_visible_ix_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<usize> {
+        (0..pane.diff_visible_len()).find(|&visible_ix| {
+            let Some(row_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                return false;
+            };
+            pane.file_diff_split_row(row_ix)
+                .is_some_and(|row| row.new_line == Some(new_line))
+        })
+    }
+
+    fn inline_visible_ix_by_line_kind(
+        pane: &MainPaneView,
+        old_line: Option<u32>,
+        new_line: Option<u32>,
+        kind: gitcomet_core::domain::DiffLineKind,
+    ) -> Option<usize> {
+        (0..pane.diff_visible_len()).find(|&visible_ix| {
+            let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                return false;
+            };
+            pane.file_diff_inline_row(inline_ix).is_some_and(|line| {
+                line.kind == kind && line.old_line == old_line && line.new_line == new_line
+            })
+        })
+    }
+
+    fn wait_for_file_diff_seq_after(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::GitCometView>,
+        label: &str,
+        expected_path: &std::path::Path,
+        expected_rev: u64,
+        previous_seq: u64,
+    ) {
+        wait_for_main_pane_condition(
+            cx,
+            view,
+            label,
+            |pane| {
+                pane.file_diff_cache_rev == expected_rev
+                    && pane.file_diff_cache_seq > previous_seq
+                    && pane.file_diff_cache_inflight.is_none()
+                    && pane.file_diff_cache_path.as_deref() == Some(expected_path)
+                    && pane.is_file_diff_view_active()
+            },
+            |pane| {
+                format!(
+                    "seq={} previous_seq={} inflight={:?} cache_rev={} path={:?} active={} content_signature={:?}",
+                    pane.file_diff_cache_seq,
+                    previous_seq,
+                    pane.file_diff_cache_inflight,
+                    pane.file_diff_cache_rev,
+                    pane.file_diff_cache_path,
+                    pane.is_file_diff_view_active(),
+                    pane.file_diff_cache_content_signature,
+                )
+            },
+        );
+    }
+
+    fn assert_file_diff_backgrounds(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::GitCometView>,
+        label: &str,
+    ) {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_view = DiffViewMode::Split;
+                    pane.clear_diff_text_style_caches();
+                    pane.ensure_diff_visible_indices();
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+
+        let (removed_ix, modified_ix, added_ix) = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (
+                split_visible_ix_by_old_line(pane, 2)
+                    .expect("expected split visible row for removed old line 2"),
+                split_visible_ix_by_new_line(pane, 2)
+                    .expect("expected split visible row for modified new line 2"),
+                split_visible_ix_by_new_line(pane, 4)
+                    .expect("expected split visible row for added new line 4"),
+            )
+        });
+        assert!(
+            draw_paint_record_for_visible_ix(cx, view, removed_ix, DiffTextRegion::SplitLeft)
+                .row_bg
+                .is_some(),
+            "{label} should paint split-left removal background after refresh",
+        );
+        assert!(
+            draw_paint_record_for_visible_ix(cx, view, modified_ix, DiffTextRegion::SplitRight)
+                .row_bg
+                .is_some(),
+            "{label} should paint split-right modification background after refresh",
+        );
+        assert!(
+            draw_paint_record_for_visible_ix(cx, view, added_ix, DiffTextRegion::SplitRight)
+                .row_bg
+                .is_some(),
+            "{label} should paint split-right addition background after refresh",
+        );
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_view = DiffViewMode::Inline;
+                    pane.clear_diff_text_style_caches();
+                    pane.ensure_diff_visible_indices();
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+
+        let (removed_inline_ix, added_inline_ix) = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (
+                inline_visible_ix_by_line_kind(
+                    pane,
+                    Some(2),
+                    None,
+                    gitcomet_core::domain::DiffLineKind::Remove,
+                )
+                .expect("expected inline remove row for old line 2"),
+                inline_visible_ix_by_line_kind(
+                    pane,
+                    None,
+                    Some(4),
+                    gitcomet_core::domain::DiffLineKind::Add,
+                )
+                .expect("expected inline add row for new line 4"),
+            )
+        });
+        assert!(
+            draw_paint_record_for_visible_ix(cx, view, removed_inline_ix, DiffTextRegion::Inline)
+                .row_bg
+                .is_some(),
+            "{label} should paint inline removal background after refresh",
+        );
+        assert!(
+            draw_paint_record_for_visible_ix(cx, view, added_inline_ix, DiffTextRegion::Inline)
+                .row_bg
+                .is_some(),
+            "{label} should paint inline addition background after refresh",
+        );
+    }
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(291);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_same_file_patch_ready_refresh",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/refresh_highlights.rs");
+    let target = DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    let old_text = "fn main() {\n    let value = 1;\n    let stable = 10;\n}\n";
+    let new_text = "fn main() {\n    let value = 2;\n    let stable = 10;\n    let added = value + stable;\n}\n";
+    let unified = "\
+diff --git a/src/refresh_highlights.rs b/src/refresh_highlights.rs
+index 1111111..2222222 100644
+--- a/src/refresh_highlights.rs
++++ b/src/refresh_highlights.rs
+@@ -1,4 +1,5 @@
+ fn main() {
+-    let value = 1;
++    let value = 2;
+     let stable = 10;
++    let added = value + stable;
+ }
+";
+    let patch_diff = Arc::new(gitcomet_core::domain::Diff::from_unified(
+        target.clone(),
+        unified,
+    ));
+    let file_diff = Arc::new(gitcomet_core::domain::FileDiffText::new(
+        path.clone(),
+        Some(old_text.to_string()),
+        Some(new_text.to_string()),
+    ));
+    let expected_path = workdir.join(&path);
+
+    let push_state = |cx: &mut gpui::VisualTestContext,
+                      diff_rev: u64,
+                      diff_file_rev: u64,
+                      patch_ready: bool,
+                      file_ready: bool| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &workdir);
+                set_test_file_status(
+                    &mut repo,
+                    path.clone(),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                    gitcomet_core::domain::DiffArea::Unstaged,
+                );
+                repo.diff_state.diff_target = Some(target.clone());
+                repo.diff_state.diff_rev = diff_rev;
+                repo.diff_state.diff = if patch_ready {
+                    gitcomet_state::model::Loadable::Ready(Arc::clone(&patch_diff))
+                } else {
+                    gitcomet_state::model::Loadable::Loading
+                };
+                repo.diff_state.diff_file_rev = diff_file_rev;
+                repo.diff_state.diff_file = if file_ready {
+                    gitcomet_state::model::Loadable::Ready(Some(Arc::clone(&file_diff)))
+                } else {
+                    gitcomet_state::model::Loadable::Loading
+                };
+
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+    };
+
+    push_state(cx, 1, 1, true, true);
+    wait_for_file_diff_seq_after(
+        cx,
+        &view,
+        "initial patch-backed file-diff cache build",
+        expected_path.as_path(),
+        1,
+        0,
+    );
+    assert_file_diff_backgrounds(cx, &view, "initial patch-backed render");
+
+    for (cycle_ix, (previous_patch_rev, next_file_rev, next_patch_rev)) in
+        [(1, 2, 2), (2, 3, 3)].into_iter().enumerate()
+    {
+        let seq_before_refresh =
+            cx.update(|_window, app| view.read(app).main_pane.read(app).file_diff_cache_seq);
+
+        push_state(cx, previous_patch_rev, next_file_rev - 1, false, false);
+        draw_and_drain_test_window(cx);
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(
+                pane.file_diff_cache_seq, seq_before_refresh,
+                "cycle {cycle_ix}: same-target loading should keep the existing cache alive"
+            );
+        });
+
+        push_state(cx, previous_patch_rev, next_file_rev, false, true);
+        wait_for_file_diff_seq_after(
+            cx,
+            &view,
+            "file-ready same-target refresh builds temporary file-only cache",
+            expected_path.as_path(),
+            next_file_rev,
+            seq_before_refresh,
+        );
+        let file_only_seq =
+            cx.update(|_window, app| view.read(app).main_pane.read(app).file_diff_cache_seq);
+
+        push_state(cx, next_patch_rev, next_file_rev, true, true);
+        wait_for_file_diff_seq_after(
+            cx,
+            &view,
+            "patch-ready same-target refresh rebuilds patch-backed cache",
+            expected_path.as_path(),
+            next_file_rev,
+            file_only_seq,
+        );
+        assert_file_diff_backgrounds(cx, &view, &format!("cycle {cycle_ix} patch-backed render"));
     }
 }
 
