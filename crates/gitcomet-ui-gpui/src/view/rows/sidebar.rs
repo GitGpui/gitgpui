@@ -848,6 +848,7 @@ impl SidebarPaneView {
                                             .debug_selector(move || {
                                                 format!("worktree_branch_badge_{ix}")
                                             })
+                                            .max_w_1_2()
                                             .min_w(px(0.0))
                                             .overflow_hidden()
                                             .child(svg_icon(
