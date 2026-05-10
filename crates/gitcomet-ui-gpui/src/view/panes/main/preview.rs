@@ -811,11 +811,11 @@ impl MainPaneView {
             self.worktree_preview_path = Some(path);
             self.worktree_preview = Loadable::Loading;
             self.reset_worktree_preview_source_state();
-            self.diff_horizontal_min_width = px(0.0);
+            self.reset_diff_horizontal_scroll_state();
         } else if matches!(self.worktree_preview, Loadable::NotLoaded) {
             self.worktree_preview = Loadable::Loading;
             self.reset_worktree_preview_source_state();
-            self.diff_horizontal_min_width = px(0.0);
+            self.reset_diff_horizontal_scroll_state();
         }
     }
 
@@ -837,7 +837,7 @@ impl MainPaneView {
         self.worktree_preview = Loadable::Loading;
         self.reset_worktree_preview_source_state();
         self.worktree_preview_source_path = Some(source_path.clone());
-        self.diff_horizontal_min_width = px(0.0);
+        self.reset_diff_horizontal_scroll_state();
         self.worktree_preview_scroll
             .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
 

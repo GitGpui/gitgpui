@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::panes::main::DiffHorizontalScrollColumn;
 use gitcomet_core::domain::{
     SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
     SubmoduleStatus,
@@ -742,7 +743,7 @@ impl MainPaneView {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
             self.reset_worktree_preview_source_state();
-            self.diff_horizontal_min_width = px(0.0);
+            self.reset_diff_horizontal_scroll_state();
         }
         let wants_file_diff =
             supports_diff_content_toggle && self.wants_file_diff_view(is_file_preview);
@@ -882,24 +883,33 @@ impl MainPaneView {
                             .is_some();
 
                     d.child(
-                        components::Button::new("conflict_prev", "Prev")
-                            .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
+                        components::Button::new("conflict_prev", "")
+                            .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
                             .style(components::ButtonStyle::Outlined)
                             .disabled(!can_nav_prev)
                             .on_click(theme, cx, |this, _e, _w, cx| {
                                 this.conflict_jump_prev(cx);
                                 cx.notify();
-                            }),
+                            })
+                            .gitcomet_tooltip(
+                                theme,
+                                "Previous conflict (F2 / Shift+F7 / Alt+Up)".into(),
+                            ),
                     )
                     .child(
-                        components::Button::new("conflict_next", "Next")
-                            .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
+                        components::Button::new("conflict_next", "")
+                            .start_slot(svg_icon(
+                                "icons/arrow_down.svg",
+                                theme.colors.text,
+                                px(14.0),
+                            ))
                             .style(components::ButtonStyle::Outlined)
                             .disabled(!can_nav_next)
                             .on_click(theme, cx, |this, _e, _w, cx| {
                                 this.conflict_jump_next(cx);
                                 cx.notify();
-                            }),
+                            })
+                            .gitcomet_tooltip(theme, "Next conflict (F3 / F7 / Alt+Down)".into()),
                     )
                 })
                 .when_some(next_file_btn, |d, btn| d.child(btn));
@@ -1071,8 +1081,8 @@ impl MainPaneView {
                 let can_nav_next =
                     diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
 
-                let prev_hunk_btn = components::Button::new("diff_prev_hunk", "Prev")
-                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
+                let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
+                    .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_prev)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -1081,8 +1091,12 @@ impl MainPaneView {
                     })
                     .gitcomet_tooltip(theme, "Previous change (F2 / Shift+F7 / Alt+Up)".into());
 
-                let next_hunk_btn = components::Button::new("diff_next_hunk", "Next")
-                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
+                let next_hunk_btn = components::Button::new("diff_next_hunk", "")
+                    .start_slot(svg_icon(
+                        "icons/arrow_down.svg",
+                        theme.colors.text,
+                        px(14.0),
+                    ))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_next)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -3043,7 +3057,7 @@ impl MainPaneView {
         } else {
             match repo {
                 None => components::empty_state(theme, "Diff", "No repository.").into_any_element(),
-                Some(repo) => match self.rendered_patch_diff_loadable() {
+                Some(_repo) => match self.rendered_patch_diff_loadable() {
                     Some(Loadable::NotLoaded) | None => {
                         components::empty_state(theme, "Diff", "Select a file.").into_any_element()
                     }
@@ -3100,15 +3114,6 @@ impl MainPaneView {
                                     .child(self.diff_raw_input.clone())
                                     .into_any_element()
                             } else {
-                                if self.diff_cache_repo_id != Some(repo.id)
-                                    || self.diff_cache_rev != self.rendered_patch_diff_rev()
-                                    || self.diff_cache_target
-                                        != self.rendered_diff_target().cloned()
-                                    || self.patch_diff_row_len() != diff.lines.len()
-                                {
-                                    self.rebuild_diff_cache(cx);
-                                }
-
                                 self.ensure_diff_visible_indices();
                                 self.maybe_autoscroll_diff_to_first_change();
                                 if self.patch_diff_row_len() == 0 {
@@ -3118,11 +3123,18 @@ impl MainPaneView {
                                     components::empty_state(theme, "Diff", "Nothing to render.")
                                         .into_any_element()
                                 } else {
-                                    let scroll_handle =
-                                        self.diff_scroll.0.borrow().base_handle.clone();
                                     let markers = self.diff_scrollbar_markers_cache.clone();
                                     match self.diff_view {
                                         DiffViewMode::Inline => {
+                                            let horizontal_scrollbar_gutter =
+                                                components::Scrollbar::gutter(
+                                                    components::ScrollbarAxis::Horizontal,
+                                                );
+                                            let scrollbar_gutter = self
+                                                .diff_vertical_scrollbar_gutter_for_column(
+                                                    DiffHorizontalScrollColumn::Primary,
+                                                    self.diff_scroll.clone(),
+                                                );
                                             let list = uniform_list(
                                                 "diff",
                                                 self.diff_visible_len(),
@@ -3130,6 +3142,7 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
+                                            .pb(horizontal_scrollbar_gutter)
                                             .track_scroll(&self.diff_scroll)
                                             .with_horizontal_sizing_behavior(
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
@@ -3145,10 +3158,7 @@ impl MainPaneView {
                                                     div()
                                                         .h_full()
                                                         .min_h(px(0.0))
-                                                        .pr(components::Scrollbar::visible_gutter(
-                                                            self.diff_scroll.clone(),
-                                                            components::ScrollbarAxis::Vertical,
-                                                        ))
+                                                        .pr(scrollbar_gutter)
                                                         .child(list),
                                                 )
                                                 .child(
@@ -3160,59 +3170,33 @@ impl MainPaneView {
                                                     .always_visible()
                                                     .render(theme),
                                                 )
-                                                .child(
-                                                    components::Scrollbar::horizontal(
-                                                        "diff_hscrollbar",
-                                                        scroll_handle,
-                                                    )
-                                                    .always_visible()
-                                                    .render(theme),
-                                                )
+                                                .child(Self::render_diff_horizontal_scrollbar(
+                                                    theme,
+                                                    "diff_hscrollbar",
+                                                    self.diff_scroll.clone(),
+                                                    scrollbar_gutter,
+                                                    "diff_hscrollbar",
+                                                ))
                                                 .into_any_element()
                                         }
                                         DiffViewMode::Split => {
                                             self.sync_diff_split_scroll();
                                             let vertical_sync_enabled =
                                                 self.diff_scroll_sync.includes_vertical();
-                                            let right_scroll_handle = self
-                                                .diff_split_right_scroll
-                                                .0
-                                                .borrow()
-                                                .base_handle
-                                                .clone();
                                             let count = self.diff_visible_len();
-                                            let left = uniform_list(
-                                                "diff_split_left",
-                                                count,
-                                                cx.processor(Self::render_diff_split_left_rows),
-                                            )
-                                            .h_full()
-                                            .min_h(px(0.0))
-                                            .track_scroll(&self.diff_scroll)
-                                            .with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            );
-                                            let right = uniform_list(
-                                                "diff_split_right",
-                                                count,
-                                                cx.processor(Self::render_diff_split_right_rows),
-                                            )
-                                            .h_full()
-                                            .min_h(px(0.0))
-                                            .track_scroll(&self.diff_split_right_scroll)
-                                            .with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            );
-
-                                            let left_scrollbar_gutter =
-                                                components::Scrollbar::visible_gutter(
-                                                    self.diff_scroll.clone(),
-                                                    components::ScrollbarAxis::Vertical,
+                                            let horizontal_scrollbar_gutter =
+                                                components::Scrollbar::gutter(
+                                                    components::ScrollbarAxis::Horizontal,
                                                 );
-                                            let right_scrollbar_gutter =
-                                                components::Scrollbar::visible_gutter(
+                                            let left_scrollbar_gutter = self
+                                                .diff_vertical_scrollbar_gutter_for_column(
+                                                    DiffHorizontalScrollColumn::Primary,
+                                                    self.diff_scroll.clone(),
+                                                );
+                                            let right_scrollbar_gutter = self
+                                                .diff_vertical_scrollbar_gutter_for_column(
+                                                    DiffHorizontalScrollColumn::SplitRight,
                                                     self.diff_split_right_scroll.clone(),
-                                                    components::ScrollbarAxis::Vertical,
                                                 );
                                             let shared_scrollbar_gutter = if vertical_sync_enabled {
                                                 left_scrollbar_gutter
@@ -3227,6 +3211,30 @@ impl MainPaneView {
                                             let (left_w, right_w) = diff_split_column_widths(
                                                 main_w,
                                                 self.diff_split_ratio,
+                                            );
+                                            let left = uniform_list(
+                                                "diff_split_left",
+                                                count,
+                                                cx.processor(Self::render_diff_split_left_rows),
+                                            )
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .pb(horizontal_scrollbar_gutter)
+                                            .track_scroll(&self.diff_scroll)
+                                            .with_horizontal_sizing_behavior(
+                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                            );
+                                            let right = uniform_list(
+                                                "diff_split_right",
+                                                count,
+                                                cx.processor(Self::render_diff_split_right_rows),
+                                            )
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .pb(horizontal_scrollbar_gutter)
+                                            .track_scroll(&self.diff_split_right_scroll)
+                                            .with_horizontal_sizing_behavior(
+                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
                                             let collapsed_file_stat = self
                                                 .is_collapsed_diff_projection_active()
@@ -3451,12 +3459,17 @@ impl MainPaneView {
                                                                             },
                                                                         )
                                                                         .child(
-                                                                            components::Scrollbar::horizontal(
+                                                                            Self::render_diff_horizontal_scrollbar(
+                                                                                theme,
                                                                                 "diff_split_left_hscrollbar",
-                                                                                scroll_handle.clone(),
+                                                                                self.diff_scroll.clone(),
+                                                                                if vertical_sync_enabled {
+                                                                                    px(0.0)
+                                                                                } else {
+                                                                                    left_scrollbar_gutter
+                                                                                },
+                                                                                "diff_split_left_hscrollbar",
                                                                             )
-                                                                            .always_visible()
-                                                                            .render(theme),
                                                                         ),
                                                                 )
                                                                 .child(resize_handle(
@@ -3499,12 +3512,17 @@ impl MainPaneView {
                                                                             },
                                                                         )
                                                                         .child(
-                                                                            components::Scrollbar::horizontal(
+                                                                            Self::render_diff_horizontal_scrollbar(
+                                                                                theme,
                                                                                 "diff_split_right_hscrollbar",
-                                                                                right_scroll_handle,
+                                                                                self.diff_split_right_scroll.clone(),
+                                                                                if vertical_sync_enabled {
+                                                                                    px(0.0)
+                                                                                } else {
+                                                                                    right_scrollbar_gutter
+                                                                                },
+                                                                                "diff_split_right_hscrollbar",
                                                                             )
-                                                                            .always_visible()
-                                                                            .render(theme),
                                                                         ),
                                                                 ),
                                                         ),

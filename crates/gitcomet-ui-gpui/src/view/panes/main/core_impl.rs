@@ -1002,7 +1002,7 @@ impl MainPaneView {
             diff_split_resize: None,
             diff_split_last_synced_x: [px(0.0); 2],
             diff_split_last_synced_y: [px(0.0); 2],
-            diff_horizontal_min_width: px(0.0),
+            diff_horizontal_scroll: DiffHorizontalScrollState::new(),
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
             diff_cache_content_signature: None,
@@ -1068,6 +1068,7 @@ impl MainPaneView {
             file_diff_cache_rev: 0,
             file_diff_cache_content_signature: None,
             file_diff_cache_target: None,
+            file_diff_cache_error: None,
             file_diff_cache_path: None,
             file_diff_cache_language: None,
             file_diff_cache_rows: Vec::new(),
@@ -1187,7 +1188,7 @@ impl MainPaneView {
         };
 
         pane.set_theme(theme, cx);
-        pane.rebuild_diff_cache(cx);
+        pane.ensure_rendered_patch_diff_cache(cx);
         pane
     }
 
@@ -1286,11 +1287,77 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
-        self.diff_horizontal_min_width = px(0.0);
         self.diff_text_hitboxes.clear();
         self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.diff_text_layout_cache.clear();
         cx.notify();
+    }
+
+    pub(in crate::view) fn reset_diff_horizontal_scroll_state(&mut self) {
+        self.diff_horizontal_scroll.reset();
+    }
+
+    pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
+        self.diff_horizontal_content_width_for_column(DiffHorizontalScrollColumn::Primary)
+    }
+
+    pub(in crate::view) fn diff_horizontal_content_width_for_column(
+        &self,
+        column: DiffHorizontalScrollColumn,
+    ) -> Pixels {
+        self.diff_horizontal_scroll.content_widths[column.index()]
+    }
+
+    pub(in crate::view) fn diff_horizontal_layout_min_width(
+        &self,
+        column: DiffHorizontalScrollColumn,
+    ) -> Pixels {
+        self.diff_horizontal_content_width_for_column(column)
+    }
+
+    pub(in crate::view) fn record_diff_horizontal_content_width(
+        &mut self,
+        width: Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.record_diff_horizontal_content_width_for_column(
+            DiffHorizontalScrollColumn::Primary,
+            width,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn record_diff_horizontal_content_width_for_column(
+        &mut self,
+        column: DiffHorizontalScrollColumn,
+        width: Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .diff_horizontal_scroll
+            .record_content_width(column, width)
+        {
+            cx.notify();
+        }
+    }
+
+    pub(in crate::view) fn diff_vertical_scrollbar_gutter_for_column(
+        &self,
+        _column: DiffHorizontalScrollColumn,
+        _handle: UniformListScrollHandle,
+    ) -> Pixels {
+        components::Scrollbar::gutter(components::ScrollbarAxis::Vertical)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn diff_horizontal_scroll_max_offset_for_viewport(
+        &self,
+        column: DiffHorizontalScrollColumn,
+        viewport_width: Pixels,
+    ) -> Pixels {
+        let viewport_width = viewport_width.max(px(0.0));
+        let content_width = self.diff_horizontal_content_width_for_column(column);
+        (content_width - viewport_width).max(px(0.0))
     }
 
     pub(in crate::view) fn conflict_resolved_output_is_streamed(&self) -> bool {
@@ -2546,6 +2613,7 @@ impl MainPaneView {
         self.clear_diff_text_query_overlay_cache();
         self.clear_worktree_preview_segments_cache();
         self.reset_collapsed_diff_projection(false);
+        self.ensure_rendered_patch_diff_cache(cx);
         if self.current_main_diff_supports_diff_content_toggle() {
             self.ensure_file_diff_cache(cx);
         }
@@ -2792,7 +2860,9 @@ impl MainPaneView {
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
-        self.diff_visible_cache_projection_rev = u64::MAX;
+        if clear_reveals {
+            self.diff_visible_cache_projection_rev = u64::MAX;
+        }
     }
 
     pub(in crate::view) fn invalidate_collapsed_diff_visible_projection(&mut self) {
@@ -2800,7 +2870,6 @@ impl MainPaneView {
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
-        self.diff_visible_cache_projection_rev = u64::MAX;
     }
 
     // Apply the mode inside the pane first, then sync the root preference
@@ -2827,19 +2896,6 @@ impl MainPaneView {
             .as_ref()
             .map(|inline| inline.target.clone())
             .or_else(|| repo.diff_state.diff_target.clone())
-    }
-
-    fn rendered_patch_diff_rev_for_state(state: &AppState) -> u64 {
-        let Some(repo_id) = state.active_repo else {
-            return 0;
-        };
-        let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
-            return 0;
-        };
-        repo.diff_state
-            .inline_submodule_diff
-            .as_ref()
-            .map_or(repo.diff_state.diff_rev, |inline| inline.diff_rev)
     }
 
     pub(in crate::view) fn history_visible_column_preferences(
@@ -3243,7 +3299,6 @@ impl MainPaneView {
 
         let next_repo_id = next.active_repo;
         let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
-        let next_diff_rev = Self::rendered_patch_diff_rev_for_state(next.as_ref());
 
         if prev_diff_target != next_diff_target {
             self.diff_selection_anchor = None;
@@ -3258,7 +3313,7 @@ impl MainPaneView {
             self.worktree_markdown_preview_inflight = None;
             self.worktree_preview_syntax_language = None;
             self.reset_worktree_preview_source_state();
-            self.diff_horizontal_min_width = px(0.0);
+            self.reset_diff_horizontal_scroll_state();
             self.reset_collapsed_diff_projection(true);
         }
 
@@ -3277,12 +3332,7 @@ impl MainPaneView {
             });
         }
 
-        let should_rebuild_diff_cache = self.diff_cache_repo_id != next_repo_id
-            || self.diff_cache_rev != next_diff_rev
-            || self.diff_cache_target != next_diff_target;
-        if should_rebuild_diff_cache {
-            self.rebuild_diff_cache(cx);
-        }
+        self.ensure_rendered_patch_diff_cache(cx);
 
         // History caches are now managed by HistoryView.
     }

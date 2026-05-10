@@ -593,7 +593,8 @@ impl DiffRefreshFixture {
         let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
             &self.incoming_file,
             std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
-        );
+        )
+        .expect("benchmark file diff cache rebuild should index shared text");
         #[cfg(not(feature = "benchmarks"))]
         let rebuild =
             unreachable!("DiffRefreshFixture::run_rebuild_step requires benchmarks feature");
@@ -634,7 +635,8 @@ impl DiffRefreshFixture {
         let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
             &self.incoming_file,
             std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
-        );
+        )
+        .expect("benchmark file diff cache rebuild should index shared text");
         #[cfg(not(feature = "benchmarks"))]
         let rebuild =
             unreachable!("DiffRefreshFixture::measure_rebuild requires benchmarks feature");

@@ -1016,7 +1016,8 @@ pub(crate) fn build_bench_file_diff_rebuild_from_text(
     let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
         &file,
         Path::new("/tmp/gitcomet-bench"),
-    );
+    )
+    .expect("benchmark file diff cache rebuild should index shared text");
     (rebuild.row_provider, rebuild.inline_row_provider)
 }
 

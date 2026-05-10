@@ -3,6 +3,7 @@ use super::diff_text::*;
 use super::*;
 use crate::view::panes::main::{
     CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
+    DiffHorizontalScrollColumn,
 };
 use crate::view::panes::main::{
     VersionedCachedDiffStyledText, versioned_query_cached_diff_styled_text_is_current,
@@ -520,7 +521,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let min_width = this.diff_horizontal_min_width;
+        let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
@@ -1170,7 +1171,12 @@ impl MainPaneView {
         range: Range<usize>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let min_width = this.diff_horizontal_min_width;
+        let min_width =
+            this.diff_horizontal_layout_min_width(if matches!(column, PatchSplitColumn::Right) {
+                DiffHorizontalScrollColumn::SplitRight
+            } else {
+                DiffHorizontalScrollColumn::Primary
+            });
         let query = this.diff_search_query_or_empty();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 

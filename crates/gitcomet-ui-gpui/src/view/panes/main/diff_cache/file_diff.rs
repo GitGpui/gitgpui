@@ -1315,12 +1315,16 @@ fn file_diff_source_text(source: &IndexedFileDiffSource) -> SharedString {
 fn index_file_diff_side(
     source: Option<&gitcomet_core::domain::FileDiffTextSource>,
     legacy_text: Option<&Arc<str>>,
-) -> IndexedFileDiffSource {
+) -> Result<IndexedFileDiffSource, String> {
     if let Some(source) = source {
-        return IndexedFileDiffSource::from_file(&source.path)
-            .unwrap_or_else(|_| IndexedFileDiffSource::empty());
+        return IndexedFileDiffSource::from_file(&source.path).map_err(|error| {
+            format!(
+                "Unable to load file diff source `{}`: {error}",
+                source.path.display()
+            )
+        });
     }
-    IndexedFileDiffSource::from_shared(legacy_text)
+    Ok(IndexedFileDiffSource::from_shared(legacy_text))
 }
 
 fn file_diff_plan_from_runs(
@@ -1584,7 +1588,7 @@ pub(in crate::view) struct FileDiffCacheRebuild {
 pub(in crate::view) fn build_file_diff_cache_rebuild(
     file: &gitcomet_core::domain::FileDiffText,
     workdir: &std::path::Path,
-) -> FileDiffCacheRebuild {
+) -> Result<FileDiffCacheRebuild, String> {
     build_file_diff_cache_rebuild_with_patch(file, workdir, None)
 }
 
@@ -1592,9 +1596,9 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     file: &gitcomet_core::domain::FileDiffText,
     workdir: &std::path::Path,
     patch_diff: Option<&gitcomet_core::domain::Diff>,
-) -> FileDiffCacheRebuild {
-    let old_source = index_file_diff_side(file.old_source.as_ref(), file.old.as_ref());
-    let new_source = index_file_diff_side(file.new_source.as_ref(), file.new.as_ref());
+) -> Result<FileDiffCacheRebuild, String> {
+    let old_source = index_file_diff_side(file.old_source.as_ref(), file.old.as_ref())?;
+    let new_source = index_file_diff_side(file.new_source.as_ref(), file.new.as_ref())?;
     let old_text = file_diff_source_text(&old_source);
     let new_text = file_diff_source_text(&new_source);
     let old_line_starts = Arc::clone(&old_source.line_starts);
@@ -1655,7 +1659,7 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
         .slice(0, inline_row_provider.len_hint())
         .collect::<Vec<_>>();
 
-    FileDiffCacheRebuild {
+    Ok(FileDiffCacheRebuild {
         file_path,
         language,
         row_provider,
@@ -1673,7 +1677,7 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
         rows,
         #[cfg(test)]
         inline_rows,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1794,7 +1798,8 @@ mod tests {
             Some("gamma\ndelta".to_string()),
         );
 
-        let rebuild = build_file_diff_cache_rebuild(&file, Path::new("/tmp/repo"));
+        let rebuild = build_file_diff_cache_rebuild(&file, Path::new("/tmp/repo"))
+            .expect("shared file diff should index");
 
         assert_eq!(
             rebuild.file_path,
@@ -1808,6 +1813,27 @@ mod tests {
     }
 
     #[test]
+    fn build_file_diff_cache_rebuild_reports_invalid_source_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let source_path = tmp.path().join("binary.dat");
+        std::fs::write(&source_path, [0xff, 0xfe, b'\n']).expect("write invalid utf8 source");
+        let file = gitcomet_core::domain::FileDiffText::new_sources(
+            PathBuf::from("binary.dat"),
+            None,
+            Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                source_path.clone(),
+                "invalid-source",
+            )),
+        );
+
+        let error = build_file_diff_cache_rebuild(&file, tmp.path())
+            .expect_err("invalid UTF-8 source should be reported");
+
+        assert!(error.contains(source_path.to_string_lossy().as_ref()));
+        assert!(error.contains("not valid UTF-8"));
+    }
+
+    #[test]
     fn build_file_diff_cache_rebuild_inline_rows_keep_file_line_numbers() {
         use gitcomet_core::domain::DiffLineKind;
 
@@ -1817,7 +1843,8 @@ mod tests {
             Some("fn keep() {}\nlet added = 42;\n".to_string()),
         );
 
-        let rebuild = build_file_diff_cache_rebuild(&file, Path::new("/tmp/repo"));
+        let rebuild = build_file_diff_cache_rebuild(&file, Path::new("/tmp/repo"))
+            .expect("shared file diff should index");
         let language = rebuild
             .language
             .expect("rust path should resolve a syntax language");

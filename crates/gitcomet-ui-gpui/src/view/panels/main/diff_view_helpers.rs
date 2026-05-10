@@ -181,8 +181,12 @@ impl MainPaneView {
                 let prev_tooltip: SharedString = "Previous file (F1)".into();
                 let next_tooltip: SharedString = "Next file (F4)".into();
 
-                let prev_btn = components::Button::new("diff_prev_file", "Prev file")
-                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F1"))
+                let prev_btn = components::Button::new("diff_prev_file", "")
+                    .start_slot(svg_icon(
+                        "icons/arrow_left.svg",
+                        theme.colors.text,
+                        px(14.0),
+                    ))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(prev_disabled)
                     .on_click(theme, cx, move |this, _e, window, cx| {
@@ -193,8 +197,12 @@ impl MainPaneView {
                     .gitcomet_tooltip(theme, prev_tooltip.clone())
                     .into_any_element();
 
-                let next_btn = components::Button::new("diff_next_file", "Next file")
-                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F4"))
+                let next_btn = components::Button::new("diff_next_file", "")
+                    .start_slot(svg_icon(
+                        "icons/arrow_right.svg",
+                        theme.colors.text,
+                        px(14.0),
+                    ))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(next_disabled)
                     .on_click(theme, cx, move |this, _e, window, cx| {
@@ -230,8 +238,12 @@ impl MainPaneView {
             let prev_tooltip: SharedString = "Previous file (F1)".into();
             let next_tooltip: SharedString = "Next file (F4)".into();
 
-            let prev_btn = components::Button::new("diff_prev_file", "Prev file")
-                .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F1"))
+            let prev_btn = components::Button::new("diff_prev_file", "")
+                .start_slot(svg_icon(
+                    "icons/arrow_left.svg",
+                    theme.colors.text,
+                    px(14.0),
+                ))
                 .style(components::ButtonStyle::Outlined)
                 .disabled(prev_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
@@ -242,8 +254,12 @@ impl MainPaneView {
                 .gitcomet_tooltip(theme, prev_tooltip.clone())
                 .into_any_element();
 
-            let next_btn = components::Button::new("diff_next_file", "Next file")
-                .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F4"))
+            let next_btn = components::Button::new("diff_next_file", "")
+                .start_slot(svg_icon(
+                    "icons/arrow_right.svg",
+                    theme.colors.text,
+                    px(14.0),
+                ))
                 .style(components::ButtonStyle::Outlined)
                 .disabled(next_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {

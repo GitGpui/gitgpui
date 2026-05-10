@@ -1592,6 +1592,7 @@ fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
                     files: vec![gitcomet_core::domain::CommitFileChange {
                         path: added_path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Added,
+                        is_submodule: false,
                     }],
                 },
             ));
@@ -1708,6 +1709,7 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
                         .map(|(path, kind)| gitcomet_core::domain::CommitFileChange {
                             path: path.clone(),
                             kind: *kind,
+                            is_submodule: false,
                         })
                         .collect(),
                 },

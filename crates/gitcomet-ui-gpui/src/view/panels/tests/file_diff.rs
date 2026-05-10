@@ -249,6 +249,114 @@ index 1111111..2222222 100644
     (unified, old_text, new_text)
 }
 
+fn build_collapsed_diff_scroll_sync_fixture_texts() -> (String, String, String) {
+    let total_lines = 260usize;
+    let changed_lines = (8..=248usize).step_by(12).collect::<Vec<_>>();
+    let mut old_lines = (1..=total_lines)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>();
+    let mut new_lines = old_lines.clone();
+
+    for line in changed_lines.iter().copied() {
+        if line == 8 {
+            old_lines[line - 1] = format!("old value {line} {}", "left_payload_".repeat(160));
+            new_lines[line - 1] = format!("new value {line} {}", "right_payload_".repeat(160));
+        } else {
+            old_lines[line - 1] = format!("old value {line}");
+            new_lines[line - 1] = format!("new value {line}");
+        }
+    }
+
+    let old_text = format!("{}\n", old_lines.join("\n"));
+    let new_text = format!("{}\n", new_lines.join("\n"));
+    let mut unified = String::from(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+",
+    );
+    for line in changed_lines {
+        let context_start = line.saturating_sub(3).max(1);
+        let context_end = (line + 3).min(total_lines);
+        let context_count = context_end.saturating_sub(context_start).saturating_add(1);
+        unified.push_str(&format!(
+            "@@ -{context_start},{context_count} +{context_start},{context_count} @@\n"
+        ));
+        for current_line in context_start..=context_end {
+            if current_line == line {
+                unified.push_str(&format!("-{}\n", old_lines[current_line - 1]));
+                unified.push_str(&format!("+{}\n", new_lines[current_line - 1]));
+            } else {
+                unified.push_str(&format!(" {}\n", old_lines[current_line - 1]));
+            }
+        }
+    }
+
+    (unified, old_text, new_text)
+}
+
+fn build_full_file_inline_horizontal_scroll_fixture_texts() -> (String, String, String) {
+    let long_added = format!("added value {}", "inline_payload_".repeat(180));
+    let old_text = "line 1\nline 2\nline 3\n".to_string();
+    let new_text = format!("line 1\n{long_added}\nline 2\nline 3\n");
+    let unified = format!(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,4 @@
+ line 1
++{long_added}
+ line 2
+ line 3
+"
+    );
+    (unified, old_text, new_text)
+}
+
+fn build_collapsed_diff_trailing_hscroll_fixture_texts() -> (String, String, String) {
+    let old_lines = (1..=70usize)
+        .map(|line| {
+            if line == 1 {
+                format!("old value 1 {}", "left_payload_".repeat(160))
+            } else {
+                format!("line {line}")
+            }
+        })
+        .collect::<Vec<_>>();
+    let new_lines = (1..=70usize)
+        .map(|line| {
+            if line == 1 {
+                format!("new value 1 {}", "right_payload_".repeat(160))
+            } else {
+                format!("line {line}")
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let old_text = format!("{}\n", old_lines.join("\n"));
+    let new_text = format!("{}\n", new_lines.join("\n"));
+    let unified = format!(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,4 @@
+-{}
++{}
+ {}
+ {}
+ {}
+",
+        old_lines[0], new_lines[0], old_lines[1], old_lines[2], old_lines[3],
+    );
+    (unified, old_text, new_text)
+}
+
 fn build_collapsed_diff_multi_hunk_fixture_texts(
     changes: &[(usize, &'static str, &'static str)],
 ) -> (String, String, String) {
@@ -541,9 +649,15 @@ fn debug_selector_center(
     cx: &mut gpui::VisualTestContext,
     selector: &'static str,
 ) -> gpui::Point<Pixels> {
+    debug_selector_bounds(cx, selector).center()
+}
+
+fn debug_selector_bounds(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+) -> gpui::Bounds<Pixels> {
     cx.debug_bounds(selector)
         .unwrap_or_else(|| panic!("expected `{selector}` bounds"))
-        .center()
 }
 
 #[gpui::test]
@@ -2508,6 +2622,3189 @@ fn collapsed_diff_split_hunk_headers_stay_pinned_during_horizontal_scroll(
     assert!(
         (right_row_after_x - right_row_before_x).abs() > 1.0,
         "collapsed split right file rows should still scroll horizontally (before={right_row_before_x}, after={right_row_after_x})"
+    );
+}
+
+fn assert_collapsed_diff_reveal_click_preserves_horizontal_scroll(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        unified,
+        old_text,
+        new_text,
+    );
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, DiffScrollSync::None);
+    }
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "collapsed diff horizontal overflow becomes available before reveal",
+        |pane| match diff_view {
+            DiffViewMode::Inline => {
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+            }
+            DiffViewMode::Split => {
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                    && pane
+                        .diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .max_offset()
+                        .x
+                        > px(0.0)
+            }
+        },
+        |pane| {
+            format!(
+                "left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    let (hunk_src_ix, hidden_up_before) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let hunk = pane
+            .collapsed_diff_hunks
+            .first()
+            .copied()
+            .expect("expected collapsed diff fixture to expose one hunk");
+        let hidden_up = pane.collapsed_diff_hidden_up_rows(hunk.src_ix);
+        assert!(
+            hidden_up > 0,
+            "fixture should expose hidden rows above the collapsed hunk"
+        );
+        (hunk.src_ix, hidden_up)
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(540.0)), left_offset.y));
+
+            if diff_view == DiffViewMode::Split {
+                let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+                let right_offset = right_handle.offset();
+                let right_max = right_handle.max_offset();
+                right_handle.set_offset(point(-right_max.x.min(px(920.0)), right_offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_before_x, right_before_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+    assert!(
+        left_before_x < 0.0,
+        "test setup should scroll the left/inline diff horizontally, got {left_before_x}"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_before_x < 0.0,
+            "test setup should scroll the split-right diff horizontally, got {right_before_x}"
+        );
+    }
+
+    let reveal_selector = match diff_view {
+        DiffViewMode::Inline => "collapsed_diff_inline_hunk_up",
+        DiffViewMode::Split => "collapsed_diff_split_left_hunk_up",
+    };
+    let reveal_click = debug_selector_center(cx, reveal_selector);
+    simulate_counted_click(cx, reveal_click, 1);
+    draw_and_drain_test_window(cx);
+
+    let (hidden_up_after, left_after_x, right_after_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (
+            pane.collapsed_diff_hidden_up_rows(hunk_src_ix),
+            left_x,
+            right_x,
+        )
+    });
+
+    assert!(
+        hidden_up_after < hidden_up_before,
+        "clicking the collapsed reveal button should expand hidden context"
+    );
+    assert!(
+        (left_after_x - left_before_x).abs() < 0.01,
+        "collapsed reveal should preserve left/inline horizontal scroll (before={left_before_x}, after={left_after_x})"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            (right_after_x - right_before_x).abs() < 0.01,
+            "collapsed reveal should preserve split-right horizontal scroll (before={right_before_x}, after={right_after_x})"
+        );
+    }
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_reveal_click_preserves_horizontal_scroll(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_reveal_click_preserves_horizontal_scroll(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(264),
+        "collapsed_inline_reveal_preserves_hscroll",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_reveal_click_preserves_horizontal_scroll(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_reveal_click_preserves_horizontal_scroll(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(265),
+        "collapsed_split_reveal_preserves_hscroll",
+        DiffViewMode::Split,
+    );
+}
+
+fn assert_collapsed_diff_window_resize_preserves_horizontal_scroll(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        unified,
+        old_text,
+        new_text,
+    );
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, DiffScrollSync::None);
+    }
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "collapsed diff horizontal overflow becomes available before resize",
+        |pane| match diff_view {
+            DiffViewMode::Inline => {
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+            }
+            DiffViewMode::Split => {
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                    && pane
+                        .diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .max_offset()
+                        .x
+                        > px(0.0)
+            }
+        },
+        |pane| {
+            format!(
+                "left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(540.0)), left_offset.y));
+
+            if diff_view == DiffViewMode::Split {
+                let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+                let right_offset = right_handle.offset();
+                let right_max = right_handle.max_offset();
+                right_handle.set_offset(point(-right_max.x.min(px(920.0)), right_offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_before_x, right_before_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+    assert!(
+        left_before_x < 0.0,
+        "test setup should scroll the left/inline diff horizontally, got {left_before_x}"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_before_x < 0.0,
+            "test setup should scroll the split-right diff horizontally, got {right_before_x}"
+        );
+    }
+
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "collapsed diff horizontal overflow remains available after resize",
+        |pane| match diff_view {
+            DiffViewMode::Inline => {
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+            }
+            DiffViewMode::Split => {
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                    && pane
+                        .diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .max_offset()
+                        .x
+                        > px(0.0)
+            }
+        },
+        |pane| {
+            format!(
+                "left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    let (left_after_x, right_after_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+
+    assert!(
+        (left_after_x - left_before_x).abs() < 0.01,
+        "window resize should preserve left/inline horizontal scroll (before={left_before_x}, after={left_after_x})"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            (right_after_x - right_before_x).abs() < 0.01,
+            "window resize should preserve split-right horizontal scroll (before={right_before_x}, after={right_after_x})"
+        );
+    }
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_window_resize_preserves_horizontal_scroll(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_window_resize_preserves_horizontal_scroll(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(266),
+        "collapsed_inline_resize_preserves_hscroll",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_window_resize_preserves_horizontal_scroll(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_window_resize_preserves_horizontal_scroll(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(267),
+        "collapsed_split_resize_preserves_hscroll",
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_resize_back_restores_horizontal_scroll(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(268),
+        "collapsed_inline_resize_back_restores_hscroll",
+        DiffViewMode::Inline,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed inline diff horizontal overflow becomes available before wide resize",
+        |pane| pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0),
+        |pane| {
+            format!(
+                "offset={:?} max_offset={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let offset = handle.offset();
+            let max = handle.max_offset();
+            handle.set_offset(point(-max.x.min(px(540.0)), offset.y));
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let before_x = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let offset_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        assert!(
+            offset_x < 0.0,
+            "test setup should scroll inline diff horizontally, got {offset_x}"
+        );
+        offset_x
+    });
+
+    cx.simulate_resize(gpui::size(px(5000.0), px(600.0)));
+    draw_and_drain_test_window(cx);
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed inline diff horizontal overflow returns after narrow resize",
+        |pane| pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0),
+        |pane| {
+            format!(
+                "offset={:?} max_offset={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+            )
+        },
+    );
+
+    let after_x: f32 = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_scroll.0.borrow().base_handle.offset().x.into()
+    });
+    assert!(
+        (after_x - before_x).abs() < 0.01,
+        "horizontal scroll should be restored when overflow returns (before={before_x}, after={after_x})"
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_unmeasured_render_does_not_force_horizontal_scroll_restore(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(269),
+        "collapsed_inline_unmeasured_render_no_forced_hscroll_restore",
+        DiffViewMode::Inline,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed inline diff horizontal overflow becomes available before unmeasured render",
+        |pane| pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0),
+        |pane| {
+            format!(
+                "offset={:?} max_offset={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let offset = handle.offset();
+            let max = handle.max_offset();
+            handle.set_offset(point(-max.x.min(px(540.0)), offset.y));
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let before_x = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let offset_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        assert!(
+            offset_x < 0.0,
+            "test setup should scroll inline diff horizontally, got {offset_x}"
+        );
+        offset_x
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.invalidate_font_metrics(cx);
+            let mut state = pane.diff_scroll.0.borrow_mut();
+            state.last_item_size = None;
+            let handle = state.base_handle.clone();
+            drop(state);
+            let offset = handle.offset();
+            handle.set_offset(point(px(0.0), offset.y));
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let after_x: f32 = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_scroll.0.borrow().base_handle.offset().x.into()
+    });
+    assert!(
+        after_x.abs() < 0.01,
+        "unmeasured render should not force a saved horizontal offset back after the handle moves to zero (before={before_x}, after={after_x})"
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_unscrolled_unmeasured_render_keeps_horizontal_scroll_range(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(270),
+        "collapsed_inline_unscrolled_unmeasured_render_keeps_hscroll",
+        DiffViewMode::Inline,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed inline diff durable horizontal width becomes available",
+        |pane| pane.diff_horizontal_content_width() > px(900.0),
+        |pane| {
+            format!(
+                "content_width={:?} offset={:?} max_offset={:?}",
+                pane.diff_horizontal_content_width(),
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_scroll.0.borrow().base_handle.offset().x,
+            px(0.0),
+            "test setup should keep the inline diff at the left edge"
+        );
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.invalidate_font_metrics(cx);
+            pane.diff_scroll.0.borrow_mut().last_item_size = None;
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let max_hint = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_horizontal_scroll_max_offset_for_viewport(
+            crate::view::panes::main::DiffHorizontalScrollColumn::Primary,
+            px(900.0),
+        )
+    });
+    assert!(
+        max_hint > px(0.0),
+        "unscrolled unmeasured render should keep a durable horizontal range, got {max_hint:?}"
+    );
+
+    let hscrollbar_bounds = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_scroll.0.borrow().base_handle.bounds()
+    });
+    simulate_counted_click(
+        cx,
+        point(
+            hscrollbar_bounds.right() - px(24.0),
+            hscrollbar_bounds.bottom() - px(2.0),
+        ),
+        1,
+    );
+    draw_and_drain_test_window(cx);
+
+    let after_click_x: f32 = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_scroll.0.borrow().base_handle.offset().x.into()
+    });
+    assert!(
+        after_click_x < 0.0,
+        "horizontal scrollbar should remain interactive after unmeasured render, got {after_click_x}"
+    );
+}
+
+fn push_raw_patch_diff_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    unified: String,
+) -> gitcomet_core::domain::DiffTarget {
+    push_raw_patch_diff_state_with_rev(cx, view, repo_id, fixture_name, unified, 1, true)
+}
+
+fn push_raw_patch_diff_state_with_rev(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    unified: String,
+    diff_rev: u64,
+    ready: bool,
+) -> gitcomet_core::domain::DiffTarget {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_{}_raw_patch_root",
+        std::process::id(),
+        fixture_name
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId("feedface".into()),
+        path: None,
+    };
+    let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = diff_rev;
+            repo.diff_state.diff_rev = diff_rev;
+            repo.diff_state.diff = if ready {
+                gitcomet_state::model::Loadable::Ready(Arc::new(diff))
+            } else {
+                gitcomet_state::model::Loadable::Loading
+            };
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    target
+}
+
+fn activate_full_file_diff_horizontal_scroll_fixture(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let (unified, old_text, new_text) = if diff_view == DiffViewMode::Inline {
+        build_full_file_inline_horizontal_scroll_fixture_texts()
+    } else {
+        build_collapsed_diff_horizontal_scroll_fixture_texts()
+    };
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        PathBuf::from("src/lib.rs"),
+        unified,
+        old_text,
+        new_text,
+    );
+
+    set_diff_content_mode_for_test(cx, view, DiffContentMode::Full);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = diff_view;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "full file diff horizontal overflow becomes available",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && match diff_view {
+                    DiffViewMode::Inline => {
+                        pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                    }
+                    DiffViewMode::Split => {
+                        pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                            && pane
+                                .diff_split_right_scroll
+                                .0
+                                .borrow()
+                                .base_handle
+                                .max_offset()
+                                .x
+                                > px(0.0)
+                    }
+                }
+        },
+        |pane| {
+            format!(
+                "file_diff_active={} target={:?} left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_target,
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+}
+
+fn push_working_tree_full_file_horizontal_scroll_fixture_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    area: gitcomet_core::domain::DiffArea,
+    diff_view: DiffViewMode,
+    diff_rev: u64,
+    diff_file_rev: u64,
+    patch_ready: bool,
+    file_ready: bool,
+) -> gitcomet_core::domain::DiffTarget {
+    let (unified, old_text, new_text) = if diff_view == DiffViewMode::Inline {
+        build_full_file_inline_horizontal_scroll_fixture_texts()
+    } else {
+        build_collapsed_diff_horizontal_scroll_fixture_texts()
+    };
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_{}_unstaged_full_file_hscroll_root",
+        std::process::id(),
+        fixture_name
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let path = PathBuf::from("src/lib.rs");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area,
+    };
+    let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
+    let file_diff =
+        gitcomet_core::domain::FileDiffText::new(path.clone(), Some(old_text), Some(new_text));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                area,
+            );
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = diff_rev;
+            repo.diff_state.diff_rev = diff_rev;
+            repo.diff_state.diff = if patch_ready {
+                gitcomet_state::model::Loadable::Ready(Arc::new(diff))
+            } else {
+                gitcomet_state::model::Loadable::Loading
+            };
+            repo.diff_state.diff_file_rev = diff_file_rev;
+            repo.diff_state.diff_file = if file_ready {
+                gitcomet_state::model::Loadable::Ready(Some(Arc::new(file_diff)))
+            } else {
+                gitcomet_state::model::Loadable::Loading
+            };
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    target
+}
+
+fn activate_raw_patch_horizontal_scroll_fixture(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let (unified, _, _) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    let target = push_raw_patch_diff_state(cx, view, repo_id, fixture_name, unified);
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = diff_view;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "raw patch diff horizontal overflow becomes available",
+        |pane| {
+            pane.rendered_diff_target() == Some(&target)
+                && !pane.is_file_diff_view_active()
+                && pane.patch_diff_row_len() > 0
+                && match diff_view {
+                    DiffViewMode::Inline => {
+                        pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                    }
+                    DiffViewMode::Split => {
+                        pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                            && pane
+                                .diff_split_right_scroll
+                                .0
+                                .borrow()
+                                .base_handle
+                                .max_offset()
+                                .x
+                                > px(0.0)
+                    }
+                }
+        },
+        |pane| {
+            format!(
+                "target={:?} file_diff_active={} patch_rows={} left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.rendered_diff_target(),
+                pane.is_file_diff_view_active(),
+                pane.patch_diff_row_len(),
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+}
+
+fn assert_diff_unmeasured_render_does_not_force_horizontal_scroll_restore(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    diff_view: DiffViewMode,
+) {
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, DiffScrollSync::None);
+    }
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(540.0)), left_offset.y));
+
+            if diff_view == DiffViewMode::Split {
+                let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+                let right_offset = right_handle.offset();
+                let right_max = right_handle.max_offset();
+                right_handle.set_offset(point(-right_max.x.min(px(920.0)), right_offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_before_x, right_before_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+    assert!(
+        left_before_x < 0.0,
+        "test setup should scroll the left/inline diff horizontally, got {left_before_x}"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_before_x < 0.0,
+            "test setup should scroll the split-right diff horizontally, got {right_before_x}"
+        );
+    }
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.invalidate_font_metrics(cx);
+            for handle in [&pane.diff_scroll, &pane.diff_split_right_scroll] {
+                let mut state = handle.0.borrow_mut();
+                state.last_item_size = None;
+                let base_handle = state.base_handle.clone();
+                drop(state);
+                let offset = base_handle.offset();
+                base_handle.set_offset(point(px(0.0), offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_after_x, right_after_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+
+    assert!(
+        left_after_x.abs() < 0.01,
+        "unmeasured render should not force saved left/inline horizontal scroll back after the handle moves to zero (before={left_before_x}, after={left_after_x})"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_after_x.abs() < 0.01,
+            "unmeasured render should not force saved split-right horizontal scroll back after the handle moves to zero (before={right_before_x}, after={right_after_x})"
+        );
+    }
+}
+
+fn assert_diff_unmeasured_render_keeps_horizontal_scroll_without_zero_frame(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    diff_view: DiffViewMode,
+) {
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, DiffScrollSync::None);
+    }
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(540.0)), left_offset.y));
+
+            if diff_view == DiffViewMode::Split {
+                let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+                let right_offset = right_handle.offset();
+                let right_max = right_handle.max_offset();
+                right_handle.set_offset(point(-right_max.x.min(px(920.0)), right_offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_before_x, right_before_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+    assert!(
+        left_before_x < 0.0,
+        "test setup should scroll the left/inline diff horizontally, got {left_before_x}"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_before_x < 0.0,
+            "test setup should scroll the split-right diff horizontally, got {right_before_x}"
+        );
+    }
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            for handle in [&pane.diff_scroll, &pane.diff_split_right_scroll] {
+                handle.0.borrow_mut().last_item_size = None;
+            }
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_after_x, right_after_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+
+    assert!(
+        (left_after_x - left_before_x).abs() < 0.01,
+        "first unmeasured render should not zero left/inline horizontal scroll (before={left_before_x}, after={left_after_x})"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            (right_after_x - right_before_x).abs() < 0.01,
+            "first unmeasured render should not zero split-right horizontal scroll (before={right_before_x}, after={right_after_x})"
+        );
+    }
+}
+
+fn assert_diff_horizontal_scroll_to_start_persists(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    diff_view: DiffViewMode,
+) {
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, DiffScrollSync::None);
+    }
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(540.0)), left_offset.y));
+
+            if diff_view == DiffViewMode::Split {
+                let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+                let right_offset = right_handle.offset();
+                let right_max = right_handle.max_offset();
+                right_handle.set_offset(point(-right_max.x.min(px(920.0)), right_offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_scrolled_x, right_scrolled_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+    assert!(
+        left_scrolled_x < 0.0,
+        "test setup should scroll the left/inline diff horizontally, got {left_scrolled_x}"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_scrolled_x < 0.0,
+            "test setup should scroll the split-right diff horizontally, got {right_scrolled_x}"
+        );
+    }
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            for handle in [&pane.diff_scroll, &pane.diff_split_right_scroll] {
+                let base_handle = handle.0.borrow().base_handle.clone();
+                let offset = base_handle.offset();
+                base_handle.set_offset(point(px(0.0), offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |_pane, cx| cx.notify());
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_after_x, right_after_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_x: f32 = pane.diff_scroll.0.borrow().base_handle.offset().x.into();
+        let right_x: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+            .x
+            .into();
+        (left_x, right_x)
+    });
+
+    assert!(
+        left_after_x.abs() < 0.01,
+        "left/inline horizontal scroll should stay at start, got {left_after_x}"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_after_x.abs() < 0.01,
+            "split-right horizontal scroll should stay at start, got {right_after_x}"
+        );
+    }
+}
+
+fn assert_diff_horizontal_scroll_range_stable_across_unmeasured_render(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    diff_view: DiffViewMode,
+) {
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, DiffScrollSync::None);
+    }
+
+    let (left_before_max, right_before_max) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_max: f32 = pane
+            .diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .max_offset()
+            .x
+            .into();
+        let right_max: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .max_offset()
+            .x
+            .into();
+        (left_max, right_max)
+    });
+    assert!(
+        left_before_max > 0.0,
+        "test setup should expose left/inline horizontal range, got {left_before_max}"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_before_max > 0.0,
+            "test setup should expose split-right horizontal range, got {right_before_max}"
+        );
+    }
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            for handle in [&pane.diff_scroll, &pane.diff_split_right_scroll] {
+                handle.0.borrow_mut().last_item_size = None;
+            }
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_after_max, right_after_max) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let left_max: f32 = pane
+            .diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .max_offset()
+            .x
+            .into();
+        let right_max: f32 = pane
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .max_offset()
+            .x
+            .into();
+        (left_max, right_max)
+    });
+
+    assert!(
+        (left_after_max - left_before_max).abs() < 1.0,
+        "left/inline horizontal range should not flicker across unmeasured render (before={left_before_max}, after={left_after_max})"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            (right_after_max - right_before_max).abs() < 1.0,
+            "split-right horizontal range should not flicker across unmeasured render (before={right_before_max}, after={right_after_max})"
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DiffHorizontalScrollbarGeometry {
+    label: &'static str,
+    scrollbar_bounds: gpui::Bounds<Pixels>,
+    viewport_bounds: gpui::Bounds<Pixels>,
+    offset_x: f32,
+}
+
+fn pixel_delta(a: Pixels, b: Pixels) -> f32 {
+    let delta: f32 = (a - b).into();
+    delta.abs()
+}
+
+fn capture_diff_horizontal_scrollbar_geometry(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    diff_view: DiffViewMode,
+) -> Vec<DiffHorizontalScrollbarGeometry> {
+    match diff_view {
+        DiffViewMode::Inline => {
+            let scrollbar_bounds = debug_selector_bounds(cx, "diff_hscrollbar");
+            let (viewport_bounds, offset_x) = cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let state = pane.diff_scroll.0.borrow();
+                let offset_x: f32 = state.base_handle.offset().x.into();
+                (state.base_handle.bounds(), offset_x)
+            });
+            vec![DiffHorizontalScrollbarGeometry {
+                label: "inline",
+                scrollbar_bounds,
+                viewport_bounds,
+                offset_x,
+            }]
+        }
+        DiffViewMode::Split => {
+            let left_scrollbar_bounds = debug_selector_bounds(cx, "diff_split_left_hscrollbar");
+            let right_scrollbar_bounds = debug_selector_bounds(cx, "diff_split_right_hscrollbar");
+            let ((left_viewport_bounds, left_offset_x), (right_viewport_bounds, right_offset_x)) =
+                cx.update(|_window, app| {
+                    let pane = view.read(app).main_pane.read(app);
+                    let left_state = pane.diff_scroll.0.borrow();
+                    let left_offset_x: f32 = left_state.base_handle.offset().x.into();
+                    let left = (left_state.base_handle.bounds(), left_offset_x);
+                    drop(left_state);
+                    let right_state = pane.diff_split_right_scroll.0.borrow();
+                    let right_offset_x: f32 = right_state.base_handle.offset().x.into();
+                    let right = (right_state.base_handle.bounds(), right_offset_x);
+                    (left, right)
+                });
+            vec![
+                DiffHorizontalScrollbarGeometry {
+                    label: "split left",
+                    scrollbar_bounds: left_scrollbar_bounds,
+                    viewport_bounds: left_viewport_bounds,
+                    offset_x: left_offset_x,
+                },
+                DiffHorizontalScrollbarGeometry {
+                    label: "split right",
+                    scrollbar_bounds: right_scrollbar_bounds,
+                    viewport_bounds: right_viewport_bounds,
+                    offset_x: right_offset_x,
+                },
+            ]
+        }
+    }
+}
+
+fn assert_scrollbar_geometry_matches_viewport(geometry: &[DiffHorizontalScrollbarGeometry]) {
+    for sample in geometry {
+        assert!(
+            pixel_delta(
+                sample.scrollbar_bounds.size.width,
+                sample.viewport_bounds.size.width
+            ) < 1.0,
+            "{} horizontal scrollbar width should match viewport width (scrollbar={:?}, viewport={:?})",
+            sample.label,
+            sample.scrollbar_bounds,
+            sample.viewport_bounds
+        );
+        assert!(
+            pixel_delta(
+                sample.scrollbar_bounds.left(),
+                sample.viewport_bounds.left()
+            ) < 1.0,
+            "{} horizontal scrollbar left edge should match viewport left edge (scrollbar={:?}, viewport={:?})",
+            sample.label,
+            sample.scrollbar_bounds,
+            sample.viewport_bounds
+        );
+        assert!(
+            pixel_delta(
+                sample.scrollbar_bounds.right(),
+                sample.viewport_bounds.right()
+            ) < 1.0,
+            "{} horizontal scrollbar right edge should match viewport right edge (scrollbar={:?}, viewport={:?})",
+            sample.label,
+            sample.scrollbar_bounds,
+            sample.viewport_bounds
+        );
+    }
+}
+
+fn assert_scrollbar_geometry_stays_stable(
+    before: &[DiffHorizontalScrollbarGeometry],
+    after: &[DiffHorizontalScrollbarGeometry],
+) {
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "geometry capture should keep the same number of scrollbars"
+    );
+    for (before, after) in before.iter().zip(after.iter()) {
+        assert_eq!(before.label, after.label);
+        assert!(
+            pixel_delta(
+                before.scrollbar_bounds.left(),
+                after.scrollbar_bounds.left()
+            ) < 1.0,
+            "{} horizontal scrollbar left edge should not move across unmeasured render (before={:?}, after={:?})",
+            before.label,
+            before.scrollbar_bounds,
+            after.scrollbar_bounds
+        );
+        assert!(
+            pixel_delta(
+                before.scrollbar_bounds.right(),
+                after.scrollbar_bounds.right()
+            ) < 1.0,
+            "{} horizontal scrollbar right edge should not move across unmeasured render (before={:?}, after={:?})",
+            before.label,
+            before.scrollbar_bounds,
+            after.scrollbar_bounds
+        );
+        assert!(
+            pixel_delta(
+                before.scrollbar_bounds.size.width,
+                after.scrollbar_bounds.size.width
+            ) < 1.0,
+            "{} horizontal scrollbar width should not change across unmeasured render (before={:?}, after={:?})",
+            before.label,
+            before.scrollbar_bounds,
+            after.scrollbar_bounds
+        );
+        assert!(
+            (after.offset_x - before.offset_x).abs() < 0.01,
+            "{} horizontal offset should not change across unmeasured render (before={}, after={})",
+            before.label,
+            before.offset_x,
+            after.offset_x
+        );
+    }
+}
+
+fn assert_scrollbar_bounds_stay_stable(
+    before: &[DiffHorizontalScrollbarGeometry],
+    after: &[DiffHorizontalScrollbarGeometry],
+) {
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "geometry capture should keep the same number of scrollbars"
+    );
+    for (before, after) in before.iter().zip(after.iter()) {
+        assert_eq!(before.label, after.label);
+        assert!(
+            pixel_delta(
+                before.scrollbar_bounds.left(),
+                after.scrollbar_bounds.left()
+            ) < 1.0,
+            "{} horizontal scrollbar left edge should not move (before={:?}, after={:?})",
+            before.label,
+            before.scrollbar_bounds,
+            after.scrollbar_bounds
+        );
+        assert!(
+            pixel_delta(
+                before.scrollbar_bounds.right(),
+                after.scrollbar_bounds.right()
+            ) < 1.0,
+            "{} horizontal scrollbar right edge should not move (before={:?}, after={:?})",
+            before.label,
+            before.scrollbar_bounds,
+            after.scrollbar_bounds
+        );
+        assert!(
+            pixel_delta(
+                before.scrollbar_bounds.size.width,
+                after.scrollbar_bounds.size.width
+            ) < 1.0,
+            "{} horizontal scrollbar width should not change (before={:?}, after={:?})",
+            before.label,
+            before.scrollbar_bounds,
+            after.scrollbar_bounds
+        );
+    }
+}
+
+fn assert_diff_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    diff_view: DiffViewMode,
+    sync_mode: DiffScrollSync,
+) {
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, sync_mode);
+    }
+
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "diff horizontal and vertical overflow are available before geometry capture",
+        |pane| {
+            let left_state = pane.diff_scroll.0.borrow();
+            let left_max = left_state.base_handle.max_offset();
+            let left_overflows = left_max.x > px(0.0) && left_max.y > px(0.0);
+            if diff_view == DiffViewMode::Inline {
+                return left_overflows;
+            }
+            drop(left_state);
+            let right_state = pane.diff_split_right_scroll.0.borrow();
+            let right_max = right_state.base_handle.max_offset();
+            let right_vertical_ready = sync_mode.includes_vertical() || right_max.y > px(0.0);
+            left_overflows && right_max.x > px(0.0) && right_vertical_ready
+        },
+        |pane| {
+            format!(
+                "left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(240.0)), left_offset.y));
+
+            if diff_view == DiffViewMode::Split {
+                let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+                let right_offset = right_handle.offset();
+                let right_max = right_handle.max_offset();
+                right_handle.set_offset(point(-right_max.x.min(px(360.0)), right_offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let before = capture_diff_horizontal_scrollbar_geometry(cx, view, diff_view);
+    assert_scrollbar_geometry_matches_viewport(&before);
+    for sample in &before {
+        assert!(
+            sample.offset_x < 0.0,
+            "{} test setup should start with a horizontal offset, got {}",
+            sample.label,
+            sample.offset_x
+        );
+    }
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.invalidate_font_metrics(cx);
+            pane.diff_scroll.0.borrow_mut().last_item_size = None;
+            pane.diff_split_right_scroll.0.borrow_mut().last_item_size = None;
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let after = capture_diff_horizontal_scrollbar_geometry(cx, view, diff_view);
+    assert_scrollbar_geometry_matches_viewport(&after);
+    assert_scrollbar_geometry_stays_stable(&before, &after);
+}
+
+fn assert_diff_horizontal_scrollbar_drag_keeps_range_stable(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    diff_view: DiffViewMode,
+) {
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, DiffScrollSync::None);
+    }
+
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "diff horizontal overflow is available before scrollbar drag",
+        |pane| {
+            pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                && (diff_view == DiffViewMode::Inline
+                    || pane
+                        .diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .max_offset()
+                        .x
+                        > px(0.0))
+        },
+        |pane| {
+            format!(
+                "left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    let before = capture_diff_horizontal_scrollbar_geometry(cx, view, diff_view);
+    let (before_content_width, before_max_offset) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let column = crate::view::panes::main::DiffHorizontalScrollColumn::Primary;
+        let content_width: f32 = pane.diff_horizontal_content_width_for_column(column).into();
+        let max_offset: f32 = pane
+            .diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .max_offset()
+            .x
+            .into();
+        (content_width, max_offset)
+    });
+    assert!(
+        before_max_offset > 0.0,
+        "test setup should expose horizontal range before drag, got {before_max_offset}"
+    );
+
+    let scrollbar_bounds = before[0].scrollbar_bounds;
+    let start = point(
+        scrollbar_bounds.left() + px(12.0),
+        scrollbar_bounds.center().y,
+    );
+    let end = point(
+        (start.x + px(80.0)).min(scrollbar_bounds.right() - px(12.0)),
+        start.y,
+    );
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let after = capture_diff_horizontal_scrollbar_geometry(cx, view, diff_view);
+    assert_scrollbar_bounds_stay_stable(&before, &after);
+
+    let (after_content_width, after_max_offset, after_offset_x) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let column = crate::view::panes::main::DiffHorizontalScrollColumn::Primary;
+        let content_width: f32 = pane.diff_horizontal_content_width_for_column(column).into();
+        let state = pane.diff_scroll.0.borrow();
+        let max_offset: f32 = state.base_handle.max_offset().x.into();
+        let offset_x: f32 = state.base_handle.offset().x.into();
+        (content_width, max_offset, offset_x)
+    });
+
+    assert!(
+        (after_content_width - before_content_width).abs() < 1.0,
+        "dragging the horizontal scrollbar should not change measured content width (before={before_content_width}, after={after_content_width})"
+    );
+    assert!(
+        (after_max_offset - before_max_offset).abs() < 1.0,
+        "dragging the horizontal scrollbar should not change horizontal range (before={before_max_offset}, after={after_max_offset})"
+    );
+    assert!(
+        after_offset_x < 0.0,
+        "dragging the horizontal scrollbar should move horizontally, got {after_offset_x}"
+    );
+}
+
+#[gpui::test]
+fn diff_vertical_scrollbar_gutter_stays_reserved_when_unmeasured(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(287),
+        "diff_vertical_scrollbar_gutter_stays_reserved_when_unmeasured",
+        DiffViewMode::Split,
+    );
+    set_diff_scroll_sync_for_test(cx, &view, DiffScrollSync::None);
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
+            pane.diff_scroll.0.borrow_mut().last_item_size = None;
+            pane.diff_split_right_scroll.0.borrow_mut().last_item_size = None;
+
+            let left_gutter = pane.diff_vertical_scrollbar_gutter_for_column(
+                crate::view::panes::main::DiffHorizontalScrollColumn::Primary,
+                pane.diff_scroll.clone(),
+            );
+            let right_gutter = pane.diff_vertical_scrollbar_gutter_for_column(
+                crate::view::panes::main::DiffHorizontalScrollColumn::SplitRight,
+                pane.diff_split_right_scroll.clone(),
+            );
+
+            assert_eq!(
+                left_gutter, gutter,
+                "unmeasured primary diff should keep reserved vertical gutter"
+            );
+            assert_eq!(
+                right_gutter, gutter,
+                "unmeasured split-right diff should keep reserved vertical gutter"
+            );
+        });
+    });
+}
+
+fn assert_working_tree_full_file_diff_horizontal_scroll_stable_across_same_target_loading(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    area: gitcomet_core::domain::DiffArea,
+    diff_view: DiffViewMode,
+    sync_mode: DiffScrollSync,
+) {
+    let target = push_working_tree_full_file_horizontal_scroll_fixture_state(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        area,
+        diff_view,
+        1,
+        1,
+        true,
+        true,
+    );
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, sync_mode);
+    }
+    set_diff_content_mode_for_test(cx, view, DiffContentMode::Full);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = diff_view;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "unstaged full-file diff horizontal overflow becomes available",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.file_diff_cache_inflight.is_none()
+                && match diff_view {
+                    DiffViewMode::Inline => {
+                        pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                    }
+                    DiffViewMode::Split => {
+                        pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                            && pane
+                                .diff_split_right_scroll
+                                .0
+                                .borrow()
+                                .base_handle
+                                .max_offset()
+                                .x
+                                > px(0.0)
+                    }
+                }
+        },
+        |pane| {
+            format!(
+                "active={} target={:?} inflight={:?} left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_target,
+                pane.file_diff_cache_inflight,
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(360.0)), left_offset.y));
+
+            if diff_view == DiffViewMode::Split {
+                let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+                let right_offset = right_handle.offset();
+                let right_max = right_handle.max_offset();
+                right_handle.set_offset(point(-right_max.x.min(px(540.0)), right_offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_before_x, right_before_x, left_before_max, right_before_max, seq_before) =
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (
+                pane.diff_scroll.0.borrow().base_handle.offset().x,
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .x,
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x,
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .x,
+                pane.file_diff_cache_seq,
+            )
+        });
+    assert!(
+        left_before_x < px(0.0),
+        "test setup should scroll the left/inline diff horizontally, got {left_before_x:?}"
+    );
+    if diff_view == DiffViewMode::Split {
+        assert!(
+            right_before_x < px(0.0),
+            "test setup should scroll split-right horizontally, got {right_before_x:?}"
+        );
+    }
+
+    push_working_tree_full_file_horizontal_scroll_fixture_state(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        area,
+        diff_view,
+        2,
+        2,
+        false,
+        false,
+    );
+    draw_and_drain_test_window(cx);
+
+    let assert_stable = |cx: &mut gpui::VisualTestContext, label: &str, expected_rev: u64| {
+        let (left_x, right_x, left_max, right_max, seq, cache_rev, active) =
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                (
+                    pane.diff_scroll.0.borrow().base_handle.offset().x,
+                    pane.diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .offset()
+                        .x,
+                    pane.diff_scroll.0.borrow().base_handle.max_offset().x,
+                    pane.diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .max_offset()
+                        .x,
+                    pane.file_diff_cache_seq,
+                    pane.file_diff_cache_rev,
+                    pane.is_file_diff_view_active(),
+                )
+            });
+        assert!(active, "{label}: file diff view should remain active");
+        assert_eq!(
+            cache_rev, expected_rev,
+            "{label}: same-target cache rev should track the active refresh"
+        );
+        assert_eq!(
+            seq, seq_before,
+            "{label}: same-content refresh should not rebuild the file-diff cache"
+        );
+        assert!(
+            (left_x - left_before_x).abs() < px(0.01),
+            "{label}: left/inline horizontal offset should stay stable (before={left_before_x:?}, after={left_x:?})"
+        );
+        assert!(
+            (left_max - left_before_max).abs() < px(1.0),
+            "{label}: left/inline horizontal range should stay stable (before={left_before_max:?}, after={left_max:?})"
+        );
+        if diff_view == DiffViewMode::Split {
+            assert!(
+                (right_x - right_before_x).abs() < px(0.01),
+                "{label}: split-right horizontal offset should stay stable (before={right_before_x:?}, after={right_x:?})"
+            );
+            assert!(
+                (right_max - right_before_max).abs() < px(1.0),
+                "{label}: split-right horizontal range should stay stable (before={right_before_max:?}, after={right_max:?})"
+            );
+        }
+    };
+    assert_stable(cx, "same-target loading redraw", 2);
+
+    push_working_tree_full_file_horizontal_scroll_fixture_state(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        area,
+        diff_view,
+        2,
+        2,
+        true,
+        true,
+    );
+    draw_and_drain_test_window(cx);
+    assert_stable(cx, "same-target ready redraw", 2);
+}
+
+#[gpui::test]
+fn full_file_diff_inline_unstaged_same_target_loading_preserves_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_working_tree_full_file_diff_horizontal_scroll_stable_across_same_target_loading(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(912),
+        "full_file_inline_unstaged_same_target_loading_hscroll",
+        gitcomet_core::domain::DiffArea::Unstaged,
+        DiffViewMode::Inline,
+        DiffScrollSync::None,
+    );
+}
+
+#[gpui::test]
+fn full_file_diff_split_unstaged_same_target_loading_preserves_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_working_tree_full_file_diff_horizontal_scroll_stable_across_same_target_loading(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(913),
+        "full_file_split_unstaged_same_target_loading_hscroll",
+        gitcomet_core::domain::DiffArea::Unstaged,
+        DiffViewMode::Split,
+        DiffScrollSync::None,
+    );
+}
+
+#[gpui::test]
+fn full_file_diff_split_staged_same_target_loading_preserves_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_working_tree_full_file_diff_horizontal_scroll_stable_across_same_target_loading(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(914),
+        "full_file_split_staged_same_target_loading_hscroll",
+        gitcomet_core::domain::DiffArea::Staged,
+        DiffViewMode::Split,
+        DiffScrollSync::None,
+    );
+}
+
+#[gpui::test]
+fn full_file_diff_split_vertical_sync_same_target_loading_preserves_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_working_tree_full_file_diff_horizontal_scroll_stable_across_same_target_loading(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(915),
+        "full_file_split_vertical_sync_same_target_loading_hscroll",
+        gitcomet_core::domain::DiffArea::Unstaged,
+        DiffViewMode::Split,
+        DiffScrollSync::Vertical,
+    );
+}
+
+fn assert_raw_patch_diff_horizontal_scroll_stable_across_same_target_loading(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+    sync_mode: DiffScrollSync,
+) {
+    let (unified, _, _) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    let target = push_raw_patch_diff_state_with_rev(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        unified.clone(),
+        1,
+        true,
+    );
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, sync_mode);
+    }
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = diff_view;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "raw patch horizontal overflow becomes available before same-target loading",
+        |pane| {
+            pane.rendered_diff_target() == Some(&target)
+                && !pane.is_file_diff_view_active()
+                && pane.diff_cache_rev == 1
+                && pane.patch_diff_row_len() > 0
+                && match diff_view {
+                    DiffViewMode::Inline => {
+                        pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                    }
+                    DiffViewMode::Split => {
+                        pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                            && pane
+                                .diff_split_right_scroll
+                                .0
+                                .borrow()
+                                .base_handle
+                                .max_offset()
+                                .x
+                                > px(0.0)
+                    }
+                }
+        },
+        |pane| {
+            format!(
+                "target={:?} cache_rev={} rows={} left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.rendered_diff_target(),
+                pane.diff_cache_rev,
+                pane.patch_diff_row_len(),
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(360.0)), left_offset.y));
+
+            if diff_view == DiffViewMode::Split {
+                let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+                let right_offset = right_handle.offset();
+                let right_max = right_handle.max_offset();
+                right_handle.set_offset(point(-right_max.x.min(px(540.0)), right_offset.y));
+            }
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_before_x, right_before_x, left_before_max, right_before_max) =
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (
+                pane.diff_scroll.0.borrow().base_handle.offset().x,
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .x,
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x,
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .x,
+            )
+        });
+    assert!(left_before_x < px(0.0));
+    if diff_view == DiffViewMode::Split {
+        assert!(right_before_x < px(0.0));
+    }
+
+    let assert_stable = |cx: &mut gpui::VisualTestContext, label: &str| {
+        let (left_x, right_x, left_max, right_max, cache_rev, rows) = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (
+                pane.diff_scroll.0.borrow().base_handle.offset().x,
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .x,
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x,
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .x,
+                pane.diff_cache_rev,
+                pane.patch_diff_row_len(),
+            )
+        });
+        assert_eq!(cache_rev, 2, "{label}: raw patch cache rev should advance");
+        assert!(rows > 0, "{label}: raw patch rows should remain cached");
+        assert!(
+            (left_x - left_before_x).abs() < px(0.01),
+            "{label}: left/inline offset should remain stable"
+        );
+        assert!(
+            (left_max - left_before_max).abs() < px(1.0),
+            "{label}: left/inline range should remain stable"
+        );
+        if diff_view == DiffViewMode::Split {
+            assert!(
+                (right_x - right_before_x).abs() < px(0.01),
+                "{label}: split-right offset should remain stable"
+            );
+            assert!(
+                (right_max - right_before_max).abs() < px(1.0),
+                "{label}: split-right range should remain stable"
+            );
+        }
+    };
+
+    push_raw_patch_diff_state_with_rev(cx, view, repo_id, fixture_name, unified.clone(), 2, false);
+    draw_and_drain_test_window(cx);
+    assert_stable(cx, "raw patch same-target loading redraw");
+
+    push_raw_patch_diff_state_with_rev(cx, view, repo_id, fixture_name, unified, 2, true);
+    draw_and_drain_test_window(cx);
+    assert_stable(cx, "raw patch same-target ready redraw");
+}
+
+#[gpui::test]
+fn raw_patch_inline_same_target_loading_preserves_horizontal_scroll(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_raw_patch_diff_horizontal_scroll_stable_across_same_target_loading(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(916),
+        "raw_patch_inline_same_target_loading_hscroll",
+        DiffViewMode::Inline,
+        DiffScrollSync::None,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_split_vertical_sync_same_target_loading_preserves_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_raw_patch_diff_horizontal_scroll_stable_across_same_target_loading(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(917),
+        "raw_patch_split_vertical_sync_same_target_loading_hscroll",
+        DiffViewMode::Split,
+        DiffScrollSync::Vertical,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_same_target_loading_preserves_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(918);
+    let fixture_name = "collapsed_split_same_target_loading_hscroll";
+    let target = push_working_tree_full_file_horizontal_scroll_fixture_state(
+        cx,
+        &view,
+        repo_id,
+        fixture_name,
+        gitcomet_core::domain::DiffArea::Unstaged,
+        DiffViewMode::Split,
+        1,
+        1,
+        true,
+        true,
+    );
+    set_diff_scroll_sync_for_test(cx, &view, DiffScrollSync::None);
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = DiffViewMode::Split;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed split horizontal overflow becomes available before loading refresh",
+        |pane| {
+            pane.rendered_diff_target() == Some(&target)
+                && pane.is_collapsed_diff_projection_active()
+                && pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                && pane
+                    .diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .x
+                    > px(0.0)
+        },
+        |pane| {
+            format!(
+                "collapsed_active={} diff_rev={} file_rev={} left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.is_collapsed_diff_projection_active(),
+                pane.diff_cache_rev,
+                pane.file_diff_cache_rev,
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let left_handle = pane.diff_scroll.0.borrow().base_handle.clone();
+            let left_offset = left_handle.offset();
+            let left_max = left_handle.max_offset();
+            left_handle.set_offset(point(-left_max.x.min(px(360.0)), left_offset.y));
+
+            let right_handle = pane.diff_split_right_scroll.0.borrow().base_handle.clone();
+            let right_offset = right_handle.offset();
+            let right_max = right_handle.max_offset();
+            right_handle.set_offset(point(-right_max.x.min(px(540.0)), right_offset.y));
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (left_before_x, right_before_x, left_before_max, right_before_max) =
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (
+                pane.diff_scroll.0.borrow().base_handle.offset().x,
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .offset()
+                    .x,
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x,
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .x,
+            )
+        });
+    assert!(left_before_x < px(0.0));
+    assert!(right_before_x < px(0.0));
+
+    let assert_stable = |cx: &mut gpui::VisualTestContext, label: &str| {
+        let (left_x, right_x, left_max, right_max, diff_rev, file_rev, active) =
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                (
+                    pane.diff_scroll.0.borrow().base_handle.offset().x,
+                    pane.diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .offset()
+                        .x,
+                    pane.diff_scroll.0.borrow().base_handle.max_offset().x,
+                    pane.diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .max_offset()
+                        .x,
+                    pane.diff_cache_rev,
+                    pane.file_diff_cache_rev,
+                    pane.is_collapsed_diff_projection_active(),
+                )
+            });
+        assert!(
+            active,
+            "{label}: collapsed projection should remain cache-active"
+        );
+        assert_eq!(diff_rev, 2, "{label}: patch cache rev should advance");
+        assert_eq!(file_rev, 2, "{label}: file cache rev should advance");
+        assert!(
+            (left_x - left_before_x).abs() < px(0.01),
+            "{label}: split-left offset should remain stable"
+        );
+        assert!(
+            (right_x - right_before_x).abs() < px(0.01),
+            "{label}: split-right offset should remain stable"
+        );
+        assert!(
+            (left_max - left_before_max).abs() < px(1.0),
+            "{label}: split-left range should remain stable"
+        );
+        assert!(
+            (right_max - right_before_max).abs() < px(1.0),
+            "{label}: split-right range should remain stable"
+        );
+    };
+
+    push_working_tree_full_file_horizontal_scroll_fixture_state(
+        cx,
+        &view,
+        repo_id,
+        fixture_name,
+        gitcomet_core::domain::DiffArea::Unstaged,
+        DiffViewMode::Split,
+        2,
+        2,
+        false,
+        false,
+    );
+    draw_and_drain_test_window(cx);
+    assert_stable(cx, "collapsed same-target loading redraw");
+
+    push_working_tree_full_file_horizontal_scroll_fixture_state(
+        cx,
+        &view,
+        repo_id,
+        fixture_name,
+        gitcomet_core::domain::DiffArea::Unstaged,
+        DiffViewMode::Split,
+        2,
+        2,
+        true,
+        true,
+    );
+    draw_and_drain_test_window(cx);
+    assert_stable(cx, "collapsed same-target ready redraw");
+}
+
+#[gpui::test]
+fn raw_patch_inline_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(902),
+        "raw_patch_inline_hscrollbar_bounds_stable_unmeasured",
+        DiffViewMode::Inline,
+    );
+    assert_diff_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Inline,
+        DiffScrollSync::None,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_split_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(903),
+        "raw_patch_split_hscrollbar_bounds_stable_unmeasured",
+        DiffViewMode::Split,
+    );
+    assert_diff_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Split,
+        DiffScrollSync::None,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_split_vertical_sync_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(904),
+        "raw_patch_split_vertical_sync_hscrollbar_bounds_stable_unmeasured",
+        DiffViewMode::Split,
+    );
+    assert_diff_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Split,
+        DiffScrollSync::Vertical,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_inline_horizontal_scrollbar_drag_keeps_range_stable(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(909),
+        "raw_patch_inline_hscrollbar_drag_range_stable",
+        DiffViewMode::Inline,
+    );
+    assert_diff_horizontal_scrollbar_drag_keeps_range_stable(cx, &view, DiffViewMode::Inline);
+}
+
+#[gpui::test]
+fn collapsed_diff_split_horizontal_scrollbar_drag_keeps_range_stable(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (unified, old_text, new_text) = build_collapsed_diff_scroll_sync_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(910),
+        "collapsed_split_hscrollbar_drag_range_stable",
+        DiffViewMode::Split,
+        unified,
+        old_text,
+        new_text,
+    );
+    assert_diff_horizontal_scrollbar_drag_keeps_range_stable(cx, &view, DiffViewMode::Split);
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (unified, old_text, new_text) = build_collapsed_diff_scroll_sync_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(905),
+        "collapsed_inline_hscrollbar_bounds_stable_unmeasured",
+        DiffViewMode::Inline,
+        unified,
+        old_text,
+        new_text,
+    );
+    assert_diff_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Inline,
+        DiffScrollSync::None,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (unified, old_text, new_text) = build_collapsed_diff_scroll_sync_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(906),
+        "collapsed_split_hscrollbar_bounds_stable_unmeasured",
+        DiffViewMode::Split,
+        unified,
+        old_text,
+        new_text,
+    );
+    assert_diff_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Split,
+        DiffScrollSync::None,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_vertical_sync_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (unified, old_text, new_text) = build_collapsed_diff_scroll_sync_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(907),
+        "collapsed_split_vertical_sync_hscrollbar_bounds_stable_unmeasured",
+        DiffViewMode::Split,
+        unified,
+        old_text,
+        new_text,
+    );
+    assert_diff_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Split,
+        DiffScrollSync::Vertical,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_scroll_sync_setting_controls_each_axis(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let (unified, old_text, new_text) = build_collapsed_diff_scroll_sync_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(908),
+        "collapsed_split_scroll_sync_setting_controls_each_axis",
+        DiffViewMode::Split,
+        unified,
+        old_text,
+        new_text,
+    );
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed split diff exposes horizontal and vertical scroll ranges",
+        |pane| {
+            let left_max = uniform_list_max_offset(&pane.diff_scroll);
+            let right_max = uniform_list_max_offset(&pane.diff_split_right_scroll);
+            left_max.width > px(40.0)
+                && right_max.width > px(40.0)
+                && left_max.height > px(120.0)
+                && right_max.height > px(120.0)
+        },
+        |pane| {
+            format!(
+                "left_offset={:?} right_offset={:?} left_max={:?} right_max={:?}",
+                uniform_list_offset(&pane.diff_scroll),
+                uniform_list_offset(&pane.diff_split_right_scroll),
+                uniform_list_max_offset(&pane.diff_scroll),
+                uniform_list_max_offset(&pane.diff_split_right_scroll),
+            )
+        },
+    );
+
+    for mode in ALL_DIFF_SCROLL_SYNC_MODES {
+        set_diff_scroll_sync_for_test(cx, &view, mode);
+
+        for axis in ScrollSyncAxis::ALL {
+            let scrolled = axis.offset(px(40.0));
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                main_pane.update(app, |pane, cx| {
+                    reset_uniform_list_offsets(&[&pane.diff_scroll, &pane.diff_split_right_scroll]);
+                    cx.notify();
+                });
+            });
+            draw_and_drain_test_window(cx);
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                main_pane.update(app, |pane, cx| {
+                    set_uniform_list_offset(&pane.diff_scroll, scrolled);
+                    cx.notify();
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let expected_right = if axis.includes(mode) {
+                    axis.component(scrolled)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.diff_scroll)),
+                    axis.component(scrolled),
+                    "collapsed split left should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.diff_split_right_scroll)),
+                    expected_right,
+                    "collapsed split right should {} {} scrolling from the left column in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+            });
+
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                main_pane.update(app, |pane, cx| {
+                    reset_uniform_list_offsets(&[&pane.diff_scroll, &pane.diff_split_right_scroll]);
+                    cx.notify();
+                });
+            });
+            draw_and_drain_test_window(cx);
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                main_pane.update(app, |pane, cx| {
+                    set_uniform_list_offset(&pane.diff_split_right_scroll, scrolled);
+                    cx.notify();
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let expected_left = if axis.includes(mode) {
+                    axis.component(scrolled)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.diff_split_right_scroll)),
+                    axis.component(scrolled),
+                    "collapsed split right should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.diff_scroll)),
+                    expected_left,
+                    "collapsed split left should {} {} scrolling from the right column in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn full_file_diff_inline_unmeasured_render_does_not_force_horizontal_scroll_restore(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(271),
+        "full_file_inline_unmeasured_render_no_forced_hscroll_restore",
+        DiffViewMode::Inline,
+    );
+    assert_diff_unmeasured_render_does_not_force_horizontal_scroll_restore(
+        cx,
+        &view,
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_file_diff_split_unmeasured_render_does_not_force_horizontal_scroll_restore(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(272),
+        "full_file_split_unmeasured_render_no_forced_hscroll_restore",
+        DiffViewMode::Split,
+    );
+    assert_diff_unmeasured_render_does_not_force_horizontal_scroll_restore(
+        cx,
+        &view,
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_inline_unmeasured_render_does_not_force_horizontal_scroll_restore(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(273),
+        "raw_patch_inline_unmeasured_render_no_forced_hscroll_restore",
+        DiffViewMode::Inline,
+    );
+    assert_diff_unmeasured_render_does_not_force_horizontal_scroll_restore(
+        cx,
+        &view,
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_split_unmeasured_render_does_not_force_horizontal_scroll_restore(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(274),
+        "raw_patch_split_unmeasured_render_no_forced_hscroll_restore",
+        DiffViewMode::Split,
+    );
+    assert_diff_unmeasured_render_does_not_force_horizontal_scroll_restore(
+        cx,
+        &view,
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn full_file_diff_inline_unmeasured_render_does_not_zero_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(275),
+        "full_file_inline_unmeasured_render_does_not_zero_hscroll",
+        DiffViewMode::Inline,
+    );
+    assert_diff_unmeasured_render_keeps_horizontal_scroll_without_zero_frame(
+        cx,
+        &view,
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_file_diff_split_unmeasured_render_does_not_zero_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(276),
+        "full_file_split_unmeasured_render_does_not_zero_hscroll",
+        DiffViewMode::Split,
+    );
+    assert_diff_unmeasured_render_keeps_horizontal_scroll_without_zero_frame(
+        cx,
+        &view,
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_inline_unmeasured_render_does_not_zero_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(277),
+        "raw_patch_inline_unmeasured_render_does_not_zero_hscroll",
+        DiffViewMode::Inline,
+    );
+    assert_diff_unmeasured_render_keeps_horizontal_scroll_without_zero_frame(
+        cx,
+        &view,
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_split_unmeasured_render_does_not_zero_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(278),
+        "raw_patch_split_unmeasured_render_does_not_zero_hscroll",
+        DiffViewMode::Split,
+    );
+    assert_diff_unmeasured_render_keeps_horizontal_scroll_without_zero_frame(
+        cx,
+        &view,
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn full_file_diff_inline_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(279),
+        "full_file_inline_scroll_to_start_persists",
+        DiffViewMode::Inline,
+    );
+    assert_diff_horizontal_scroll_to_start_persists(cx, &view, DiffViewMode::Inline);
+}
+
+#[gpui::test]
+fn full_file_diff_split_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(280),
+        "full_file_split_scroll_to_start_persists",
+        DiffViewMode::Split,
+    );
+    assert_diff_horizontal_scroll_to_start_persists(cx, &view, DiffViewMode::Split);
+}
+
+#[gpui::test]
+fn raw_patch_inline_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(281),
+        "raw_patch_inline_scroll_to_start_persists",
+        DiffViewMode::Inline,
+    );
+    assert_diff_horizontal_scroll_to_start_persists(cx, &view, DiffViewMode::Inline);
+}
+
+#[gpui::test]
+fn raw_patch_split_scroll_to_start_persists(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(282),
+        "raw_patch_split_scroll_to_start_persists",
+        DiffViewMode::Split,
+    );
+    assert_diff_horizontal_scroll_to_start_persists(cx, &view, DiffViewMode::Split);
+}
+
+#[gpui::test]
+fn full_file_diff_inline_horizontal_range_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(283),
+        "full_file_inline_horizontal_range_stable_unmeasured",
+        DiffViewMode::Inline,
+    );
+    assert_diff_horizontal_scroll_range_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_file_diff_split_horizontal_range_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_full_file_diff_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(284),
+        "full_file_split_horizontal_range_stable_unmeasured",
+        DiffViewMode::Split,
+    );
+    assert_diff_horizontal_scroll_range_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_inline_horizontal_range_stable_across_unmeasured_render(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(285),
+        "raw_patch_inline_horizontal_range_stable_unmeasured",
+        DiffViewMode::Inline,
+    );
+    assert_diff_horizontal_scroll_range_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn raw_patch_split_horizontal_range_stable_across_unmeasured_render(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    activate_raw_patch_horizontal_scroll_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(286),
+        "raw_patch_split_horizontal_range_stable_unmeasured",
+        DiffViewMode::Split,
+    );
+    assert_diff_horizontal_scroll_range_stable_across_unmeasured_render(
+        cx,
+        &view,
+        DiffViewMode::Split,
+    );
+}
+
+fn assert_collapsed_diff_trailing_down_button_clickable_above_hscrollbar(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let (unified, old_text, new_text) = build_collapsed_diff_trailing_hscroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        unified,
+        old_text,
+        new_text,
+    );
+    if diff_view == DiffViewMode::Split {
+        set_diff_scroll_sync_for_test(cx, view, DiffScrollSync::None);
+    }
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "collapsed trailing hunk horizontal overflow becomes available",
+        |pane| match diff_view {
+            DiffViewMode::Inline => {
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+            }
+            DiffViewMode::Split => {
+                pane.diff_scroll.0.borrow().base_handle.max_offset().x > px(0.0)
+                    && pane
+                        .diff_split_right_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .max_offset()
+                        .x
+                        > px(0.0)
+            }
+        },
+        |pane| {
+            format!(
+                "left_offset={:?} left_max={:?} right_offset={:?} right_max={:?}",
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+                pane.diff_split_right_scroll.0.borrow().base_handle.offset(),
+                pane.diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    let (hunk_src_ix, trailing_visible_ix, hidden_down_before) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let trailing_visible_ix = pane
+            .diff_visible_len()
+            .checked_sub(1)
+            .expect("expected at least one collapsed diff row");
+        match pane.collapsed_visible_row(trailing_visible_ix) {
+            Some(crate::view::panes::main::CollapsedDiffVisibleRow::HunkHeader {
+                src_ix,
+                expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Down,
+                display_src_ix: None,
+                hidden_rows,
+            }) => (src_ix, trailing_visible_ix, hidden_rows),
+            row => panic!("expected trailing collapsed down hunk header, got {row:?}"),
+        }
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            pane.scroll_diff_to_item_strict(trailing_visible_ix, gpui::ScrollStrategy::Bottom);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let down_selector = match diff_view {
+        DiffViewMode::Inline => "collapsed_diff_inline_hunk_down",
+        DiffViewMode::Split => "collapsed_diff_split_left_hunk_down",
+    };
+    let down_bounds = cx
+        .debug_bounds(down_selector)
+        .unwrap_or_else(|| panic!("expected `{down_selector}` bounds"));
+    let scrollbar_top = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_scroll.0.borrow().base_handle.bounds().bottom()
+            - components::Scrollbar::gutter(components::ScrollbarAxis::Horizontal)
+    });
+    assert!(
+        down_bounds.center().y < scrollbar_top,
+        "collapsed trailing down button center should be above the horizontal scrollbar (button={down_bounds:?}, scrollbar_top={scrollbar_top:?})"
+    );
+
+    simulate_counted_click(cx, down_bounds.center(), 1);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.collapsed_diff_hidden_down_rows(hunk_src_ix) < hidden_down_before,
+            "clicking the trailing collapsed hunk down button should reveal context"
+        );
+        assert_eq!(pane.diff_selection_anchor, None);
+        assert_eq!(pane.diff_selection_range, None);
+    });
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_trailing_down_button_stays_above_hscrollbar(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_trailing_down_button_clickable_above_hscrollbar(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(262),
+        "collapsed_inline_trailing_hscroll",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_trailing_down_button_stays_above_hscrollbar(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_trailing_down_button_clickable_above_hscrollbar(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(263),
+        "collapsed_split_trailing_hscroll",
+        DiffViewMode::Split,
     );
 }
 

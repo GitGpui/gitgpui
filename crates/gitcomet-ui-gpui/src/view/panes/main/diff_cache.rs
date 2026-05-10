@@ -1929,6 +1929,7 @@ impl MainPaneView {
         self.reset_collapsed_diff_projection(false);
         self.file_diff_cache_content_signature = None;
         self.file_diff_cache_inflight = None;
+        self.file_diff_cache_error = None;
         self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
         self.file_diff_style_cache_epochs.bump_both();
         self.file_diff_cache_path = None;
@@ -2013,6 +2014,18 @@ impl MainPaneView {
         let previous_old_text = same_repo_and_target.then(|| self.file_diff_old_text.clone());
         let previous_new_text = same_repo_and_target.then(|| self.file_diff_new_text.clone());
 
+        if same_repo_and_target
+            && file.is_none()
+            && self.file_diff_cache_content_signature.is_some()
+        {
+            // Keep the current same-target rows visible while a refresh is pending.
+            // Dropping them would create a zero-width frame, and GPUI would clamp
+            // any horizontal offset back to the start before the ready payload returns.
+            self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
+            self.file_diff_cache_rev = diff_file_rev;
+            return;
+        }
+
         if same_repo_and_target && self.file_diff_cache_rev == diff_file_rev {
             // Reselecting the same file enters Loading with an unchanged file rev; keep the
             // current cache until a ready file payload proves the effective content changed.
@@ -2066,7 +2079,7 @@ impl MainPaneView {
                         patch_diff.as_deref(),
                     )
                 };
-                let rebuild = if crate::ui_runtime::current().uses_background_compute() {
+                let rebuild_result = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(rebuild_cache).await
                 } else {
                     rebuild_cache()
@@ -2084,6 +2097,21 @@ impl MainPaneView {
                     }
 
                     this.file_diff_cache_inflight = None;
+                    let rebuild = match rebuild_result {
+                        Ok(rebuild) => rebuild,
+                        Err(error) => {
+                            this.reset_file_diff_cache_data();
+                            this.file_diff_cache_repo_id = Some(repo_id);
+                            this.file_diff_cache_rev = diff_file_rev;
+                            this.file_diff_cache_target = Some(diff_target_for_task.clone());
+                            this.file_diff_cache_path = Some(expected_abs_path.clone());
+                            this.file_diff_cache_content_signature = Some(content_signature);
+                            this.file_diff_cache_error = Some(error);
+                            cx.notify();
+                            return;
+                        }
+                    };
+                    this.file_diff_cache_error = None;
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
                     this.file_diff_row_provider = Some(rebuild.row_provider);
@@ -2270,6 +2298,29 @@ impl MainPaneView {
         .detach();
     }
 
+    pub(in super::super::super) fn ensure_rendered_patch_diff_cache(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let ready_diff = match self.rendered_patch_diff_loadable() {
+            Some(Loadable::Ready(diff)) => Some(Arc::clone(diff)),
+            _ => None,
+        };
+        let metadata_current = self.diff_cache_repo_id == self.active_repo_id()
+            && self.diff_cache_rev == self.rendered_patch_diff_rev()
+            && self.diff_cache_target == self.rendered_diff_target().cloned();
+        let ready_content_changed = metadata_current
+            && ready_diff.as_ref().is_some_and(|diff| {
+                self.patch_diff_row_len() != diff.lines.len()
+                    || self.diff_cache_content_signature
+                        != Some(patch_diff_content_signature(diff.as_ref()))
+            });
+        let should_rebuild = !metadata_current || ready_content_changed;
+        if should_rebuild {
+            self.rebuild_diff_cache(cx);
+        }
+    }
+
     pub(in super::super::super) fn rebuild_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
         let next_cache_state = self.active_repo().map(|repo| {
             let workdir: Option<std::path::PathBuf> = self
@@ -2291,6 +2342,28 @@ impl MainPaneView {
             .as_ref()
             .and_then(|(_, _, _, _, diff)| diff.as_ref())
             .map(|diff| patch_diff_content_signature(diff.as_ref()));
+        if let Some((repo_id, diff_rev, diff_target, _, diff)) = next_cache_state.as_ref() {
+            let same_repo_and_target = self.diff_cache_repo_id == Some(*repo_id)
+                && self.diff_cache_target.as_ref() == diff_target.as_ref();
+            if same_repo_and_target {
+                if diff.is_none() && self.diff_cache_content_signature.is_some() {
+                    // Preserve the last ready same-target patch rows through transient Loading.
+                    self.diff_cache_rev = *diff_rev;
+                    return;
+                }
+
+                if diff.is_some()
+                    && next_content_signature.is_some()
+                    && self.diff_cache_content_signature == next_content_signature
+                {
+                    // Store-side refreshes can bump diff_rev without changing the rendered patch.
+                    // Keep visible rows and horizontal width hints intact across those rev-only
+                    // redraws.
+                    self.diff_cache_rev = *diff_rev;
+                    return;
+                }
+            }
+        }
         let clear_reveals = match next_cache_state.as_ref() {
             Some((repo_id, _, diff_target, _, Some(_))) if diff_target.is_some() => {
                 self.diff_cache_repo_id != Some(*repo_id)
@@ -2675,11 +2748,18 @@ impl MainPaneView {
             return;
         }
 
+        let preserve_horizontal_width = collapsed_projection_active
+            && self.diff_visible_cache_projection_rev != u64::MAX
+            && self.diff_visible_view == self.diff_view
+            && self.diff_visible_is_file_view == is_file_view;
+
         self.diff_visible_cache_len = current_len;
         self.diff_visible_view = self.diff_view;
         self.diff_visible_is_file_view = is_file_view;
         self.diff_visible_cache_projection_rev = projection_rev;
-        self.diff_horizontal_min_width = px(0.0);
+        if !preserve_horizontal_width {
+            self.reset_diff_horizontal_scroll_state();
+        }
         self.diff_visible_inline_map = None;
         self.diff_search_inline_patch_trigram_index = None;
 

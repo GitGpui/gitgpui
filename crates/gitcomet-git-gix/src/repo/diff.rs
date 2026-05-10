@@ -13,7 +13,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{ConflictFileStages, Result};
 use std::hash::{Hash, Hasher};
-use std::io::{BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -144,32 +144,18 @@ impl GixRepo {
         repo: &gix::Repository,
         path: &Path,
     ) -> Result<Option<FileDiffTextSource>> {
-        self.cached_git_normalized_worktree_file_path(repo, path)?
-            .map(|source_path| {
-                Ok(FileDiffTextSource::with_identity(
-                    source_path,
-                    format!(
-                        "worktree-git:{}",
-                        worktree_source_identity(&self.spec.workdir, path)
-                    ),
-                ))
-            })
-            .transpose()
+        self.cached_git_normalized_worktree_file_source(repo, path)
     }
 
-    fn cached_git_normalized_worktree_file_path(
+    fn cached_git_normalized_worktree_file_source(
         &self,
         repo: &gix::Repository,
         path: &Path,
-    ) -> Result<Option<std::path::PathBuf>> {
+    ) -> Result<Option<FileDiffTextSource>> {
         let full = match worktree_file_path_optional(&self.spec.workdir, path) {
             Some(full) => full,
             None => return Ok(None),
         };
-        let cache_path = worktree_git_cache_path(&self.spec.workdir, path);
-        if std::fs::metadata(&cache_path).is_ok_and(|m| m.is_file()) {
-            return Ok(Some(cache_path));
-        }
 
         let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
@@ -185,29 +171,29 @@ impl GixRepo {
 
         let mut tmp_file =
             tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
+        let mut content_hasher = rustc_hash::FxHasher::default();
         match normalized {
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Unchanged(mut file) => {
-                std::io::copy(&mut file, &mut tmp_file).map_err(io_err_to_error)?;
+                copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher)?;
             }
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Process(mut file) => {
-                std::io::copy(&mut file, &mut tmp_file).map_err(io_err_to_error)?;
+                copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher)?;
             }
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(buf) => {
-                tmp_file.write_all(buf.as_ref()).map_err(io_err_to_error)?;
+                let bytes: &[u8] = buf.as_ref();
+                bytes.hash(&mut content_hasher);
+                tmp_file.write_all(bytes).map_err(io_err_to_error)?;
             }
         }
         tmp_file.flush().map_err(io_err_to_error)?;
 
-        if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
-        }
-        match tmp_file.persist(&cache_path) {
-            Ok(_) => Ok(Some(cache_path)),
-            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                Ok(Some(cache_path))
-            }
-            Err(err) => Err(io_err_to_error(err.error)),
-        }
+        let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
+        let cache_path = worktree_git_cache_path(path, &identity);
+        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        Ok(Some(FileDiffTextSource::with_identity(
+            cache_path,
+            format!("worktree-git:{identity}"),
+        )))
     }
 
     pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
@@ -1019,34 +1005,65 @@ fn worktree_file_path_optional(workdir: &Path, path: &Path) -> Option<std::path:
         .map(|_| full)
 }
 
+fn copy_and_hash(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    hasher: &mut rustc_hash::FxHasher,
+) -> Result<()> {
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).map_err(io_err_to_error)?;
+        if read == 0 {
+            return Ok(());
+        }
+        buffer[..read].hash(hasher);
+        writer.write_all(&buffer[..read]).map_err(io_err_to_error)?;
+    }
+}
+
+fn persist_worktree_git_cache_file(
+    tmp_file: tempfile::NamedTempFile,
+    cache_path: &Path,
+) -> Result<()> {
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
+    }
+    match tmp_file.persist(cache_path) {
+        Ok(_) => Ok(()),
+        Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let tmp_file = err.file;
+            std::fs::remove_file(cache_path).map_err(io_err_to_error)?;
+            tmp_file
+                .persist(cache_path)
+                .map(|_| ())
+                .map_err(|err| io_err_to_error(err.error))
+        }
+        Err(err) => Err(io_err_to_error(err.error)),
+    }
+}
+
 fn hash_worktree_source_identity(
     hasher: &mut rustc_hash::FxHasher,
     workdir: &Path,
     logical_path: &Path,
+    normalized_content_hash: u64,
 ) {
     workdir.hash(hasher);
     logical_path.hash(hasher);
-    if let Some(full) = worktree_file_path_optional(workdir, logical_path)
-        && let Ok(metadata) = std::fs::metadata(full)
-    {
-        metadata.len().hash(hasher);
-        if let Ok(modified) = metadata.modified()
-            && let Ok(duration) = modified.duration_since(std::time::SystemTime::UNIX_EPOCH)
-        {
-            duration.as_secs().hash(hasher);
-            duration.subsec_nanos().hash(hasher);
-        }
-    }
+    normalized_content_hash.hash(hasher);
 }
 
-fn worktree_source_identity(workdir: &Path, logical_path: &Path) -> String {
+fn worktree_source_identity(
+    workdir: &Path,
+    logical_path: &Path,
+    normalized_content_hash: u64,
+) -> String {
     let mut hasher = rustc_hash::FxHasher::default();
-    hash_worktree_source_identity(&mut hasher, workdir, logical_path);
+    hash_worktree_source_identity(&mut hasher, workdir, logical_path, normalized_content_hash);
     format!("{:016x}", hasher.finish())
 }
 
-fn worktree_git_cache_path(workdir: &Path, logical_path: &Path) -> std::path::PathBuf {
-    let identity = worktree_source_identity(workdir, logical_path);
+fn worktree_git_cache_path(logical_path: &Path, identity: &str) -> std::path::PathBuf {
     let suffix = logical_path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -1242,5 +1259,37 @@ mod tests {
             .expect("image at limit");
 
         assert_eq!(loaded, bytes);
+    }
+
+    #[test]
+    fn worktree_source_identity_changes_with_normalized_content_hash() {
+        let workdir = Path::new("/tmp/repo");
+        let path = Path::new("src/lib.rs");
+
+        let first = worktree_source_identity(workdir, path, 0x11);
+        let second = worktree_source_identity(workdir, path, 0x22);
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn persist_worktree_git_cache_file_replaces_existing_cache_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join("gitcomet-diff-worktree-test.txt");
+        std::fs::write(&cache_path, b"old normalized content").expect("write stale cache");
+
+        let mut replacement = tempfile::NamedTempFile::new_in(tmp.path()).expect("temp file");
+        replacement
+            .write_all(b"new normalized content")
+            .expect("write replacement cache");
+        replacement.flush().expect("flush replacement cache");
+
+        persist_worktree_git_cache_file(replacement, &cache_path)
+            .expect("replace stale normalized cache file");
+
+        assert_eq!(
+            std::fs::read(&cache_path).expect("read replaced cache"),
+            b"new normalized content"
+        );
     }
 }

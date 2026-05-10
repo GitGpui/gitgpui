@@ -7,7 +7,7 @@ use super::util::{
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
-use gitcomet_core::domain::FileConflictKind;
+use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
 use rustc_hash::FxHashMap as HashMap;
@@ -678,6 +678,32 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
     )
 }
 
+fn changed_submodule_path(command: &RepoCommandKind) -> Option<&std::path::Path> {
+    match command {
+        RepoCommandKind::LoadSubmodule { path, .. }
+        | RepoCommandKind::ChangeSubmodulePointer { path, .. } => Some(path.as_path()),
+        _ => None,
+    }
+}
+
+fn selected_submodule_target_changed_by_command(
+    repo_state: &RepoState,
+    command: &RepoCommandKind,
+) -> Option<DiffTarget> {
+    let changed_path = changed_submodule_path(command)?;
+    let target = repo_state.diff_state.diff_target.as_ref()?;
+    let DiffTarget::WorkingTree { path, .. } = target else {
+        return None;
+    };
+    if path.as_path() != changed_path {
+        return None;
+    }
+
+    let summary_is_active = !matches!(repo_state.diff_state.submodule_summary, Loadable::NotLoaded);
+    (summary_is_active || selected_diff_load_plan(repo_state, target).load_submodule_summary)
+        .then(|| target.clone())
+}
+
 pub(super) fn repo_command_finished(
     state: &mut AppState,
     repo_id: RepoId,
@@ -785,6 +811,15 @@ pub(super) fn repo_command_finished(
     if refresh_worktrees {
         repo_state.set_worktrees(Loadable::Loading);
         extra_effects.push(Effect::LoadWorktrees { repo_id });
+    }
+    if command_succeeded
+        && let Some(target) = selected_submodule_target_changed_by_command(repo_state, &command)
+    {
+        let load_plan = selected_diff_load_plan(repo_state, &target);
+        apply_selected_diff_load_plan_state(repo_state, load_plan);
+        repo_state.diff_state.inline_submodule_diff = None;
+        repo_state.bump_diff_state_rev();
+        extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
     }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);

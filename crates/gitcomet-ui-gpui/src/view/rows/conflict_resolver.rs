@@ -255,7 +255,7 @@ fn render_conflict_markdown_preview_rows(
         &super::history::MarkdownPreviewRenderContext {
             theme,
             bar_color: None,
-            min_width: this.diff_horizontal_min_width.max(viewport_width),
+            min_width: this.diff_horizontal_content_width().max(viewport_width),
             editor_font_family: editor_font_family.into(),
             ui_scale_percent: crate::ui_scale::current(cx).percent,
             view: None,

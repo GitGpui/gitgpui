@@ -2247,6 +2247,52 @@ impl CollapsedDiffVisibleRow {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum DiffHorizontalScrollColumn {
+    Primary,
+    SplitRight,
+}
+
+impl DiffHorizontalScrollColumn {
+    pub(in crate::view) const fn index(self) -> usize {
+        match self {
+            Self::Primary => 0,
+            Self::SplitRight => 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct DiffHorizontalScrollState {
+    pub(in crate::view) content_widths: [Pixels; 2],
+}
+
+impl DiffHorizontalScrollState {
+    pub(in crate::view) fn new() -> Self {
+        Self {
+            content_widths: [px(0.0); 2],
+        }
+    }
+
+    pub(in crate::view) fn reset(&mut self) {
+        self.content_widths = [px(0.0); 2];
+    }
+
+    pub(in crate::view) fn record_content_width(
+        &mut self,
+        column: DiffHorizontalScrollColumn,
+        width: Pixels,
+    ) -> bool {
+        let ix = column.index();
+        if width > self.content_widths[ix] {
+            self.content_widths[ix] = width;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub(in crate::view) struct MainPaneView {
     pub(in crate::view) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2277,7 +2323,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
     pub(in crate::view) diff_split_last_synced_x: [Pixels; 2],
     pub(in crate::view) diff_split_last_synced_y: [Pixels; 2],
-    pub(in crate::view) diff_horizontal_min_width: Pixels,
+    pub(in crate::view) diff_horizontal_scroll: DiffHorizontalScrollState,
     pub(in crate::view) diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) diff_cache_rev: u64,
     pub(in crate::view) diff_cache_content_signature: Option<u64>,
@@ -2346,6 +2392,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_diff_cache_rev: u64,
     pub(in crate::view) file_diff_cache_content_signature: Option<u64>,
     pub(in crate::view) file_diff_cache_target: Option<DiffTarget>,
+    pub(in crate::view) file_diff_cache_error: Option<String>,
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,

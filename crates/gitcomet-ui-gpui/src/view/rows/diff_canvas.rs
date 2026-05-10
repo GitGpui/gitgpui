@@ -5,6 +5,7 @@ use super::diff_text::{
     syntax_highlights_for_streamed_line_slice_heuristic,
 };
 use super::*;
+use crate::view::panes::main::DiffHorizontalScrollColumn;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
@@ -1766,10 +1767,13 @@ fn paint_selectable_diff_text(
         if pending_prepared_syntax {
             this.ensure_prepared_syntax_chunk_poll(cx);
         }
-        if required_row_w > this.diff_horizontal_min_width {
-            this.diff_horizontal_min_width = required_row_w;
-            cx.notify();
-        }
+        let column = match region {
+            DiffTextRegion::Inline | DiffTextRegion::SplitLeft => {
+                DiffHorizontalScrollColumn::Primary
+            }
+            DiffTextRegion::SplitRight => DiffHorizontalScrollColumn::SplitRight,
+        };
+        this.record_diff_horizontal_content_width_for_column(column, required_row_w, cx);
     });
 
     if paint_text.is_empty() {
