@@ -86,7 +86,7 @@ tree-sitter-html = "0.23.2"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-json = "0.24.8"
-tree-sitter-kotlin-sg = "0.4.0"
+tree-sitter-kotlin-sg = "0.4.1"
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "9a23c1a96c0513d8fc6520972beedd419a973539" }
