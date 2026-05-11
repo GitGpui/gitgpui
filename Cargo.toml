@@ -92,7 +92,7 @@ tree-sitter-make = "1.1.1"
 tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "9a23c1a96c0513d8fc6520972beedd419a973539" }
 tree-sitter-objc = "3.0.2"
 tree-sitter-php = "0.24.2"
-tree-sitter-powershell = "0.26.3"
+tree-sitter-powershell = "0.26.4"
 tree-sitter-python = "0.25.0"
 tree-sitter-r = "1.2.0"
 tree-sitter-ruby = "0.23.1"
