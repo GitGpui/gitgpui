@@ -43,16 +43,17 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
-gix = { version = "0.82.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
+gix = { version = "0.83.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
 # Load gpui-ce directly from GitHub at commit 1679dc543d880e6562d84afe316a1b192a064b08.
 gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "1679dc543d880e6562d84afe316a1b192a064b08" }
 image = "0.25.10"
-lru = "0.17"
+lru = "0.18"
 memchr = "2.8.0"
-# Pin mimalloc to the PR #152 head until the submodule update lands in a release.
-mimalloc = { git = "https://github.com/eduDorus/mimalloc_rust.git", rev = "262fb407466952bf6ebaf4a5d586c3010396cb2f", features = ["v3"] }
+# Pin mimalloc to the requested fork commit until the updated submodule lands in a release.
+mimalloc = { git = "https://github.com/havunen/mimalloc_rust.git", rev = "843b9b2f240ce98a4d5745a72e77cc21648651dd" }
+libmimalloc-sys = { git = "https://github.com/havunen/mimalloc_rust.git", rev = "843b9b2f240ce98a4d5745a72e77cc21648651dd", features = ["extended"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
-notify = "9.0.0-rc.3"
+notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
 regex = "1.12.3"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
@@ -86,20 +87,20 @@ tree-sitter-html = "0.23.2"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-json = "0.24.8"
-tree-sitter-kotlin-sg = "0.4.0"
+tree-sitter-kotlin-sg = "0.4.1"
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "9a23c1a96c0513d8fc6520972beedd419a973539" }
 tree-sitter-objc = "3.0.2"
 tree-sitter-php = "0.24.2"
-tree-sitter-powershell = "0.26.3"
+tree-sitter-powershell = "0.26.4"
 tree-sitter-python = "0.25.0"
 tree-sitter-r = "1.2.0"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.2"
 tree-sitter-scala = "0.26.0"
 tree-sitter-sequel = "0.3.11"
-tree-sitter-swift = "0.7.1"
+tree-sitter-swift = "0.7.2"
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-xml = "0.7.0"
@@ -110,7 +111,7 @@ url = "2.5.8"
 windows = "0.62.2"
 wayland-client = "0.31.14"
 x11-clipboard = "0.9.3"
-reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "json", "rustls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
