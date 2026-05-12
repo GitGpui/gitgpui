@@ -88,11 +88,11 @@ sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0
 
 GitComet requires a local Git installation of `2.50` or newer.
 
-### Fast, Free, Familiar
+### GitComet User Survey
 
-- **Fast**: Built end-to-end in Rust for speed and efficiency using [smol](https://github.com/smol-rs/smol), [gix](https://github.com/GitoxideLabs/gitoxide), and [gpui](https://www.gpui.rs/).
-- **Free**: Free to use for individuals and organizations.
-- **Familiar**: Familiar history browsing and drop-in `git difftool` and `git mergetool` compatibility.
+We’re running this short survey to better understand how people use our Git GUI client in their daily work. Your feedback will help us improve the product and prioritize the features that matter most.
+
+https://docs.google.com/forms/d/e/1FAIpQLSd8DKIl222UomSXrpv1q9rWodRlBSQo9pJDD62GbZEANTgD1A/viewform?usp=dialog
 
 ### Why GitComet
 

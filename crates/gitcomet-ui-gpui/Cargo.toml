@@ -18,6 +18,7 @@ benchmarks = [
     "gitcomet-state/benchmarks",
     "gitcomet-git-gix/benchmarks",
     "dep:gitcomet-git-gix",
+    "gpui/test-support",
 ]
 syntax-minimal = ["syntax-rust", "syntax-data", "syntax-shell"]
 syntax-common = ["syntax-minimal", "syntax-web", "syntax-python"]
@@ -129,6 +130,7 @@ url = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }
+x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.33"

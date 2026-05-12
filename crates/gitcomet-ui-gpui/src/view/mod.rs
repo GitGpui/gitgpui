@@ -48,6 +48,9 @@ actions!(
         TextInputDiffNextSearchMatchOrChange,
         TextInputDiffPrevChange,
         TextInputDiffNextChange,
+        PopoverPromptDismiss,
+        PopoverPromptTabNext,
+        PopoverPromptTabPrev,
     ]
 );
 
@@ -91,7 +94,9 @@ mod state_apply;
 pub(crate) mod test_support;
 mod toast_host;
 mod tooltip;
+mod tooltip_host;
 mod update_check;
+mod user_survey;
 mod word_diff;
 
 use app_model::AppUiModel;
@@ -138,6 +143,7 @@ use toast_host::ToastHost;
 use tooltip::GitCometTooltipExt;
 #[cfg(test)]
 use tooltip::clear_visible_tooltip_text_for_test;
+use tooltip_host::TooltipHost;
 
 #[cfg(test)]
 pub(crate) use chrome::window_frame;
@@ -697,6 +703,7 @@ impl GitCometView {
                 titlebar_workspace_actions_enabled(view_mode, !initial_state.repos.is_empty()),
             )
         });
+        let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
         let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
         let repo_tabs_bar = cx.new(|cx| {
             RepoTabsBarView::new(
@@ -726,6 +733,7 @@ impl GitCometView {
                 initial_theme,
                 ui_session.repo_sidebar_collapsed_items.clone(),
                 weak_view.clone(),
+                tooltip_host.downgrade(),
                 cx,
             )
         });
@@ -751,6 +759,7 @@ impl GitCometView {
                 focused_mergetool_labels,
                 focused_mergetool_exit_code.clone(),
                 weak_view.clone(),
+                tooltip_host.downgrade(),
                 window,
                 cx,
             )
@@ -766,6 +775,7 @@ impl GitCometView {
                     untracked_height: restored_untracked_height,
                     ui_scale_percent: ui_scale.percent,
                     root_view: weak_view.clone(),
+                    tooltip_host: tooltip_host.downgrade(),
                 },
                 window,
                 cx,
@@ -783,6 +793,7 @@ impl GitCometView {
                 show_timezone,
                 change_tracking_view,
                 weak_view.clone(),
+                tooltip_host.downgrade(),
                 main_pane.clone(),
                 details_pane.clone(),
                 window,
@@ -920,6 +931,7 @@ impl GitCometView {
             repo_tabs_bar,
             action_bar,
             bottom_status_bar,
+            tooltip_host,
             toast_host,
             popover_host,
             focused_mergetool_bootstrap,
@@ -973,6 +985,7 @@ impl GitCometView {
         view.maybe_auto_install_linux_desktop_integration(cx);
 
         view.drive_focused_mergetool_bootstrap();
+        view.maybe_show_user_survey_on_startup(cx);
         view.maybe_check_for_updates_on_startup(cx);
 
         crate::app::sync_gitcomet_window_state(
@@ -1006,6 +1019,8 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.bottom_status_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
+        self.tooltip_host
+            .update(cx, |host, cx| host.set_theme(theme, cx));
         self.toast_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
@@ -1029,6 +1044,7 @@ impl GitCometView {
         self.repo_tabs_bar.update(cx, |_bar, cx| cx.notify());
         self.action_bar.update(cx, |_bar, cx| cx.notify());
         self.bottom_status_bar.update(cx, |_bar, cx| cx.notify());
+        self.tooltip_host.update(cx, |_host, cx| cx.notify());
         self.toast_host.update(cx, |_host, cx| cx.notify());
         self.popover_host.update(cx, |_host, cx| cx.notify());
         self.open_repo_input.update(cx, |_input, cx| cx.notify());
@@ -1790,8 +1806,10 @@ impl GitCometView {
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
-        let _ = app;
-        tooltip::tooltip_text_for_test()
+        self.tooltip_host
+            .read(app)
+            .tooltip_text_for_test()
+            .or_else(tooltip::tooltip_text_for_test)
     }
 
     #[cfg(test)]
@@ -2333,6 +2351,8 @@ impl Render for GitCometView {
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
             this.last_mouse_pos = e.position;
+            this.tooltip_host
+                .update(cx, |tooltip, cx| tooltip.on_mouse_moved(e.position, cx));
 
             let Decorations::Client { tiling } = window.window_decorations() else {
                 if this.hover_resize_edge.is_some() {
@@ -2391,6 +2411,8 @@ impl Render for GitCometView {
         root = root.child(stable_overlay_view(self.toast_host.clone()));
 
         root = root.child(stable_overlay_view(self.popover_host.clone()));
+
+        root = root.child(stable_overlay_view(self.tooltip_host.clone()));
 
         if crate::startup_probe::is_enabled() {
             root = root.on_children_prepainted(|_children_bounds, window, _cx| {

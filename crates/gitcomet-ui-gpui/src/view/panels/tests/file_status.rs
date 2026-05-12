@@ -1558,6 +1558,226 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
 }
 
 #[gpui::test]
+fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(60);
+    let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_added_copy_path",
+        std::process::id()
+    ));
+    let added_path = std::path::PathBuf::from("src/added_from_commit.rs");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(commit_sha.clone().into()));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
+                    message: "subject".to_string(),
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    parent_ids: vec![gitcomet_core::domain::CommitId(
+                        "89abcdef0123456789abcdef0123456789abcdef".into(),
+                    )],
+                    files: vec![gitcomet_core::domain::CommitFileChange {
+                        path: added_path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Added,
+                    }],
+                },
+            ));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("initial".to_string()));
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    let row_bounds = cx
+        .debug_bounds("commit_file_60_0")
+        .expect("expected added commit file row");
+    let row_center = row_bounds.center();
+    cx.simulate_mouse_move(row_center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        row_center,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        row_center,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    let copy_bounds = cx
+        .debug_bounds("context_menu_copy_path")
+        .expect("expected Copy path context menu row");
+    let copy_center = copy_bounds.center();
+    cx.simulate_mouse_move(copy_center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        copy_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("initial".to_string())
+    );
+    cx.simulate_mouse_up(
+        copy_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(workdir.join(&added_path).display().to_string())
+    );
+}
+
+#[gpui::test]
+fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_deleted(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(61);
+    let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_file_right_click_menu_only",
+        std::process::id()
+    ));
+    let files = vec![
+        (
+            std::path::PathBuf::from("src/added.rs"),
+            gitcomet_core::domain::FileStatusKind::Added,
+        ),
+        (
+            std::path::PathBuf::from("src/modified.rs"),
+            gitcomet_core::domain::FileStatusKind::Modified,
+        ),
+        (
+            std::path::PathBuf::from("src/deleted.rs"),
+            gitcomet_core::domain::FileStatusKind::Deleted,
+        ),
+    ];
+    let initial_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: std::path::PathBuf::from("src/current.rs"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(initial_target.clone());
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(commit_sha.clone().into()));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
+                    message: "subject".to_string(),
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    parent_ids: vec![gitcomet_core::domain::CommitId(
+                        "89abcdef0123456789abcdef0123456789abcdef".into(),
+                    )],
+                    files: files
+                        .iter()
+                        .map(|(path, kind)| gitcomet_core::domain::CommitFileChange {
+                            path: path.clone(),
+                            kind: *kind,
+                        })
+                        .collect(),
+                },
+            ));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    for (ix, (path, _kind)) in files.iter().enumerate() {
+        let row_selector = format!("commit_file_{}_{}", repo_id.0, ix);
+        let row_bounds = cx
+            .debug_bounds(Box::leak(row_selector.into_boxed_str()))
+            .expect("expected commit file row");
+        let row_center = row_bounds.center();
+        cx.simulate_mouse_move(row_center, None, gpui::Modifiers::default());
+        cx.simulate_mouse_down(
+            row_center,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            row_center,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+
+        let (popover_kind, diff_target) = cx.update(|_window, app| {
+            let view = view.read(app);
+            let popover_kind = view.popover_host.read(app).popover_kind_for_tests();
+            let diff_target = view
+                .state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.diff_state.diff_target.clone());
+            (popover_kind, diff_target)
+        });
+
+        assert_eq!(
+            popover_kind,
+            Some(PopoverKind::CommitFileMenu {
+                repo_id,
+                commit_id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
+                path: path.clone(),
+            })
+        );
+        assert_eq!(diff_target, Some(initial_target.clone()));
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.close_popover(cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    }
+}
+
+#[gpui::test]
 fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -1721,6 +1941,129 @@ fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAp
         zoomed_contents_height > default_contents_height * 1.7,
         "expected the commit details file list content height to grow substantially with zoom (default={default_contents_height}, zoomed={zoomed_contents_height})",
     );
+}
+
+#[gpui::test]
+fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_files(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(631);
+    let commit_id = gitcomet_core::domain::CommitId("0123456789abcdef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo =
+                opening_repo_state(repo_id, Path::new("/tmp/repo-details-path-alignment"));
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![
+                        gitcomet_core::domain::FileStatus {
+                            path: std::path::PathBuf::from(
+                                "staged/really_long_directory_name/files/staged_alpha.rs",
+                            ),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        },
+                        gitcomet_core::domain::FileStatus {
+                            path: std::path::PathBuf::from(
+                                "staged/another_super_long_directory_name/files/staged_beta.rs",
+                            ),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        },
+                    ],
+                    unstaged: vec![
+                        gitcomet_core::domain::FileStatus {
+                            path: std::path::PathBuf::from(
+                                "src/components/really_long_directory_name/status/file_name_alpha.rs",
+                            ),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        },
+                        gitcomet_core::domain::FileStatus {
+                            path: std::path::PathBuf::from(
+                                "src/components/dir/another_super_long_directory_name/file_name_beta.rs",
+                            ),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        },
+                    ],
+                }
+                .into(),
+            );
+            repo.status_rev = repo.status_rev.wrapping_add(1);
+            repo.history_state.selected_commit = Some(commit_id.clone());
+            repo.history_state.selected_commit_rev =
+                repo.history_state.selected_commit_rev.wrapping_add(1);
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "subject".to_string(),
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    parent_ids: vec![],
+                    files: vec![
+                        gitcomet_core::domain::CommitFileChange {
+                            path: std::path::PathBuf::from(
+                                "history/really_long_commit_directory_name/files/commit_file_alpha.rs",
+                            ),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        },
+                        gitcomet_core::domain::CommitFileChange {
+                            path: std::path::PathBuf::from(
+                                "history/dir/another_super_long_commit_directory_name/commit_file_beta.rs",
+                            ),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        },
+                    ],
+                },
+            ));
+            repo.history_state.commit_details_rev =
+                repo.history_state.commit_details_rev.wrapping_add(1);
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            let unstaged =
+                crate::view::panes::DetailsPaneView::render_unstaged_rows(pane, 0..2, window, cx);
+            let staged =
+                crate::view::panes::DetailsPaneView::render_staged_rows(pane, 0..2, window, cx);
+            let commit_files = crate::view::panes::DetailsPaneView::render_commit_file_rows(
+                pane,
+                0..2,
+                window,
+                cx,
+            );
+
+            assert_eq!(unstaged.len(), 2);
+            assert_eq!(staged.len(), 2);
+            assert_eq!(commit_files.len(), 2);
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let staged = pane.staged_path_alignment_group.snapshot_for_test();
+        let unstaged = pane.unstaged_path_alignment_group.snapshot_for_test();
+        let commit_files = pane.commit_files_path_alignment_group.snapshot_for_test();
+        let untracked = pane.untracked_path_alignment_group.snapshot_for_test();
+
+        assert!(staged.visible_signature.is_some());
+        assert!(unstaged.visible_signature.is_some());
+        assert!(commit_files.visible_signature.is_some());
+        assert_eq!(untracked.visible_signature, None);
+        assert_ne!(staged.visible_signature, unstaged.visible_signature);
+        assert_ne!(unstaged.visible_signature, commit_files.visible_signature);
+        assert_ne!(staged.visible_signature, commit_files.visible_signature);
+    });
 }
 
 #[gpui::test]
