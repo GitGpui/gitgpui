@@ -669,7 +669,7 @@ fn submodule_worktree_diff_summary(
     let (live_staged, live_unstaged) =
         submodule_live_inner_changes(&nested_workdir, nested_repo.as_ref())?;
 
-    let head_gitlink = Some(head_gitlink_commit_id_or_null(repo, &submodule.path)?);
+    let head_gitlink = head_gitlink_commit_id(repo, &submodule.path)?;
     let index_gitlink = Some(submodule.recorded_head.clone());
     let checked_out_head = submodule.checked_out_head.clone();
     let not_loaded_reason = (nested_repo.is_none() || checked_out_head.is_none())
@@ -1101,12 +1101,11 @@ fn gitlink_commit_id_in_object(
     Ok(Some(object_id_to_commit_id(entry.object_id())))
 }
 
-fn head_gitlink_commit_id_or_null(repo: &gix::Repository, path: &Path) -> Result<CommitId> {
+fn head_gitlink_commit_id(repo: &gix::Repository, path: &Path) -> Result<Option<CommitId>> {
     let Some(head_id) = gix_head_id_or_none(repo)? else {
-        return Ok(CommitId(repo.object_hash().null().to_string().into()));
+        return Ok(None);
     };
-    Ok(gitlink_commit_id_in_object(repo, head_id, path)?
-        .unwrap_or_else(|| CommitId(repo.object_hash().null().to_string().into())))
+    gitlink_commit_id_in_object(repo, head_id, path)
 }
 
 fn resolve_submodule_logical_name(repo: &gix::Repository, path: &Path) -> Result<Option<PathBuf>> {

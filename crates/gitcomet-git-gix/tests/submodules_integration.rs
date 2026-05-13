@@ -1,4 +1,4 @@
-use gitcomet_core::domain::SubmoduleStatus;
+use gitcomet_core::domain::{DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus};
 use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
@@ -582,6 +582,52 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
     assert_eq!(
         listed[0].recorded_head.as_ref(),
         "0000000000000000000000000000000000000000"
+    );
+}
+
+#[test]
+fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    let submodule_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
+    let submodule_path = Path::new("mods/new-submodule");
+    add_submodule_raw(&parent_repo, &sub_repo, submodule_path, None);
+
+    let backend = GixBackend;
+    let opened = backend
+        .open(&parent_repo)
+        .expect("open parent repository with staged submodule");
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: submodule_path.to_path_buf(),
+            area: DiffArea::Staged,
+        })
+        .expect("load staged added submodule summary");
+    let staged_range = summary
+        .ranges
+        .iter()
+        .find(|range| range.kind == SubmoduleDiffRangeKind::StagedPointer)
+        .expect("summary should include staged pointer range");
+
+    assert_eq!(staged_range.from, None);
+    assert_eq!(
+        staged_range.to.as_ref().map(|commit| commit.as_ref()),
+        Some(submodule_head.as_str())
+    );
+    assert_eq!(
+        staged_range.unavailable_reason.as_deref(),
+        Some("Only one side of the submodule pointer is available.")
     );
 }
 

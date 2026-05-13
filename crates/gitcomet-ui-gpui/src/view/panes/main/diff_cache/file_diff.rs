@@ -165,6 +165,15 @@ fn line_byte_range(text: &str, line_starts: &[usize], line_ix: usize) -> std::op
 }
 
 const FILE_DIFF_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
+const FILE_DIFF_INDEX_LINE_CAPACITY_MAX: usize = 64 * 1024;
+
+#[inline]
+fn file_diff_index_line_capacity_hint(source_len_hint: usize) -> usize {
+    source_len_hint
+        .saturating_div(64)
+        .saturating_add(1)
+        .min(FILE_DIFF_INDEX_LINE_CAPACITY_MAX)
+}
 
 #[derive(Clone, Debug)]
 enum IndexedFileDiffContent {
@@ -220,11 +229,10 @@ impl IndexedFileDiffSource {
 
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let mut reader = std::io::BufReader::with_capacity(FILE_DIFF_INDEX_SCAN_BUFFER_BYTES, file);
-        let source_len_hint = usize::try_from(metadata.len()).unwrap_or(0);
-        let mut line_starts =
-            Vec::with_capacity(source_len_hint.saturating_div(64).saturating_add(1));
-        let mut line_flags =
-            Vec::with_capacity(source_len_hint.saturating_div(64).saturating_add(1));
+        let source_len_hint = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+        let line_capacity_hint = file_diff_index_line_capacity_hint(source_len_hint);
+        let mut line_starts = Vec::with_capacity(line_capacity_hint);
+        let mut line_flags = Vec::with_capacity(line_capacity_hint);
         let mut validation_buffer =
             Vec::with_capacity(FILE_DIFF_INDEX_SCAN_BUFFER_BYTES.saturating_add(4));
         let mut utf8_tail = Vec::with_capacity(4);
@@ -1788,6 +1796,16 @@ mod tests {
                 "line slicing should keep std::str::lines semantics for {text:?}",
             );
         }
+    }
+
+    #[test]
+    fn file_diff_index_line_capacity_hint_is_bounded_for_massive_files() {
+        assert_eq!(file_diff_index_line_capacity_hint(0), 1);
+        assert_eq!(file_diff_index_line_capacity_hint(128), 3);
+        assert_eq!(
+            file_diff_index_line_capacity_hint(usize::MAX),
+            FILE_DIFF_INDEX_LINE_CAPACITY_MAX
+        );
     }
 
     #[test]

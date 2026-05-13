@@ -474,6 +474,7 @@ pub struct DiffState {
     pub diff_preview_text_file: Loadable<Option<Shared<DiffPreviewTextFile>>>,
     pub submodule_summary_rev: u64,
     pub submodule_summary: Loadable<Shared<SubmoduleDiffSummary>>,
+    pub inline_submodule_diff_rev: u64,
     pub inline_submodule_diff: Option<InlineSubmoduleDiffState>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
@@ -492,6 +493,7 @@ impl Default for DiffState {
             diff_preview_text_file: Loadable::NotLoaded,
             submodule_summary_rev: 0,
             submodule_summary: Loadable::NotLoaded,
+            inline_submodule_diff_rev: 0,
             inline_submodule_diff: None,
             diff_file_image: Loadable::NotLoaded,
         }

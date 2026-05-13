@@ -6,7 +6,7 @@ use super::util::{
 };
 use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, InlineSubmoduleDiffEntry,
-    InlineSubmoduleDiffSection, InlineSubmoduleDiffState, Loadable, RepoId,
+    InlineSubmoduleDiffSection, InlineSubmoduleDiffState, Loadable, RepoId, RepoState,
 };
 use crate::msg::Effect;
 use gitcomet_core::domain::{
@@ -21,9 +21,18 @@ pub(crate) const SELECT_DIFF_INLINE_EFFECT_CAPACITY: usize = 3;
 pub(crate) type SelectDiffEffects = SmallVec<[Effect; SELECT_DIFF_INLINE_EFFECT_CAPACITY]>;
 
 fn clear_inline_submodule_diff_state(
-    repo_state: &mut crate::model::RepoState,
+    repo_state: &mut RepoState,
 ) -> Option<InlineSubmoduleDiffState> {
     repo_state.diff_state.inline_submodule_diff.take()
+}
+
+fn next_inline_submodule_diff_rev(repo_state: &mut RepoState) -> u64 {
+    let rev = repo_state
+        .diff_state
+        .inline_submodule_diff_rev
+        .wrapping_add(1);
+    repo_state.diff_state.inline_submodule_diff_rev = rev;
+    rev
 }
 
 fn inline_submodule_entries_from_range(
@@ -282,11 +291,7 @@ pub(super) fn open_inline_submodule_diff(
 
     let target = entries[selected_ix].target.clone();
     let load_plan = inline_submodule_selected_diff_load_plan(&target);
-    let rev = repo_state
-        .diff_state
-        .inline_submodule_diff
-        .as_ref()
-        .map_or(1, |inline| inline.rev.wrapping_add(1));
+    let rev = next_inline_submodule_diff_rev(repo_state);
     repo_state.diff_state.inline_submodule_diff = Some(InlineSubmoduleDiffState {
         submodule_repo_path,
         parent_submodule_path,
@@ -327,8 +332,8 @@ pub(super) fn select_inline_submodule_diff(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    let (inline_rev, load_plan) = {
-        let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+    let next_target = {
+        let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_ref() else {
             return Vec::new();
         };
         if selected_ix >= inline.entries.len() {
@@ -339,13 +344,20 @@ pub(super) fn select_inline_submodule_diff(
         if inline.selected_ix == selected_ix && inline.target == next_target {
             return Vec::new();
         }
+        next_target
+    };
 
+    let inline_rev = next_inline_submodule_diff_rev(repo_state);
+    let load_plan = {
+        let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+            return Vec::new();
+        };
         inline.selected_ix = selected_ix;
         inline.target = next_target;
-        inline.rev = inline.rev.wrapping_add(1);
+        inline.rev = inline_rev;
         let next_load_plan = inline_submodule_selected_diff_load_plan(&inline.target);
         apply_inline_submodule_diff_load_plan_state(inline, next_load_plan);
-        (inline.rev, next_load_plan)
+        next_load_plan
     };
     repo_state.bump_diff_state_rev();
 

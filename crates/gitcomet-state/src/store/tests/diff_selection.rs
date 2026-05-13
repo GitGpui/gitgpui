@@ -506,6 +506,122 @@ fn stale_inline_submodule_file_load_is_ignored() {
 }
 
 #[test]
+fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: CommitId("aaaa".into()),
+        to_commit_id: CommitId("bbbb".into()),
+        path: Some(PathBuf::from("src/lib.rs")),
+    };
+    let entry = crate::model::InlineSubmoduleDiffEntry {
+        path: PathBuf::from("src/lib.rs"),
+        kind: FileStatusKind::Modified,
+        target: target.clone(),
+        section: crate::model::InlineSubmoduleDiffSection::Range(
+            gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
+        ),
+    };
+
+    let first_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInlineSubmoduleDiff {
+            repo_id: RepoId(1),
+            submodule_repo_path: PathBuf::from("/tmp/repo/vendor/first"),
+            parent_submodule_path: PathBuf::from("vendor/first"),
+            entries: vec![entry.clone()],
+            selected_ix: 0,
+        },
+    );
+    assert!(matches!(
+        first_effects.as_slice(),
+        [
+            Effect::LoadInlineSubmoduleSelectedDiff {
+                repo_id: RepoId(1),
+                inline_rev: 1,
+            },
+            Effect::LoadInlineSubmoduleSelectedDiffFile {
+                repo_id: RepoId(1),
+                inline_rev: 1,
+            },
+        ]
+    ));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseInlineSubmoduleDiff { repo_id: RepoId(1) },
+    );
+    let second_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInlineSubmoduleDiff {
+            repo_id: RepoId(1),
+            submodule_repo_path: PathBuf::from("/tmp/repo/vendor/second"),
+            parent_submodule_path: PathBuf::from("vendor/second"),
+            entries: vec![entry],
+            selected_ix: 0,
+        },
+    );
+    assert!(matches!(
+        second_effects.as_slice(),
+        [
+            Effect::LoadInlineSubmoduleSelectedDiff {
+                repo_id: RepoId(1),
+                inline_rev: 2,
+            },
+            Effect::LoadInlineSubmoduleSelectedDiffFile {
+                repo_id: RepoId(1),
+                inline_rev: 2,
+            },
+        ]
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
+            repo_id: RepoId(1),
+            inline_rev: 1,
+            target: target.clone(),
+            result: Ok(Some(gitcomet_core::domain::FileDiffText::new(
+                PathBuf::from("src/lib.rs"),
+                Some("before\n".to_string()),
+                Some("after\n".to_string()),
+            ))),
+        }),
+    );
+
+    let inline = state
+        .repos
+        .first()
+        .and_then(|repo| repo.diff_state.inline_submodule_diff.as_ref())
+        .expect("inline submodule diff should remain open");
+    assert!(effects.is_empty());
+    assert_eq!(
+        inline.submodule_repo_path,
+        PathBuf::from("/tmp/repo/vendor/second")
+    );
+    assert_eq!(inline.rev, 2);
+    assert!(inline.diff_file.is_loading());
+    assert_eq!(inline.diff_file_rev, 0);
+}
+
+#[test]
 fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_file() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
