@@ -301,7 +301,7 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
             }
 
             if entry.kind == FileStatusKind::Deleted {
-                return false;
+                return head_path_is_gitlink(&repo_state.spec.workdir, path);
             }
 
             let dot_git = repo_state.spec.workdir.join(path).join(".git");
@@ -325,6 +325,34 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
         }
         DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => false,
     }
+}
+
+fn head_path_is_gitlink(workdir: &Path, path: &Path) -> bool {
+    let path = if path.is_absolute() {
+        match path.strip_prefix(workdir) {
+            Ok(path) => path,
+            Err(_) => return false,
+        }
+    } else {
+        path
+    };
+
+    let Ok(repo) = gix::open(workdir) else {
+        return false;
+    };
+    let Ok(head_id) = repo.head_id() else {
+        return false;
+    };
+    let Ok(object) = repo.find_object(head_id.detach()) else {
+        return false;
+    };
+    let Ok(tree) = object.peel_to_tree() else {
+        return false;
+    };
+    let Ok(Some(entry)) = tree.lookup_entry_by_path(path) else {
+        return false;
+    };
+    entry.mode().is_commit()
 }
 
 pub(super) fn selected_conflict_target<'a>(

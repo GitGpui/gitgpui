@@ -656,22 +656,31 @@ fn submodule_worktree_diff_summary(
     let submodule = submodules
         .iter()
         .find(|submodule| submodule.path == path)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(ErrorKind::Backend(format!(
-                "submodule '{}' is not configured in this repository",
-                path.display()
-            )))
-        })?;
+        .cloned();
+    let head_gitlink = head_gitlink_commit_id(repo, path)?;
+    let (summary_path, status, index_gitlink, checked_out_head) = match submodule {
+        Some(submodule) => (
+            submodule.path,
+            Some(submodule.status),
+            Some(submodule.recorded_head),
+            submodule.checked_out_head,
+        ),
+        None => {
+            if head_gitlink.is_none() {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "submodule '{}' is not configured in this repository",
+                    path.display()
+                ))));
+            }
+            (path.to_path_buf(), None, None, None)
+        }
+    };
 
-    let nested_workdir = repo_workdir_for_submodule_trust(repo).join(&submodule.path);
-    let nested_repo = open_gitlink_repo(repo, &submodule.path)?;
+    let nested_workdir = repo_workdir_for_submodule_trust(repo).join(&summary_path);
+    let nested_repo = open_gitlink_repo(repo, &summary_path)?;
     let (live_staged, live_unstaged) =
         submodule_live_inner_changes(&nested_workdir, nested_repo.as_ref())?;
 
-    let head_gitlink = head_gitlink_commit_id(repo, &submodule.path)?;
-    let index_gitlink = Some(submodule.recorded_head.clone());
-    let checked_out_head = submodule.checked_out_head.clone();
     let not_loaded_reason = (nested_repo.is_none() || checked_out_head.is_none())
         .then_some("Submodule is not loaded locally.".to_string());
 
@@ -695,9 +704,9 @@ fn submodule_worktree_diff_summary(
     ];
 
     Ok(SubmoduleDiffSummary {
-        path: submodule.path,
+        path: summary_path,
         mode: SubmoduleDiffSummaryMode::Worktree,
-        status: Some(submodule.status),
+        status,
         commit_id: None,
         parent_commit_id: None,
         checked_out_head,
@@ -1727,11 +1736,39 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 
 #[cfg(test)]
 mod tests {
-    use super::allow_file_submodule_transport;
-    use super::submodule_file_transport_consent_key;
+    use super::{GixRepo, allow_file_submodule_transport, submodule_file_transport_consent_key};
+    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use std::ffi::OsStr;
     use std::path::Path;
     use std::process::Command;
+
+    fn run_git(workdir: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(args)
+            .output()
+            .expect("git command to run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_test_repo(workdir: &Path) {
+        run_git(workdir, &["init"]);
+        run_git(workdir, &["config", "commit.gpgsign", "false"]);
+        run_git(workdir, &["config", "user.name", "Test User"]);
+        run_git(workdir, &["config", "user.email", "test@example.com"]);
+    }
+
+    fn open_repo(workdir: &Path) -> GixRepo {
+        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
+        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
 
     #[test]
     fn allow_file_submodule_transport_uses_git_config_not_protocol_allowlist() {
@@ -1767,5 +1804,47 @@ mod tests {
 
         assert_ne!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn worktree_summary_for_staged_removed_gitlink_uses_head_pointer() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let submodule_path = Path::new("vendor/submodule");
+        init_test_repo(tmp.path());
+        run_git(
+            tmp.path(),
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000,1111111111111111111111111111111111111111,vendor/submodule",
+            ],
+        );
+        run_git(tmp.path(), &["commit", "-m", "add submodule gitlink"]);
+        run_git(
+            tmp.path(),
+            &["update-index", "--force-remove", "vendor/submodule"],
+        );
+
+        let repo = open_repo(tmp.path());
+        let summary = repo
+            .submodule_diff_summary_impl(&DiffTarget::WorkingTree {
+                path: submodule_path.into(),
+                area: DiffArea::Staged,
+            })
+            .expect("staged submodule removal summary");
+        let staged_range = summary
+            .ranges
+            .iter()
+            .find(|range| range.kind == SubmoduleDiffRangeKind::StagedPointer)
+            .expect("staged pointer range");
+
+        assert_eq!(summary.path, submodule_path);
+        assert_eq!(summary.status, None);
+        assert_eq!(
+            staged_range.from,
+            Some(CommitId("1111111111111111111111111111111111111111".into()))
+        );
+        assert_eq!(staged_range.to, None);
     }
 }

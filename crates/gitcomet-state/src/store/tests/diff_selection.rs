@@ -383,6 +383,80 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
 }
 
 #[test]
+fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    run_git(dir.path(), &["init", "-q"]);
+    run_git(dir.path(), &["config", "commit.gpgsign", "false"]);
+    run_git(dir.path(), &["config", "user.name", "Test User"]);
+    run_git(dir.path(), &["config", "user.email", "test@example.com"]);
+    run_git(
+        dir.path(),
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000,1111111111111111111111111111111111111111,vendor/submodule",
+        ],
+    );
+    run_git(dir.path(), &["commit", "-q", "-m", "add submodule gitlink"]);
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: dir.path().to_path_buf(),
+        },
+    );
+    let submodule_path = PathBuf::from("vendor/submodule");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: submodule_path.clone(),
+        area: gitcomet_core::domain::DiffArea::Staged,
+    };
+    repo_state.set_submodules(Loadable::Ready(Vec::new()));
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        staged: vec![FileStatus {
+            path: submodule_path,
+            kind: FileStatusKind::Deleted,
+            conflict: None,
+        }],
+        unstaged: vec![],
+    })));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target,
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.diff_state.submodule_summary.is_loading());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_patch_diff: false,
+            load_file_text: false,
+            preview_text_side: None,
+            load_file_image: false,
+            load_submodule_summary: true,
+        }]
+    ));
+}
+
+#[test]
 fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
