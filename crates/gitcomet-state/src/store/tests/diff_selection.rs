@@ -255,6 +255,134 @@ fn select_diff_for_untracked_file_skips_patch_diff_and_loads_file_preview() {
 }
 
 #[test]
+fn select_diff_for_deleted_file_replaced_by_directory_loads_deleted_preview() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(dir.path().join("report.json")).expect("replacement directory");
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: dir.path().to_path_buf(),
+        },
+    );
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: PathBuf::from("report.json"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: vec![FileStatus {
+            path: PathBuf::from("report.json"),
+            kind: FileStatusKind::Deleted,
+            conflict: None,
+        }],
+        staged: vec![],
+    })));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target,
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
+    assert!(matches!(
+        repo_state.diff_state.submodule_summary,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_patch_diff: false,
+            load_file_text: false,
+            preview_text_side: Some(gitcomet_core::domain::DiffPreviewTextSide::Old),
+            load_file_image: false,
+            load_submodule_summary: false,
+        }]
+    ));
+}
+
+#[test]
+fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_load() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let submodule_path = PathBuf::from("vendor/submodule");
+    std::fs::create_dir_all(dir.path().join(&submodule_path)).expect("submodule directory");
+    std::fs::write(
+        dir.path().join(&submodule_path).join(".git"),
+        "gitdir: ../../.git/modules/vendor/submodule\n",
+    )
+    .expect("submodule gitdir marker");
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: dir.path().to_path_buf(),
+        },
+    );
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: submodule_path.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: vec![FileStatus {
+            path: submodule_path,
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }],
+        staged: vec![],
+    })));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target,
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.diff_state.submodule_summary.is_loading());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_patch_diff: false,
+            load_file_text: false,
+            preview_text_side: None,
+            load_file_image: false,
+            load_submodule_summary: true,
+        }]
+    ));
+}
+
+#[test]
 fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);

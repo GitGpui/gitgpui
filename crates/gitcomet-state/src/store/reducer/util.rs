@@ -300,7 +300,12 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
                 return true;
             }
 
-            repo_state.spec.workdir.join(path).is_dir()
+            if entry.kind == FileStatusKind::Deleted {
+                return false;
+            }
+
+            let dot_git = repo_state.spec.workdir.join(path).join(".git");
+            dot_git.is_file() || dot_git.is_dir()
         }
         DiffTarget::Commit {
             commit_id,
