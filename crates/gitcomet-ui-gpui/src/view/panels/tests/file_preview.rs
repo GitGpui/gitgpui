@@ -679,6 +679,131 @@ fn deleted_file_preview_text_file_materializes_and_uses_prepared_syntax_highligh
 }
 
 #[gpui::test]
+fn untracked_json_file_preview_keeps_underscored_string_value_highlighted(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(177);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_json_preview_string_value",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_policy.json");
+    let preview_abs_path = workdir.join(&file_rel);
+    let target_line_ix = 3usize;
+    let target_line = r#"  "transition_policy": "adjacent_and_first","#;
+    let preview_lines: Arc<Vec<String>> = Arc::new(vec![
+        "{".to_string(),
+        r#"  "schema_version": 1,"#.to_string(),
+        r#"  "group": "nv_purchases_tab_strip","#.to_string(),
+        target_line.to_string(),
+        r#"  "match_strategy": "backend_node_id","#.to_string(),
+        r#"  "row_selection": "fixture_clickable_flag","#.to_string(),
+        r#"  "assertions": ["#.to_string(),
+        r#"    "common_backend_segment_ids""#.to_string(),
+        "  ],".to_string(),
+        r#"  "fixtures": ["#.to_string(),
+        "    {".to_string(),
+        r#"      "order": 1,"#.to_string(),
+        r#"      "name": "nv_purchases_tab_strip_test","#.to_string(),
+        r#"      "file": "001_nv_purchases_tab_strip_test.json""#.to_string(),
+        "    }".to_string(),
+        "  ]".to_string(),
+        "}".to_string(),
+    ]);
+    let preview_text = preview_lines.join("\n");
+    let value_start = target_line
+        .find(r#""adjacent_and_first""#)
+        .expect("fixture should contain JSON string value");
+    let value_end = value_start + r#""adjacent_and_first""#.len();
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create JSON preview workdir");
+    std::fs::write(&preview_abs_path, &preview_text).expect("write JSON preview fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "JSON preview string value syntax render",
+        |pane| {
+            let string_color = pane.theme.syntax.string.into();
+            pane.is_file_preview_active()
+                && pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
+                && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Json)
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+                && pane
+                    .worktree_preview_segments_cache_get(target_line_ix)
+                    .is_some_and(|styled| {
+                        styled.text.as_ref() == target_line
+                            && (value_start..value_end).all(|ix| {
+                                styled.highlights.iter().any(|(range, style)| {
+                                    range.contains(&ix) && style.color == Some(string_color)
+                                })
+                            })
+                            && !styled.highlights.iter().any(|(range, style)| {
+                                range.start < value_end
+                                    && value_start < range.end
+                                    && style.color.is_some()
+                                    && style.color != Some(string_color)
+                            })
+                    })
+        },
+        |pane| {
+            let row_cache = pane
+                .worktree_preview_segments_cache_get(target_line_ix)
+                .map(styled_debug_info_with_styles);
+            format!(
+                "active={} preview_path={:?} language={:?} prepared={:?} row_cache={row_cache:?}",
+                pane.is_file_preview_active(),
+                pane.worktree_preview_path.clone(),
+                pane.worktree_preview_syntax_language,
+                pane.worktree_preview_prepared_syntax_document(),
+            )
+        },
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup JSON preview fixture");
+}
+
+#[gpui::test]
 fn large_file_preview_keeps_prepared_syntax_document_above_old_line_gate(
     cx: &mut gpui::TestAppContext,
 ) {

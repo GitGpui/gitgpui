@@ -1529,8 +1529,10 @@ mod tests {
     fn nonblocking_prepared_document_byte_range_upgrades_after_chunk_build() {
         syntax::reset_prepared_syntax_cache();
         let theme = AppTheme::gitcomet_dark();
-        let text = "/* open comment\nstill comment */ let x = 1;";
-        let line_starts = vec![0, "/* open comment\n".len()];
+        let first_line = "/* unique nonblocking byte-range comment";
+        let text_owned = format!("{first_line}\nstill unique comment */ let x = 1;");
+        let line_starts = vec![0, first_line.len() + 1];
+        let text = text_owned.as_str();
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
 
         let second_line_start = line_starts[1];

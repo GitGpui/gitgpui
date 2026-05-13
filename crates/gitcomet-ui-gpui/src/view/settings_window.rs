@@ -1317,6 +1317,9 @@ impl SettingsWindowView {
             extra_height_px,
             self.ui_scale_percent,
         );
+        // `h` includes the 1px border on each edge, so keep the requested
+        // dropdown height available to the inner list viewport.
+        let outer_height = height + px(2.0);
 
         div()
             .id(container_id)
@@ -1324,8 +1327,8 @@ impl SettingsWindowView {
             .w_full()
             .min_w(px(0.0))
             .relative()
-            .h(height)
-            .min_h(height)
+            .h(outer_height)
+            .min_h(outer_height)
             .rounded(px(theme.radii.row))
             .border_1()
             .border_color(settings_dropdown_border_color(theme))
@@ -2782,8 +2785,7 @@ impl Render for SettingsWindowView {
 
                     let mut diff_card = self
                         .card("settings_window_diff_card", "Diff", theme)
-                        .child(diff_content_mode_row)
-                        .child(diff_scroll_sync_row);
+                        .child(diff_content_mode_row);
 
                     if self.expanded_section == Some(SettingsSection::DiffContentMode) {
                         let list = uniform_list(
@@ -2818,6 +2820,8 @@ impl Render for SettingsWindowView {
                             theme,
                         ));
                     }
+
+                    diff_card = diff_card.child(diff_scroll_sync_row);
 
                     if self.expanded_section == Some(SettingsSection::Diff) {
                         let list = uniform_list(
@@ -4074,6 +4078,10 @@ mod tests {
                 SettingsSection::Diff,
                 "settings_window_diff_scroll_sync_list_container",
             ),
+            (
+                SettingsSection::DiffContentMode,
+                "settings_window_diff_content_mode_list_container",
+            ),
         ] {
             let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
                 settings.expanded_section = Some(section);
@@ -4089,6 +4097,59 @@ mod tests {
                 "expected `{selector}` to be rendered for the expanded section"
             );
         }
+    }
+
+    #[gpui::test]
+    fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.expanded_section = Some(SettingsSection::DiffContentMode);
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let diff_mode_row = settings_cx
+            .debug_bounds("settings_window_diff_content_mode")
+            .expect("expected diff mode row bounds");
+        let diff_mode_container = settings_cx
+            .debug_bounds("settings_window_diff_content_mode_list_container")
+            .expect("expected diff mode list container bounds");
+        let scroll_sync_row = settings_cx
+            .debug_bounds("settings_window_diff_scroll_sync")
+            .expect("expected scroll sync row bounds");
+
+        assert!(
+            diff_mode_row.bottom() <= diff_mode_container.top()
+                && diff_mode_container.bottom() <= scroll_sync_row.top(),
+            "expected the diff mode selector to expand directly below the diff mode row"
+        );
     }
 
     #[gpui::test]

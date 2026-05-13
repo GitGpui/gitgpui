@@ -20,8 +20,8 @@ use std::time::SystemTime;
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
-const PRIMARY_REFRESH_MAX_EFFECTS: usize = 6;
-const FULL_REFRESH_MAX_EFFECTS: usize = 11;
+const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
+const FULL_REFRESH_MAX_EFFECTS: usize = 9;
 
 pub(super) trait EffectAccumulator {
     fn push_effect(&mut self, effect: Effect);

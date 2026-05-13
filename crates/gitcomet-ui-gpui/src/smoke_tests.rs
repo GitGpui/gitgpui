@@ -2226,6 +2226,13 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
 
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::set_sidebar_width_for_test(this, px(500.0), cx);
+        });
+    });
+    sync_view_for_tests(cx, &view);
+
     let worktree_root = base.join("ae");
     let branch = "feature/badge-expands".to_string();
     store_for_test.dispatch(Msg::Internal(
@@ -2280,6 +2287,11 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
     assert!(
         branch_bounds.right() - branch_bounds.left() > px(104.0),
         "expected branch badge {branch_bounds:?} to grow beyond the old fixed cap",
+    );
+    let available_label_width = row_bounds.right() - path_bounds.left();
+    assert!(
+        branch_bounds.right() - branch_bounds.left() <= (available_label_width / 2.0) + px(1.0),
+        "expected branch badge {branch_bounds:?} to stay within half of the available label width {available_label_width:?}",
     );
 
     cx.simulate_mouse_move(branch_label_bounds.center(), None, Modifiers::default());

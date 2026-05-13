@@ -1641,6 +1641,79 @@ fn set_active_repo_replays_stored_sidebar_data_request() {
 }
 
 #[test]
+fn set_active_repo_full_refresh_with_sidebar_request_and_selected_diff_does_not_panic() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    assert_eq!(state.active_repo, Some(repo2));
+
+    let request = SidebarDataRequest {
+        worktrees: true,
+        submodules: true,
+        stashes: true,
+    };
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    repo1_state.set_sidebar_data_request(request);
+    repo1_state.set_worktrees(Loadable::NotLoaded);
+    repo1_state.set_submodules(Loadable::NotLoaded);
+    repo1_state.set_stashes(Loadable::NotLoaded);
+    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert_eq!(state.active_repo, Some(repo1));
+    assert!(
+        has_full_refresh_only_effects(&effects, repo1),
+        "expected cold repo switch to use full refresh"
+    );
+    assert!(has_worktree_refresh_effect(&effects, repo1));
+    assert!(has_submodule_load_effect(&effects, repo1));
+    assert!(has_stash_load_effect(&effects, repo1));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadSelectedDiff {
+            repo_id,
+            load_patch_diff: true,
+            load_file_text: true,
+            load_file_image: false,
+            load_submodule_summary: false,
+            preview_text_side: None,
+        } if *repo_id == repo1
+    )));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::PersistSession { repo_id, .. } if *repo_id == Some(repo1)
+    )));
+
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(repo1_state.worktrees.is_loading());
+    assert!(repo1_state.submodules.is_loading());
+    assert!(repo1_state.stashes.is_loading());
+}
+
+#[test]
 fn set_active_repo_refreshes_repo_state_and_selected_diff() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
