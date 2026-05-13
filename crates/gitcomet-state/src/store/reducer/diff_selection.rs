@@ -518,6 +518,7 @@ pub(super) fn submodule_summary_loaded(
     target: DiffTarget,
     result: std::result::Result<SubmoduleDiffSummary, Error>,
 ) -> Vec<Effect> {
+    let mut effects = SelectDiffEffects::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         if repo_state.diff_state.diff_target.as_ref() != Some(&target) {
             return Vec::new();
@@ -538,15 +539,34 @@ pub(super) fn submodule_summary_loaded(
         repo_state.diff_state.submodule_summary = match result {
             Ok(summary) => {
                 let next_entries = inline_submodule_entries_from_summary(&summary);
-                if let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() {
-                    if let Some(selected_ix) =
+                let had_inline = repo_state.diff_state.inline_submodule_diff.is_some();
+                let selected_inline = repo_state
+                    .diff_state
+                    .inline_submodule_diff
+                    .as_ref()
+                    .and_then(|inline| {
                         inline_submodule_entry_index(next_entries.as_slice(), &inline.target)
-                    {
+                            .map(|selected_ix| (selected_ix, inline.target.clone()))
+                    });
+
+                if let Some((selected_ix, inline_target)) = selected_inline {
+                    let load_plan = inline_submodule_selected_diff_load_plan(&inline_target);
+                    let inline_rev = next_inline_submodule_diff_rev(repo_state);
+                    if let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() {
                         inline.entries = next_entries;
                         inline.selected_ix = selected_ix;
-                    } else {
-                        repo_state.diff_state.inline_submodule_diff = None;
+                        inline.target = inline_target;
+                        inline.rev = inline_rev;
+                        apply_inline_submodule_diff_load_plan_state(inline, load_plan);
                     }
+                    push_inline_submodule_diff_load_effects(
+                        repo_id,
+                        inline_rev,
+                        load_plan,
+                        &mut effects,
+                    );
+                } else if had_inline {
+                    repo_state.diff_state.inline_submodule_diff = None;
                 }
                 Loadable::Ready(Arc::new(summary))
             }
@@ -557,7 +577,7 @@ pub(super) fn submodule_summary_loaded(
         };
         repo_state.bump_diff_state_rev();
     }
-    Vec::new()
+    effects.into_vec()
 }
 
 pub(super) fn inline_submodule_diff_loaded(

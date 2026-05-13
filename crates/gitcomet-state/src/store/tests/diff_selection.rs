@@ -1,6 +1,8 @@
 use super::*;
 use gitcomet_core::domain::{
     CommitDetails, CommitFileChange, CommitId, FileConflictKind, FileStatus, FileStatusKind,
+    Submodule, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
+    SubmoduleStatus,
 };
 
 #[test]
@@ -619,6 +621,146 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
     assert_eq!(inline.rev, 2);
     assert!(inline.diff_file.is_loading());
     assert_eq!(inline.diff_file_rev, 0);
+}
+
+#[test]
+fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remains() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let parent_path = PathBuf::from("vendor/submodule");
+    let parent_target = DiffTarget::WorkingTree {
+        path: parent_path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    let inline_target = DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    };
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: vec![FileStatus {
+            path: parent_path.clone(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }],
+        staged: vec![],
+    })));
+    repo_state.set_submodules(Loadable::Ready(vec![Submodule {
+        path: parent_path.clone(),
+        recorded_head: CommitId("old-recorded".into()),
+        checked_out_head: Some(CommitId("old-head".into())),
+        status: SubmoduleStatus::HeadMismatch,
+    }]));
+    repo_state.set_diff_target(Some(parent_target.clone()));
+    repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(SubmoduleDiffSummary {
+        path: parent_path.clone(),
+        mode: SubmoduleDiffSummaryMode::Worktree,
+        status: Some(SubmoduleStatus::HeadMismatch),
+        commit_id: None,
+        parent_commit_id: None,
+        checked_out_head: Some(CommitId("old-head".into())),
+        ranges: vec![],
+        live_staged: vec![],
+        live_unstaged: vec![SubmoduleInnerChange {
+            path: PathBuf::from("src/lib.rs"),
+            kind: FileStatusKind::Modified,
+            additions: Some(1),
+            deletions: Some(1),
+        }],
+    }));
+    repo_state.diff_state.inline_submodule_diff_rev = 1;
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
+        parent_submodule_path: parent_path.clone(),
+        entries: vec![crate::model::InlineSubmoduleDiffEntry {
+            path: PathBuf::from("src/lib.rs"),
+            kind: FileStatusKind::Modified,
+            target: inline_target.clone(),
+            section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
+        }],
+        selected_ix: 0,
+        target: inline_target.clone(),
+        rev: 1,
+        diff_rev: 1,
+        diff: Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+            target: inline_target.clone(),
+            lines: Vec::new(),
+        })),
+        diff_file_rev: 1,
+        diff_file: Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
+            PathBuf::from("src/lib.rs"),
+            Some("before\n".to_string()),
+            Some("after\n".to_string()),
+        )))),
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target: parent_target,
+            result: Ok(SubmoduleDiffSummary {
+                path: parent_path,
+                mode: SubmoduleDiffSummaryMode::Worktree,
+                status: Some(SubmoduleStatus::UpToDate),
+                commit_id: None,
+                parent_commit_id: None,
+                checked_out_head: Some(CommitId("new-head".into())),
+                ranges: vec![],
+                live_staged: vec![],
+                live_unstaged: vec![
+                    SubmoduleInnerChange {
+                        path: PathBuf::from("README.md"),
+                        kind: FileStatusKind::Modified,
+                        additions: Some(2),
+                        deletions: Some(0),
+                    },
+                    SubmoduleInnerChange {
+                        path: PathBuf::from("src/lib.rs"),
+                        kind: FileStatusKind::Modified,
+                        additions: Some(4),
+                        deletions: Some(1),
+                    },
+                ],
+            }),
+        }),
+    );
+
+    let inline = state
+        .repos
+        .first()
+        .and_then(|repo| repo.diff_state.inline_submodule_diff.as_ref())
+        .expect("inline submodule diff should remain open");
+    assert_eq!(inline.rev, 2);
+    assert_eq!(inline.selected_ix, 1);
+    assert_eq!(inline.entries.len(), 2);
+    assert!(inline.diff.is_loading());
+    assert!(inline.diff_file.is_loading());
+    assert!(matches!(inline.diff_file_image, Loadable::NotLoaded));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::LoadInlineSubmoduleSelectedDiff {
+                repo_id: RepoId(1),
+                inline_rev: 2,
+            },
+            Effect::LoadInlineSubmoduleSelectedDiffFile {
+                repo_id: RepoId(1),
+                inline_rev: 2,
+            },
+        ]
+    ));
 }
 
 #[test]

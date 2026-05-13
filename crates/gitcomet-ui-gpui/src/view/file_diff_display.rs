@@ -165,14 +165,17 @@ fn append_large_file_diff_display_text_slice(
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
     range: Range<usize>,
 ) {
-    let start = range.start.min(raw_text.len());
-    let end = range.end.min(raw_text.len());
+    let mut display = String::new();
+    append_truncated_file_diff_display_text(&mut display, raw_text);
+
+    let start = range.start.min(display.len());
+    let end = range.end.min(display.len());
     if start >= end {
         return;
     }
 
-    if let Some((slice, _)) = raw_text.slice_text_resolved(start..end) {
-        append_expanded_tabs(out, slice.as_ref());
+    if let Some(slice) = display.get(start..end) {
+        out.push_str(slice);
     }
 }
 
@@ -205,16 +208,41 @@ mod tests {
     }
 
     #[test]
-    fn large_tabbed_file_diff_slice_reads_requested_range() {
+    fn large_tabbed_file_diff_slice_uses_display_coordinates() {
         let raw_text = gitcomet_core::file_diff::FileDiffLineText::from(format!(
             "abc\tdef{}",
             "x".repeat(LARGE_DIFF_TEXT_MIN_BYTES)
         ));
+        let display = file_diff_display_text(&raw_text);
+        let display_text = display.as_ref();
         let mut out = String::new();
         let mut expanded_tabs = String::new();
 
-        append_file_diff_display_text_slice(&mut out, &raw_text, 0..7, &mut expanded_tabs);
+        append_file_diff_display_text_slice(&mut out, &raw_text, 4..9, &mut expanded_tabs);
 
-        assert_eq!(out, "abc    def");
+        assert_eq!(out.as_str(), &display_text[4..9]);
+        assert_eq!(out, "   de");
+    }
+
+    #[test]
+    fn large_tabbed_file_diff_full_slice_includes_truncation_suffix() {
+        let raw_text = gitcomet_core::file_diff::FileDiffLineText::from(format!(
+            "abc\tdef{}",
+            "x".repeat(LARGE_DIFF_TEXT_MIN_BYTES)
+        ));
+        let display = file_diff_display_text(&raw_text);
+        let display_text = display.as_ref();
+        let mut out = String::new();
+        let mut expanded_tabs = String::new();
+
+        append_file_diff_display_text_slice(
+            &mut out,
+            &raw_text,
+            0..file_diff_display_len(&raw_text),
+            &mut expanded_tabs,
+        );
+
+        assert_eq!(out.as_str(), display_text);
+        assert!(out.ends_with(LARGE_FILE_DIFF_DISPLAY_TRUNCATION_SUFFIX));
     }
 }
