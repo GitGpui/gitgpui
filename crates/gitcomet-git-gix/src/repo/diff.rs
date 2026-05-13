@@ -179,8 +179,7 @@ impl GixRepo {
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Process(mut file) => {
                 copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher)?;
             }
-            gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(buf) => {
-                let bytes: &[u8] = buf.as_ref();
+            gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(bytes) => {
                 bytes.hash(&mut content_hasher);
                 tmp_file.write_all(bytes).map_err(io_err_to_error)?;
             }
