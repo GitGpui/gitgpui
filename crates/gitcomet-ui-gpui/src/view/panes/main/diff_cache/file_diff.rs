@@ -1320,6 +1320,35 @@ fn file_diff_source_text(source: &IndexedFileDiffSource) -> SharedString {
     }
 }
 
+fn file_diff_source_plan_text(source: &IndexedFileDiffSource) -> Result<SharedString, String> {
+    match &source.content {
+        IndexedFileDiffContent::Shared(text) => Ok(SharedString::from(Arc::clone(text))),
+        IndexedFileDiffContent::Empty => Ok(SharedString::default()),
+        IndexedFileDiffContent::File(path) => std::fs::read_to_string(path.as_ref())
+            .map(SharedString::from)
+            .map_err(|error| {
+                format!(
+                    "Unable to load file diff source `{}` for diff planning: {error}",
+                    path.display()
+                )
+            }),
+    }
+}
+
+fn build_file_diff_plan_from_indexed_sources(
+    old_source: &IndexedFileDiffSource,
+    new_source: &IndexedFileDiffSource,
+) -> Result<gitcomet_core::file_diff::FileDiffPlan, String> {
+    let old_plan_text = file_diff_source_plan_text(old_source)?;
+    let new_plan_text = file_diff_source_plan_text(new_source)?;
+    Ok(build_file_diff_plan_from_document_sources(
+        &old_plan_text,
+        old_source.line_starts.as_ref(),
+        &new_plan_text,
+        new_source.line_starts.as_ref(),
+    ))
+}
+
 fn index_file_diff_side(
     source: Option<&gitcomet_core::domain::FileDiffTextSource>,
     legacy_text: Option<&Arc<str>>,
@@ -1615,17 +1644,8 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     let new_line_count = new_source.line_count();
     let plan = Arc::new(if let Some(patch_diff) = patch_diff {
         build_file_diff_plan_from_patch(patch_diff, old_line_count, new_line_count)
-    } else if file.old.is_some() || file.new.is_some() {
-        build_file_diff_plan_from_document_sources(
-            &old_text,
-            old_line_starts.as_ref(),
-            &new_text,
-            new_line_starts.as_ref(),
-        )
     } else {
-        let mut runs = Vec::new();
-        push_aligned_file_diff_span(&mut runs, 0, 0, old_line_count, new_line_count);
-        file_diff_plan_from_runs(runs)
+        build_file_diff_plan_from_indexed_sources(&old_source, &new_source)?
     });
     let (old_line_to_row, new_line_to_row) = gitcomet_core::file_diff::plan_line_to_row_maps(
         plan.as_ref(),
@@ -1849,6 +1869,58 @@ mod tests {
 
         assert!(error.contains(source_path.to_string_lossy().as_ref()));
         assert!(error.contains("not valid UTF-8"));
+    }
+
+    #[test]
+    fn indexed_file_diff_source_accepts_utf8_split_at_scan_boundary() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let source_path = tmp.path().join("split-utf8.txt");
+        let mut bytes = vec![b'a'; FILE_DIFF_INDEX_SCAN_BUFFER_BYTES.saturating_sub(1)];
+        bytes.extend_from_slice("é".as_bytes());
+        bytes.push(b'\n');
+        std::fs::write(&source_path, bytes).expect("write split utf8 source");
+
+        let source = IndexedFileDiffSource::from_file(&source_path)
+            .expect("valid UTF-8 split across scan buffers should index");
+
+        assert_eq!(source.line_count(), 1);
+        assert_eq!(
+            source.source_len,
+            FILE_DIFF_INDEX_SCAN_BUFFER_BYTES.saturating_add(2)
+        );
+    }
+
+    #[test]
+    fn build_file_diff_cache_rebuild_source_backed_without_patch_uses_source_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let old_source_path = tmp.path().join("old.txt");
+        let new_source_path = tmp.path().join("new.txt");
+        std::fs::write(&old_source_path, "alpha\nbefore\ngamma\n").expect("write old source");
+        std::fs::write(&new_source_path, "alpha\nafter\ngamma\n").expect("write new source");
+        let file = gitcomet_core::domain::FileDiffText::new_sources(
+            PathBuf::from("demo.txt"),
+            Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                old_source_path,
+                "old",
+            )),
+            Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                new_source_path,
+                "new",
+            )),
+        );
+
+        let rebuild = build_file_diff_cache_rebuild(&file, tmp.path())
+            .expect("source-backed file diff should build without patch");
+
+        assert!(rebuild.rows.iter().any(|row| {
+            row.kind != gitcomet_core::file_diff::FileDiffRowKind::Context
+                && (row.old_line == Some(2) || row.new_line == Some(2))
+        }));
+        assert!(!rebuild.rows.iter().any(|row| {
+            row.kind == gitcomet_core::file_diff::FileDiffRowKind::Context
+                && row.old_line == Some(2)
+                && row.new_line == Some(2)
+        }));
     }
 
     #[test]

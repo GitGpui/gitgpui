@@ -804,6 +804,9 @@ fn selected_submodule_command_reloads_selected_summary() {
             path: path.clone(),
             approved_sources: Vec::new(),
         },
+        RepoCommandKind::UpdateSubmodules {
+            approved_sources: Vec::new(),
+        },
         RepoCommandKind::ChangeSubmodulePointer {
             path: path.clone(),
             reference: "main".to_string(),

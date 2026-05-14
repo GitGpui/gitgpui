@@ -690,12 +690,15 @@ fn selected_submodule_target_changed_by_command(
     repo_state: &RepoState,
     command: &RepoCommandKind,
 ) -> Option<DiffTarget> {
-    let changed_path = changed_submodule_path(command)?;
     let target = repo_state.diff_state.diff_target.as_ref()?;
     let DiffTarget::WorkingTree { path, .. } = target else {
         return None;
     };
-    if path.as_path() != changed_path {
+    if let Some(changed_path) = changed_submodule_path(command) {
+        if path.as_path() != changed_path {
+            return None;
+        }
+    } else if !matches!(command, RepoCommandKind::UpdateSubmodules { .. }) {
         return None;
     }
 

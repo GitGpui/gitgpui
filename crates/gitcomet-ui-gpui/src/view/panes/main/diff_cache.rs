@@ -57,6 +57,10 @@ fn patch_diff_content_signature(diff: &gitcomet_core::domain::Diff) -> u64 {
     hasher.finish()
 }
 
+fn file_diff_text_is_source_backed(file: &gitcomet_core::domain::FileDiffText) -> bool {
+    file.old_source.is_some() || file.new_source.is_some()
+}
+
 fn file_diff_markdown_source_len(
     source: Option<&gitcomet_core::domain::FileDiffTextSource>,
     legacy_text: Option<&Arc<str>>,
@@ -1962,6 +1966,7 @@ impl MainPaneView {
             expected_abs_path,
             file,
             patch_diff,
+            patch_diff_loading,
         )) = (|| {
             let (repo_id, diff_file_rev, diff_target, workdir, expected_abs_path) =
                 self.rendered_file_diff_identity()?;
@@ -1970,11 +1975,12 @@ impl MainPaneView {
                     Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
                     _ => None,
                 };
-            let patch_diff: Option<Arc<gitcomet_core::domain::Diff>> =
-                match self.rendered_patch_diff_loadable()? {
-                    Loadable::Ready(diff) => Some(Arc::clone(diff)),
-                    _ => None,
-                };
+            let patch_diff_loadable = self.rendered_patch_diff_loadable()?;
+            let patch_diff: Option<Arc<gitcomet_core::domain::Diff>> = match patch_diff_loadable {
+                Loadable::Ready(diff) => Some(Arc::clone(diff)),
+                _ => None,
+            };
+            let patch_diff_loading = matches!(patch_diff_loadable, Loadable::Loading);
 
             Some((
                 repo_id,
@@ -1984,6 +1990,7 @@ impl MainPaneView {
                 expected_abs_path,
                 file,
                 patch_diff,
+                patch_diff_loading,
             ))
         })()
         else {
@@ -2013,6 +2020,26 @@ impl MainPaneView {
             .flatten();
         let previous_old_text = same_repo_and_target.then(|| self.file_diff_old_text.clone());
         let previous_new_text = same_repo_and_target.then(|| self.file_diff_new_text.clone());
+
+        if patch_diff_loading
+            && patch_diff.is_none()
+            && file
+                .as_ref()
+                .is_some_and(|file| file_diff_text_is_source_backed(file.as_ref()))
+        {
+            if same_repo_and_target {
+                self.file_diff_cache_inflight = None;
+                self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
+                self.file_diff_cache_rev = diff_file_rev;
+            } else {
+                self.file_diff_cache_repo_id = Some(repo_id);
+                self.file_diff_cache_rev = diff_file_rev;
+                self.file_diff_cache_target = Some(diff_target);
+                self.reset_file_diff_cache_data();
+                self.clear_diff_text_style_caches();
+            }
+            return;
+        }
 
         if same_repo_and_target
             && file.is_none()
