@@ -1,4 +1,6 @@
-use gitcomet_core::domain::{DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus};
+use gitcomet_core::domain::{
+    CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus,
+};
 use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
@@ -628,6 +630,84 @@ fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
     assert_eq!(
         staged_range.unavailable_reason.as_deref(),
         Some("Only one side of the submodule pointer is available.")
+    );
+}
+
+#[test]
+fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    let submodule_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
+    let submodule_path = Path::new("mods/submodule");
+    add_submodule_raw(&parent_repo, &sub_repo, submodule_path, None);
+    run_git(
+        &parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
+    );
+
+    let missing_submodule_head = "2222222222222222222222222222222222222222";
+    let cacheinfo = format!(
+        "160000,{missing_submodule_head},{}",
+        submodule_path.display()
+    );
+    run_git(&parent_repo, &["update-index", "--cacheinfo", &cacheinfo]);
+    run_git(
+        &parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "advance submodule pointer",
+        ],
+    );
+    let parent_commit = git_stdout(&parent_repo, &["rev-parse", "HEAD"]);
+
+    let backend = GixBackend;
+    let opened = backend
+        .open(&parent_repo)
+        .expect("open parent repository with missing submodule commit");
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::Commit {
+            commit_id: CommitId(parent_commit.into()),
+            path: Some(submodule_path.to_path_buf()),
+        })
+        .expect("load committed submodule summary");
+    let range = summary
+        .ranges
+        .iter()
+        .find(|range| range.kind == SubmoduleDiffRangeKind::CommitHistory)
+        .expect("summary should include commit history range");
+
+    assert_eq!(
+        range.from.as_ref().map(|commit| commit.as_ref()),
+        Some(submodule_head.as_str())
+    );
+    assert_eq!(
+        range.to.as_ref().map(|commit| commit.as_ref()),
+        Some(missing_submodule_head)
+    );
+    assert!(range.changes.is_empty());
+    assert_eq!(
+        range.unavailable_reason.as_deref(),
+        Some("Submodule history is not available locally.")
     );
 }
 

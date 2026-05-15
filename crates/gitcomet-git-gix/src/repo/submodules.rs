@@ -25,6 +25,10 @@ use std::time::Duration;
 type NumstatLineCounts = (Option<u32>, Option<u32>);
 type NumstatCounts = BTreeMap<PathBuf, NumstatLineCounts>;
 
+const SUBMODULE_HISTORY_UNAVAILABLE_REASON: &str = "Submodule history is not available locally.";
+const SUBMODULE_POINTER_SIDE_UNAVAILABLE_REASON: &str =
+    "Only one side of the submodule pointer is available.";
+
 fn allow_file_submodule_transport(cmd: &mut Command) {
     // `git submodule` blocks local-path remotes unless `protocol.file.allow` is enabled.
     // Use per-command config so local workflows keep working without disabling `https`/`ssh`.
@@ -733,7 +737,7 @@ fn submodule_commit_diff_summary(
     let nested_workdir = repo_workdir_for_submodule_trust(repo).join(path);
     let nested_repo = open_gitlink_repo(repo, path)?;
     let unavailable_reason = if nested_repo.is_none() {
-        Some("Submodule history is not available locally.".to_string())
+        Some(SUBMODULE_HISTORY_UNAVAILABLE_REASON.to_string())
     } else {
         None
     };
@@ -789,6 +793,9 @@ fn build_submodule_range(
     to: Option<CommitId>,
     unavailable_reason: Option<String>,
 ) -> Result<SubmoduleDiffRange> {
+    let unavailable_reason = unavailable_reason
+        .or_else(|| submodule_range_unavailable_reason(nested_repo, from.as_ref(), to.as_ref()));
+
     let changes = if unavailable_reason.is_none() {
         match (nested_repo, from.as_ref(), to.as_ref()) {
             (_, Some(from), Some(to)) if from == to => Vec::new(),
@@ -801,16 +808,6 @@ fn build_submodule_range(
         Vec::new()
     };
 
-    let unavailable_reason = unavailable_reason.or_else(|| {
-        if from.is_none() || to.is_none() {
-            Some("Only one side of the submodule pointer is available.".to_string())
-        } else if nested_repo.is_none() {
-            Some("Submodule history is not available locally.".to_string())
-        } else {
-            None
-        }
-    });
-
     Ok(SubmoduleDiffRange {
         kind,
         from,
@@ -818,6 +815,34 @@ fn build_submodule_range(
         changes,
         unavailable_reason,
     })
+}
+
+fn submodule_range_unavailable_reason(
+    nested_repo: Option<&gix::Repository>,
+    from: Option<&CommitId>,
+    to: Option<&CommitId>,
+) -> Option<String> {
+    let (Some(from), Some(to)) = (from, to) else {
+        return Some(SUBMODULE_POINTER_SIDE_UNAVAILABLE_REASON.to_string());
+    };
+    let Some(nested_repo) = nested_repo else {
+        return Some(SUBMODULE_HISTORY_UNAVAILABLE_REASON.to_string());
+    };
+    if from == to {
+        return None;
+    }
+    if !submodule_commit_available(nested_repo, from)
+        || !submodule_commit_available(nested_repo, to)
+    {
+        return Some(SUBMODULE_HISTORY_UNAVAILABLE_REASON.to_string());
+    }
+    None
+}
+
+fn submodule_commit_available(repo: &gix::Repository, commit_id: &CommitId) -> bool {
+    object_id_from_commit_id(commit_id)
+        .and_then(|object_id| repo.find_commit(object_id).ok())
+        .is_some()
 }
 
 fn submodule_range_changes_from_commits(

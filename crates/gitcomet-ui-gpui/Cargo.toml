@@ -67,17 +67,18 @@ syntax-repo = [
 
 [dependencies]
 fontdb = { workspace = true }
+futures = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-tree-sitter-alloc = { path = "../gitcomet-tree-sitter-alloc" }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gpui = { workspace = true }
+http_client = { workspace = true }
 image = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }
 mimalloc = { workspace = true }
 pulldown-cmark = { workspace = true }
-reqwest = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
 semver = { workspace = true }
