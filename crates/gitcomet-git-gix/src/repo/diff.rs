@@ -11,10 +11,11 @@ use gitcomet_core::domain::{
     FileDiffTextSource,
 };
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
 use gitcomet_core::services::{ConflictFileStages, Result};
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -312,27 +313,33 @@ impl GixRepo {
                 }
 
                 let repo = self._repo.to_thread_local();
+                let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 match (area, side) {
                     (DiffArea::Unstaged, DiffPreviewTextSide::New) => {
-                        Ok(worktree_file_path_optional(&self.spec.workdir, path))
+                        Ok(worktree_file_path_optional(&self.spec.workdir, &repo_path))
                     }
                     (DiffArea::Unstaged, DiffPreviewTextSide::Old)
                     | (DiffArea::Staged, DiffPreviewTextSide::New) => {
-                        let blob_id = match gix_index_unconflicted_blob_id_optional(&repo, path)? {
-                            IndexUnconflictedBlobId::Present(id) => Some(id),
-                            IndexUnconflictedBlobId::Missing
-                            | IndexUnconflictedBlobId::Unmerged => None,
-                        };
+                        let blob_id =
+                            match gix_index_unconflicted_blob_id_optional(&repo, &repo_path)? {
+                                IndexUnconflictedBlobId::Present(id) => Some(id),
+                                IndexUnconflictedBlobId::Missing
+                                | IndexUnconflictedBlobId::Unmerged => None,
+                            };
                         match blob_id {
-                            Some(blob_id) => self.cached_preview_blob_file_path(blob_id, path),
+                            Some(blob_id) => {
+                                self.cached_preview_blob_file_path(blob_id, &repo_path)
+                            }
                             None => Ok(None),
                         }
                     }
                     (DiffArea::Staged, DiffPreviewTextSide::Old) => {
                         let blob_id =
-                            gix_revision_path_blob_object_id_optional(&repo, "HEAD", path)?;
+                            gix_revision_path_blob_object_id_optional(&repo, "HEAD", &repo_path)?;
                         match blob_id {
-                            Some(blob_id) => self.cached_preview_blob_file_path(blob_id, path),
+                            Some(blob_id) => {
+                                self.cached_preview_blob_file_path(blob_id, &repo_path)
+                            }
                             None => Ok(None),
                         }
                     }
@@ -459,40 +466,50 @@ impl GixRepo {
                 }
 
                 let repo = self._repo.to_thread_local();
+                let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
-                        let old =
-                            match gix_index_unconflicted_image_blob_bytes_optional(&repo, path)? {
-                                IndexUnconflictedBlob::Present(bytes) => Some(bytes),
-                                IndexUnconflictedBlob::Missing => None,
-                                IndexUnconflictedBlob::Unmerged => {
-                                    let ours =
-                                        gix_index_stage_image_blob_bytes_optional(&repo, path, 2)?;
-                                    let theirs =
-                                        gix_index_stage_image_blob_bytes_optional(&repo, path, 3)?;
-                                    return Ok(Some(FileDiffImage {
-                                        path: path.clone(),
-                                        old: ours,
-                                        new: theirs,
-                                    }));
-                                }
-                            };
-                        let new =
-                            read_worktree_image_file_bytes_optional(&self.spec.workdir, path)?;
+                        let old = match gix_index_unconflicted_image_blob_bytes_optional(
+                            &repo, &repo_path,
+                        )? {
+                            IndexUnconflictedBlob::Present(bytes) => Some(bytes),
+                            IndexUnconflictedBlob::Missing => None,
+                            IndexUnconflictedBlob::Unmerged => {
+                                let ours = gix_index_stage_image_blob_bytes_optional(
+                                    &repo, &repo_path, 2,
+                                )?;
+                                let theirs = gix_index_stage_image_blob_bytes_optional(
+                                    &repo, &repo_path, 3,
+                                )?;
+                                return Ok(Some(FileDiffImage {
+                                    path: path.clone(),
+                                    old: ours,
+                                    new: theirs,
+                                }));
+                            }
+                        };
+                        let new = read_worktree_image_file_bytes_optional(
+                            &self.spec.workdir,
+                            &repo_path,
+                        )?;
                         (old, new)
                     }
                     DiffArea::Staged => {
-                        let old = gix_revision_path_image_blob_bytes_optional(&repo, "HEAD", path)?;
-                        let new =
-                            match gix_index_unconflicted_image_blob_bytes_optional(&repo, path)? {
-                                IndexUnconflictedBlob::Present(bytes) => Some(bytes),
-                                IndexUnconflictedBlob::Missing => None,
-                                IndexUnconflictedBlob::Unmerged => {
-                                    gix_index_stage_image_blob_bytes_optional(&repo, path, 2)?.or(
-                                        gix_index_stage_image_blob_bytes_optional(&repo, path, 3)?,
-                                    )
-                                }
-                            };
+                        let old =
+                            gix_revision_path_image_blob_bytes_optional(&repo, "HEAD", &repo_path)?;
+                        let new = match gix_index_unconflicted_image_blob_bytes_optional(
+                            &repo, &repo_path,
+                        )? {
+                            IndexUnconflictedBlob::Present(bytes) => Some(bytes),
+                            IndexUnconflictedBlob::Missing => None,
+                            IndexUnconflictedBlob::Unmerged => {
+                                gix_index_stage_image_blob_bytes_optional(&repo, &repo_path, 2)?.or(
+                                    gix_index_stage_image_blob_bytes_optional(
+                                        &repo, &repo_path, 3,
+                                    )?,
+                                )
+                            }
+                        };
                         (old, new)
                     }
                 };
@@ -570,9 +587,10 @@ impl GixRepo {
         }
 
         let repo = self._repo.to_thread_local();
+        let repo_path = to_repo_path(path, &self.spec.workdir)?;
         Ok(Some(conflict_file_stages_from_stage_data(
-            path,
-            gix_index_conflict_stage_data(&repo, path)?,
+            &repo_path,
+            gix_index_conflict_stage_data(&repo, &repo_path)?,
         )))
     }
 
@@ -710,18 +728,45 @@ fn conflict_file_stages_from_stage_data(
     }
 }
 
-fn to_repo_path(path: &Path, workdir: &Path) -> Result<std::path::PathBuf> {
-    if path.is_absolute() {
-        let relative = path.strip_prefix(workdir).map_err(|_| {
-            Error::new(ErrorKind::Backend(format!(
-                "path '{}' is outside repository workdir '{}'",
-                path.display(),
-                workdir.display()
-            )))
-        })?;
-        Ok(relative.to_path_buf())
-    } else {
-        Ok(path.to_path_buf())
+fn to_repo_path(path: &Path, workdir: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    if let Ok(relative) = path.strip_prefix(workdir) {
+        return Ok(relative.to_path_buf());
+    }
+
+    if let Some(normalized_path) = canonicalize_existing_path_prefix(path)
+        && let Ok(relative) = normalized_path.strip_prefix(workdir) {
+            return Ok(relative.to_path_buf());
+        }
+
+    Err(Error::new(ErrorKind::Backend(format!(
+        "path '{}' is outside repository workdir '{}'",
+        path.display(),
+        workdir.display()
+    ))))
+}
+
+fn canonicalize_existing_path_prefix(path: &Path) -> Option<PathBuf> {
+    let mut missing_components = Vec::new();
+    let mut current = path;
+
+    loop {
+        match current.canonicalize() {
+            Ok(canonical) => {
+                let mut normalized = strip_windows_verbatim_prefix(canonical);
+                for component in missing_components.iter().rev() {
+                    normalized.push(component);
+                }
+                return Some(normalized);
+            }
+            Err(_) => {
+                missing_components.push(current.file_name()?.to_owned());
+                current = current.parent()?;
+            }
+        }
     }
 }
 

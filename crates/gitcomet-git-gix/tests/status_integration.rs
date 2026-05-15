@@ -17,7 +17,10 @@ use std::thread;
 #[cfg(windows)]
 use std::time::{Duration, Instant};
 #[cfg(unix)]
-use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+use std::{
+    fs::Permissions,
+    os::unix::fs::{PermissionsExt, symlink},
+};
 
 fn read_file_diff_text_source(source: Option<&FileDiffTextSource>) -> Option<String> {
     source.map(|source| {
@@ -2180,7 +2183,57 @@ fn diff_working_tree_with_absolute_file_path_reads_current_file() {
         })
         .unwrap()
         .expect("image diff for absolute path");
-    assert_eq!(image.old, None);
+    assert_eq!(image.old.as_deref(), Some("one\n".as_bytes()));
+    assert_eq!(image.new.as_deref(), Some("one\ntwo\n".as_bytes()));
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_working_tree_with_absolute_file_path_through_symlinked_repo_reads_current_file() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let repo_alias = dir.path().join("repo-alias");
+    fs::create_dir_all(&repo).unwrap();
+    symlink(&repo, &repo_alias).unwrap();
+
+    run_git(&repo, &["init"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+
+    write(&repo, "a.txt", "one\n");
+    run_git(&repo, &["add", "a.txt"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(&repo, "a.txt", "one\ntwo\n");
+    let absolute = repo_alias.join("a.txt");
+
+    let backend = GixBackend;
+    let opened = backend.open(&repo).unwrap();
+
+    let text = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: absolute.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap()
+        .expect("text diff for symlinked absolute path");
+    assert_file_diff_text_sources(&text, Some("one\n"), Some("one\ntwo\n"));
+
+    let image = opened
+        .diff_file_image(&DiffTarget::WorkingTree {
+            path: absolute,
+            area: DiffArea::Unstaged,
+        })
+        .unwrap()
+        .expect("image diff for symlinked absolute path");
+    assert_eq!(image.old.as_deref(), Some("one\n".as_bytes()));
     assert_eq!(image.new.as_deref(), Some("one\ntwo\n".as_bytes()));
 }
 
