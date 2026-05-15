@@ -206,7 +206,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(uname -m)" = "arm64"
-          rustc -vV | grep -q '^host: aarch64-apple-darwin$'
+          rust_host="$(rustc -vV | sed -n 's/^host: //p')"
+          test "$rust_host" = "aarch64-apple-darwin"
       - name: Run headless test suite
         run: |
           cargo test --workspace \
