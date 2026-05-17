@@ -738,9 +738,10 @@ fn to_repo_path(path: &Path, workdir: &Path) -> Result<PathBuf> {
     }
 
     if let Some(normalized_path) = canonicalize_existing_path_prefix(path)
-        && let Ok(relative) = normalized_path.strip_prefix(workdir) {
-            return Ok(relative.to_path_buf());
-        }
+        && let Ok(relative) = normalized_path.strip_prefix(workdir)
+    {
+        return Ok(relative.to_path_buf());
+    }
 
     Err(Error::new(ErrorKind::Backend(format!(
         "path '{}' is outside repository workdir '{}'",
