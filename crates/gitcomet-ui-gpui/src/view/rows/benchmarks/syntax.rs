@@ -655,6 +655,7 @@ impl FileDiffInlineSyntaxProjectionFixture {
                     document: self.new_document,
                 },
                 visible_rows.as_slice(),
+                super::diff_text::DiffSyntaxMode::HeuristicOnly,
             );
         let mut pending = false;
         let mut h = FxHasher::default();

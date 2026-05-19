@@ -1,9 +1,10 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
+    Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
     FileDiffText, HistoryMode, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
-    RepoSpec, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence,
+    Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -96,6 +97,18 @@ struct LogHeadPageCacheEntry {
     page: LogPage,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LogFileFollowCacheKey {
+    head_oid: Option<gix::ObjectId>,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct LogFileFollowCacheEntry {
+    key: LogFileFollowCacheKey,
+    commits: Arc<Vec<Commit>>,
+}
+
 type LogPagedWalk = gix::traverse::commit::Simple<gix::OdbHandleArc, fn(&gix::oid) -> bool>;
 
 struct LogPagedWalkState {
@@ -117,6 +130,7 @@ struct LogPagedWalkCache {
 }
 
 const LOG_HEAD_PAGE_CACHE_LIMIT: usize = 32;
+const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
 const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 
 pub(crate) struct GixRepo {
@@ -126,6 +140,7 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_head_page_cache: std::sync::Mutex<Vec<LogHeadPageCacheEntry>>,
+    log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
 }
 
@@ -138,6 +153,7 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_head_page_cache: std::sync::Mutex::new(Vec::new()),
+            log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
         }
     }
@@ -563,12 +579,20 @@ impl GitRepository for GixRepo {
         self.list_submodules_impl()
     }
 
+    fn submodule_diff_summary(&self, target: &DiffTarget) -> Result<SubmoduleDiffSummary> {
+        self.submodule_diff_summary_impl(target)
+    }
+
     fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {
         self.check_submodule_add_trust_impl(url, path)
     }
 
     fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
         self.check_submodule_update_trust_impl()
+    }
+
+    fn check_submodule_load_trust(&self, path: &Path) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_load_trust_impl(path)
     }
 
     fn add_submodule_with_output(
@@ -588,6 +612,22 @@ impl GitRepository for GixRepo {
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
         self.update_submodules_with_output_impl(approved_sources)
+    }
+
+    fn load_submodule_with_output(
+        &self,
+        path: &Path,
+        approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        self.load_submodule_with_output_impl(path, approved_sources)
+    }
+
+    fn change_submodule_pointer_with_output(
+        &self,
+        path: &Path,
+        reference: &str,
+    ) -> Result<CommandOutput> {
+        self.change_submodule_pointer_with_output_impl(path, reference)
     }
 
     fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {

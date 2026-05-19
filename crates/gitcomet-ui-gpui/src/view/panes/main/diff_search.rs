@@ -364,6 +364,9 @@ impl MainPaneView {
         std::path::PathBuf,
         Option<gitcomet_core::domain::FileConflictKind>,
     )> {
+        if self.is_inline_submodule_diff_active() {
+            return None;
+        }
         let repo = self.active_repo()?;
         let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
             return None;
@@ -505,6 +508,7 @@ impl MainPaneView {
         } else {
             if self.diff_view == DiffViewMode::Inline
                 && !self.is_file_diff_view_active()
+                && !self.is_collapsed_diff_projection_active()
                 && self.diff_search_scan_inline_patch_diff_with_needle(query)
             {
                 return;
@@ -562,7 +566,7 @@ impl MainPaneView {
         &mut self,
         query: AsciiCaseInsensitiveNeedle<'_>,
     ) -> bool {
-        let diff = match self.active_repo().map(|repo| &repo.diff_state.diff) {
+        let diff = match self.rendered_patch_diff_loadable() {
             Some(Loadable::Ready(diff)) => Arc::clone(diff),
             _ => return false,
         };
@@ -665,7 +669,12 @@ impl MainPaneView {
         let Some((left, right)) = provider.split_row_texts(mapped_ix) else {
             return false;
         };
-        diff_search_split_row_texts_match_query(query, left, right, expanded_tabs)
+        diff_search_split_row_texts_match_query(
+            query,
+            left.as_ref().map(|text| text.as_ref()),
+            right.as_ref().map(|text| text.as_ref()),
+            expanded_tabs,
+        )
     }
 
     fn diff_search_file_diff_inline_visible_row_matches_query(
@@ -696,11 +705,12 @@ impl MainPaneView {
             || self.active_conflict_target().is_some()
             || self.diff_view != DiffViewMode::Inline
             || self.is_file_diff_view_active()
+            || self.is_collapsed_diff_projection_active()
         {
             return false;
         }
 
-        let Some(diff) = self.active_repo().map(|repo| &repo.diff_state.diff) else {
+        let Some(diff) = self.rendered_patch_diff_loadable() else {
             return false;
         };
         let Loadable::Ready(diff) = diff else {

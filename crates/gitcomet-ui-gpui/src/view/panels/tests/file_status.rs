@@ -560,7 +560,7 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                     pane.worktree_preview,
                     gitcomet_state::model::Loadable::Ready(3)
                 )
-                && pane.worktree_preview_text.is_empty()
+                && pane.worktree_preview_text.as_ref() == "one\ntwo\n"
         },
         |pane| {
             format!(
@@ -645,6 +645,7 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
                     files: vec![gitcomet_core::domain::CommitFileChange {
                         path: file_rel.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Deleted,
+                        is_submodule: false,
                     }],
                 },
             ));
@@ -673,7 +674,7 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
                     pane.worktree_preview,
                     gitcomet_state::model::Loadable::Ready(2)
                 )
-                && pane.worktree_preview_text.is_empty()
+                && pane.worktree_preview_text.as_ref() == "{\"removed\":true}\n"
         },
         |pane| {
             format!(
@@ -1591,6 +1592,7 @@ fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
                     files: vec![gitcomet_core::domain::CommitFileChange {
                         path: added_path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Added,
+                        is_submodule: false,
                     }],
                 },
             ));
@@ -1707,6 +1709,7 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
                         .map(|(path, kind)| gitcomet_core::domain::CommitFileChange {
                             path: path.clone(),
                             kind: *kind,
+                            is_submodule: false,
                         })
                         .collect(),
                 },
@@ -1791,6 +1794,7 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
         .map(|ix| gitcomet_core::domain::CommitFileChange {
             path: std::path::PathBuf::from(format!("src/commit_details/dir_{ix}/file_{ix}.rs")),
             kind: gitcomet_core::domain::FileStatusKind::Modified,
+            is_submodule: false,
         })
         .collect::<Vec<_>>();
 
@@ -1878,6 +1882,7 @@ fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAp
         .map(|ix| gitcomet_core::domain::CommitFileChange {
             path: std::path::PathBuf::from(format!("src/commit_zoom/dir_{ix}/file_{ix}.rs")),
             kind: gitcomet_core::domain::FileStatusKind::Modified,
+            is_submodule: false,
         })
         .collect::<Vec<_>>();
 
@@ -2012,12 +2017,14 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                                 "history/really_long_commit_directory_name/files/commit_file_alpha.rs",
                             ),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            is_submodule: false,
                         },
                         gitcomet_core::domain::CommitFileChange {
                             path: std::path::PathBuf::from(
                                 "history/dir/another_super_long_commit_directory_name/commit_file_beta.rs",
                             ),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            is_submodule: false,
                         },
                     ],
                 },

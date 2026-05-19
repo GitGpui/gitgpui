@@ -10,7 +10,6 @@ mod create_branch;
 mod create_branch_from_ref_prompt;
 mod create_tag_prompt;
 mod delete_remote_branch_confirm;
-mod diff_hunks;
 mod discard_changes_confirm;
 mod file_history;
 mod fingerprint;
@@ -30,6 +29,7 @@ mod search_inputs;
 mod stash_drop_confirm;
 mod stash_prompt;
 mod submodule_add_prompt;
+mod submodule_change_pointer_prompt;
 mod submodule_open_picker;
 mod submodule_remove_confirm;
 mod submodule_remove_picker;
@@ -99,7 +99,6 @@ const DIALOG_380_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(380.0);
 const DIALOG_420_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(420.0);
 const DIALOG_440_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(440.0);
 const DIALOG_460_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(460.0);
-const DIALOG_520_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(520.0);
 const DIALOG_540_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(540.0);
 const DIALOG_640_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(640.0);
 const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(200.0);
@@ -113,6 +112,7 @@ pub(in super::super) struct PopoverHost {
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    diff_content_mode: DiffContentMode,
     _ui_model_subscription: gpui::Subscription,
     _clone_repo_url_input_subscription: gpui::Subscription,
     _clone_repo_parent_dir_input_subscription: gpui::Subscription,
@@ -121,6 +121,7 @@ pub(in super::super) struct PopoverHost {
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _create_branch_input_subscription: gpui::Subscription,
     _stash_message_input_subscription: gpui::Subscription,
+    _submodule_ref_input_subscription: gpui::Subscription,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
@@ -141,7 +142,6 @@ pub(in super::super) struct PopoverHost {
     file_history_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
     submodule_picker_search_input: Option<Entity<components::TextInput>>,
-    diff_hunk_picker_search_input: Option<Entity<components::TextInput>>,
     picker_prompt_scroll: ScrollHandle,
 
     clone_repo_url_input: Entity<components::TextInput>,
@@ -186,6 +186,7 @@ pub(in super::super) struct PopoverHost {
     worktree_ref_input: Entity<components::TextInput>,
     submodule_url_input: Entity<components::TextInput>,
     submodule_path_input: Entity<components::TextInput>,
+    submodule_ref_input: Entity<components::TextInput>,
     submodule_branch_input: Entity<components::TextInput>,
     submodule_name_input: Entity<components::TextInput>,
     submodule_add_advanced_expanded: bool,
@@ -255,6 +256,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
         PopoverKind::PullPicker
             | PopoverKind::PushPicker
             | PopoverKind::HistoryBranchFilter { .. }
+            | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
             | PopoverKind::DiffHunkMenu { .. }
@@ -267,6 +269,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::StatusFileMenu { .. }
             | PopoverKind::BranchMenu { .. }
             | PopoverKind::BranchSectionMenu { .. }
+            | PopoverKind::SubmoduleInnerDiffMenu { .. }
             | PopoverKind::Repo {
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { .. }),
                 ..
@@ -322,6 +325,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
             kind:
                 RepoPopoverKind::Submodule(
                     SubmodulePopoverKind::AddPrompt
+                    | SubmodulePopoverKind::ChangePointerPrompt { .. }
                     | SubmodulePopoverKind::TrustConfirm
                     | SubmodulePopoverKind::OpenPicker
                     | SubmodulePopoverKind::RemovePicker
@@ -337,6 +341,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker => Corner::TopRight,
         _ => Corner::TopLeft,
@@ -399,6 +404,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         } => Some(DIALOG_640_WIDTH),
         PopoverKind::Repo {
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
+            ..
+        } => Some(DIALOG_420_WIDTH),
+        PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Worktree(
                     WorktreePopoverKind::OpenPicker | WorktreePopoverKind::RemovePicker,
@@ -413,7 +422,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         }
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
-        PopoverKind::DiffHunks => Some(DIALOG_520_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
@@ -422,6 +430,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
+        | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::Repo {
             kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { .. }),
             ..
@@ -442,6 +451,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::CommitFileMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::ChangeTrackingSettings => Some(CHANGE_TRACKING_MENU_WIDTH),
@@ -522,6 +532,7 @@ impl PopoverHost {
         timezone: Timezone,
         show_timezone: bool,
         change_tracking_view: ChangeTrackingView,
+        diff_content_mode: DiffContentMode,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
@@ -829,6 +840,20 @@ impl PopoverHost {
             )
         });
 
+        let submodule_ref_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "branch-or-commit".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let submodule_name_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -856,6 +881,39 @@ impl PopoverHost {
                 cx,
             )
         });
+
+        let submodule_ref_input_subscription = cx.observe_in(
+            &submodule_ref_input,
+            window,
+            move |this, input, window, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(
+                    this.popover,
+                    Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Submodule(
+                            SubmodulePopoverKind::ChangePointerPrompt { .. }
+                        ),
+                        ..
+                    })
+                ) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.dismiss_inline_popover(window, cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_submodule_change_pointer(window, cx);
+                    return;
+                }
+
+                cx.notify();
+            },
+        );
 
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
         let prompt_tab_group_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
@@ -902,6 +960,7 @@ impl PopoverHost {
             timezone,
             show_timezone,
             change_tracking_view,
+            diff_content_mode,
             _ui_model_subscription: subscription,
             _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
             _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
@@ -910,6 +969,7 @@ impl PopoverHost {
             _branch_picker_search_input_subscription: None,
             _create_branch_input_subscription: create_branch_input_subscription,
             _stash_message_input_subscription: stash_message_input_subscription,
+            _submodule_ref_input_subscription: submodule_ref_input_subscription,
             notify_fingerprint: 0,
             root_view,
             tooltip_host,
@@ -928,7 +988,6 @@ impl PopoverHost {
             file_history_search_input: None,
             worktree_picker_search_input: None,
             submodule_picker_search_input: None,
-            diff_hunk_picker_search_input: None,
             picker_prompt_scroll: ScrollHandle::new(),
             clone_repo_url_input,
             clone_repo_parent_dir_input,
@@ -972,6 +1031,7 @@ impl PopoverHost {
             worktree_ref_input,
             submodule_url_input,
             submodule_path_input,
+            submodule_ref_input,
             submodule_branch_input,
             submodule_name_input,
             submodule_add_advanced_expanded: false,
@@ -1010,6 +1070,8 @@ impl PopoverHost {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.submodule_path_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_ref_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
         self.submodule_branch_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.submodule_name_input
@@ -1034,9 +1096,6 @@ impl PopoverHost {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         if let Some(input) = &self.submodule_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.diff_hunk_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
 
@@ -1242,6 +1301,18 @@ impl PopoverHost {
                 .read_with(cx, |input, _| !input.text().trim().is_empty())
     }
 
+    fn can_submit_submodule_change_pointer(&self, cx: &mut gpui::Context<Self>) -> bool {
+        matches!(
+            self.popover,
+            Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
+                ..
+            })
+        ) && self
+            .submodule_ref_input
+            .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
     fn submit_create_tag(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(PopoverKind::CreateTagPrompt { repo_id, target }) = self.popover.clone() else {
             return;
@@ -1281,6 +1352,34 @@ impl PopoverHost {
         let dest = std::path::PathBuf::from(parent).join(repo_name);
         self.store.dispatch(Msg::CloneRepo { url, dest });
         self.close_popover(cx);
+    }
+
+    fn submit_submodule_change_pointer(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { path }),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+
+        let reference = self
+            .submodule_ref_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if reference.is_empty() {
+            return;
+        }
+
+        self.store.dispatch(Msg::ChangeSubmodulePointer {
+            repo_id,
+            path,
+            reference,
+        });
+        self.dismiss_inline_popover(window, cx);
     }
 
     fn can_submit_create_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
@@ -1647,6 +1746,22 @@ impl PopoverHost {
                     window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
+                    kind:
+                        RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
+                    ..
+                } => {
+                    let theme = self.theme;
+                    self.submodule_ref_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .submodule_ref_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
+                PopoverKind::Repo {
                     kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
                     ..
                 } => {}
@@ -1693,9 +1808,6 @@ impl PopoverHost {
                         .push_upstream_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
-                }
-                PopoverKind::DiffHunks => {
-                    let _ = self.ensure_diff_hunk_picker_search_input(window, cx);
                 }
                 _ => {}
             }
@@ -1806,6 +1918,21 @@ impl PopoverHost {
 
         self.change_tracking_view = next;
         if matches!(self.popover, Some(PopoverKind::ChangeTrackingSettings)) {
+            cx.notify();
+        }
+    }
+
+    pub(in super::super) fn sync_diff_content_mode(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_content_mode == next {
+            return;
+        }
+
+        self.diff_content_mode = next;
+        if matches!(self.popover, Some(PopoverKind::DiffContentModeSettings)) {
             cx.notify();
         }
     }
@@ -1992,6 +2119,9 @@ impl PopoverHost {
                     SubmodulePopoverKind::AddPrompt => {
                         submodule_add_prompt::panel(self, repo_id, cx)
                     }
+                    SubmodulePopoverKind::ChangePointerPrompt { path } => {
+                        submodule_change_pointer_prompt::panel(self, repo_id, &path, cx)
+                    }
                     SubmodulePopoverKind::TrustConfirm => {
                         submodule_trust_confirm::panel(self, repo_id, cx)
                     }
@@ -2050,13 +2180,15 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
             }
+            PopoverKind::DiffContentModeSettings => {
+                self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
+            }
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }
             PopoverKind::UiScalePicker => self.context_menu_view(PopoverKind::UiScalePicker, cx),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
-            PopoverKind::DiffHunks => diff_hunks::panel(self, cx),
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }
@@ -2188,6 +2320,18 @@ impl PopoverHost {
                     repo_id,
                     commit_id,
                     path,
+                },
+                cx,
+            ),
+            PopoverKind::SubmoduleInnerDiffMenu {
+                repo_id,
+                submodule_repo_path,
+                target,
+            } => self.context_menu_view(
+                PopoverKind::SubmoduleInnerDiffMenu {
+                    repo_id,
+                    submodule_repo_path,
+                    target,
                 },
                 cx,
             ),

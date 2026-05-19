@@ -989,6 +989,15 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 commit_id.hash(h);
                 path.hash(h);
             }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                from_commit_id.hash(h);
+                to_commit_id.hash(h);
+                path.hash(h);
+            }
         }
     }
 

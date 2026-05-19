@@ -1,6 +1,19 @@
 (comment) @comment
 
-(string) @string
+(document
+  (string) @string)
+
+(document
+  (string) @property.json_key
+  .
+  (ERROR) @_json_key_colon
+  (#eq? @_json_key_colon ":"))
+
+(pair
+  value: (string) @string)
+
+(array
+  (string) @string)
 
 (escape_sequence) @string.escape
 

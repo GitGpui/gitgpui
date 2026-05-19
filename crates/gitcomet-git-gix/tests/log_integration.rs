@@ -1342,6 +1342,7 @@ fn commit_details_reports_root_and_rename_file_changes() {
         vec![gitcomet_core::domain::CommitFileChange {
             path: Path::new("old name.txt").to_path_buf(),
             kind: FileStatusKind::Added,
+            is_submodule: false,
         }]
     );
 
@@ -1353,6 +1354,7 @@ fn commit_details_reports_root_and_rename_file_changes() {
         vec![gitcomet_core::domain::CommitFileChange {
             path: Path::new("new name.txt").to_path_buf(),
             kind: FileStatusKind::Renamed,
+            is_submodule: false,
         }]
     );
 }

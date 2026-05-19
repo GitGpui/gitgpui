@@ -27,7 +27,8 @@ const TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_PERCENT: usize = 80;
 const TS_LINE_TOKEN_CACHE_MAX_ENTRIES: usize = 256;
 // Extreme multi-megabyte documents are better served by the existing visible-line
 // heuristic fallback than by building a full prepared tree-sitter document.
-const TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
+pub(in crate::view) const PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
+const TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES: usize = PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES;
 const TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES: usize = 64;
 const TS_PENDING_PARSE_REQUEST_MAX_ENTRIES: usize = 8;
 #[cfg(any(test, feature = "syntax-shell"))]
@@ -1090,6 +1091,50 @@ mod tests {
             assert!(t.range.start <= t.range.end);
             assert!(t.range.end <= json_line.len());
         }
+    }
+
+    #[test]
+    fn json_string_value_with_underscores_stays_one_string_token() {
+        let line = r#"  "transition_policy": "adjacent_and_first","#;
+        let key_start = line
+            .find(r#""transition_policy""#)
+            .expect("fixture should contain JSON key");
+        let key_end = key_start + r#""transition_policy""#.len();
+        let value_start = line
+            .find(r#""adjacent_and_first""#)
+            .expect("fixture should contain JSON string value");
+        let value_end = value_start + r#""adjacent_and_first""#.len();
+
+        let tokens = syntax_tokens_for_line(line, DiffSyntaxLanguage::Json, DiffSyntaxMode::Auto);
+
+        assert!(
+            tokens.iter().any(|token| {
+                token.range == (key_start..key_end) && token.kind == SyntaxTokenKind::Property
+            }),
+            "JSON key should be highlighted as one property token: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|token| {
+                token.range == (value_start..value_end) && token.kind == SyntaxTokenKind::String
+            }),
+            "JSON value should be highlighted as one string token: {tokens:?}"
+        );
+        assert!(
+            !tokens.iter().any(|token| {
+                token.range.start < key_end
+                    && key_start < token.range.end
+                    && token.kind != SyntaxTokenKind::Property
+            }),
+            "no non-property token should overlap the JSON key: {tokens:?}"
+        );
+        assert!(
+            !tokens.iter().any(|token| {
+                token.range.start < value_end
+                    && value_start < token.range.end
+                    && token.kind != SyntaxTokenKind::String
+            }),
+            "no non-string token should overlap the JSON value: {tokens:?}"
+        );
     }
 
     #[test]

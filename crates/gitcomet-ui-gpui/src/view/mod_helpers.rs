@@ -586,7 +586,7 @@ pub(super) struct CommitDetailsDelayState {
     pub(super) show_loading: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum StatusSection {
     CombinedUnstaged,
     Untracked,
@@ -618,10 +618,16 @@ enum StatusSectionFilter {
     ExcludeUntracked,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct StatusSectionEntries<'a> {
     entries: &'a [FileStatus],
-    filter: StatusSectionFilter,
+    indexes: StatusSectionIndexes,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StatusSectionIndexes {
+    All,
+    Filtered(Vec<usize>),
 }
 
 impl<'a> StatusSectionEntries<'a> {
@@ -640,44 +646,81 @@ impl<'a> StatusSectionEntries<'a> {
             ),
             StatusSection::Staged => (repo.staged_status_entries()?, StatusSectionFilter::All),
         };
-        Some(Self { entries, filter })
+        let indexes = match filter {
+            StatusSectionFilter::All => StatusSectionIndexes::All,
+            StatusSectionFilter::UntrackedOnly | StatusSectionFilter::ExcludeUntracked => {
+                StatusSectionIndexes::Filtered(
+                    entries
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ix, entry)| {
+                            status_section_filter_matches(filter, entry).then_some(ix)
+                        })
+                        .collect(),
+                )
+            }
+        };
+        Some(Self { entries, indexes })
     }
 
-    pub(super) fn iter(self) -> StatusSectionIter<'a> {
-        StatusSectionIter {
-            inner: self.entries.iter(),
-            filter: self.filter,
+    pub(super) fn iter(&self) -> StatusSectionIter<'a, '_> {
+        let inner = match &self.indexes {
+            StatusSectionIndexes::All => StatusSectionIterInner::All(self.entries.iter()),
+            StatusSectionIndexes::Filtered(indexes) => StatusSectionIterInner::Filtered {
+                entries: self.entries,
+                indexes: indexes.iter(),
+            },
+        };
+        StatusSectionIter { inner }
+    }
+
+    pub(super) fn len(&self) -> usize {
+        match &self.indexes {
+            StatusSectionIndexes::All => self.entries.len(),
+            StatusSectionIndexes::Filtered(indexes) => indexes.len(),
         }
     }
 
-    pub(super) fn len(self) -> usize {
-        self.iter().count()
+    pub(super) fn get(&self, index: usize) -> Option<&'a FileStatus> {
+        match &self.indexes {
+            StatusSectionIndexes::All => self.entries.get(index),
+            StatusSectionIndexes::Filtered(indexes) => indexes
+                .get(index)
+                .and_then(|source_ix| self.entries.get(*source_ix)),
+        }
     }
 
-    pub(super) fn get(self, index: usize) -> Option<&'a FileStatus> {
-        self.iter().nth(index)
-    }
-
-    pub(super) fn path_vec(self) -> Vec<std::path::PathBuf> {
+    pub(super) fn path_vec(&self) -> Vec<std::path::PathBuf> {
         self.iter().map(|entry| entry.path.clone()).collect()
     }
 
-    pub(super) fn contains_path(self, path: &std::path::Path) -> bool {
+    pub(super) fn contains_path(&self, path: &std::path::Path) -> bool {
         self.iter().any(|entry| entry.path == path)
     }
 }
 
-pub(super) struct StatusSectionIter<'a> {
-    inner: std::slice::Iter<'a, FileStatus>,
-    filter: StatusSectionFilter,
+pub(super) struct StatusSectionIter<'a, 'indexes> {
+    inner: StatusSectionIterInner<'a, 'indexes>,
 }
 
-impl<'a> Iterator for StatusSectionIter<'a> {
+enum StatusSectionIterInner<'a, 'indexes> {
+    All(std::slice::Iter<'a, FileStatus>),
+    Filtered {
+        entries: &'a [FileStatus],
+        indexes: std::slice::Iter<'indexes, usize>,
+    },
+}
+
+impl<'a, 'indexes> Iterator for StatusSectionIter<'a, 'indexes> {
     type Item = &'a FileStatus;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .find(|entry| status_section_filter_matches(self.filter, entry))
+        match &mut self.inner {
+            StatusSectionIterInner::All(iter) => iter.next(),
+            StatusSectionIterInner::Filtered { entries, indexes } => {
+                indexes.next().and_then(|ix| entries.get(*ix))
+            }
+        }
     }
 }
 
@@ -2289,7 +2332,6 @@ pub(super) enum PopoverKind {
     PullPicker,
     PushPicker,
     AppMenu,
-    DiffHunks,
     DiffHunkMenu {
         repo_id: RepoId,
         src_ix: usize,
@@ -2350,6 +2392,11 @@ pub(super) enum PopoverKind {
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
+    SubmoduleInnerDiffMenu {
+        repo_id: RepoId,
+        submodule_repo_path: std::path::PathBuf,
+        target: DiffTarget,
+    },
     TagMenu {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -2357,6 +2404,7 @@ pub(super) enum PopoverKind {
     HistoryBranchFilter {
         repo_id: RepoId,
     },
+    DiffContentModeSettings,
     ChangeTrackingSettings,
     UiScalePicker,
 }
@@ -2398,6 +2446,7 @@ pub(super) enum SubmodulePopoverKind {
     SectionMenu,
     Menu { path: std::path::PathBuf },
     AddPrompt,
+    ChangePointerPrompt { path: std::path::PathBuf },
     TrustConfirm,
     OpenPicker,
     RemovePicker,
@@ -2567,6 +2616,28 @@ pub(super) enum DeferredRepoBootstrap {
     OpenRepo(std::path::PathBuf),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SubmoduleDiffBootstrap {
+    pub(super) repo_path: std::path::PathBuf,
+    pub(super) target: DiffTarget,
+}
+
+impl SubmoduleDiffBootstrap {
+    pub(super) fn new(repo_path: std::path::PathBuf, target: DiffTarget) -> Self {
+        let repo_path = normalize_bootstrap_repo_path(repo_path);
+        let target = normalize_bootstrap_diff_target(&repo_path, target);
+        Self { repo_path, target }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum SubmoduleDiffBootstrapAction {
+    OpenRepo(std::path::PathBuf),
+    SetActiveRepo(RepoId),
+    SelectDiff { repo_id: RepoId, target: DiffTarget },
+    Complete,
+}
+
 pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
     let path = if path.is_relative() {
         std::env::current_dir()
@@ -2576,6 +2647,46 @@ pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::pa
         path
     };
     canonicalize_path(path)
+}
+
+fn normalize_bootstrap_target_path(
+    repo_path: &std::path::Path,
+    target_path: std::path::PathBuf,
+) -> std::path::PathBuf {
+    if target_path.is_relative() {
+        return target_path;
+    }
+
+    if let Ok(relative) = target_path.strip_prefix(repo_path) {
+        return relative.to_path_buf();
+    }
+
+    canonicalize_path(target_path.clone())
+        .strip_prefix(repo_path)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(target_path)
+}
+
+fn normalize_bootstrap_diff_target(repo_path: &std::path::Path, target: DiffTarget) -> DiffTarget {
+    match target {
+        DiffTarget::WorkingTree { path, area } => DiffTarget::WorkingTree {
+            path: normalize_bootstrap_target_path(repo_path, path),
+            area,
+        },
+        DiffTarget::Commit { commit_id, path } => DiffTarget::Commit {
+            commit_id,
+            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        },
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path,
+        } => DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        },
+    }
 }
 
 pub(super) fn focused_mergetool_target_path(
@@ -2646,6 +2757,38 @@ pub(super) fn focused_mergetool_bootstrap_action(
     }
 
     Some(FocusedMergetoolBootstrapAction::Complete)
+}
+
+pub(super) fn submodule_diff_bootstrap_action(
+    state: &AppState,
+    bootstrap: &SubmoduleDiffBootstrap,
+) -> Option<SubmoduleDiffBootstrapAction> {
+    let Some(repo) = state
+        .repos
+        .iter()
+        .find(|r| r.spec.workdir == bootstrap.repo_path)
+    else {
+        return Some(SubmoduleDiffBootstrapAction::OpenRepo(
+            bootstrap.repo_path.clone(),
+        ));
+    };
+
+    if state.active_repo != Some(repo.id) {
+        return Some(SubmoduleDiffBootstrapAction::SetActiveRepo(repo.id));
+    }
+
+    if !matches!(repo.open, Loadable::Ready(())) {
+        return None;
+    }
+
+    if repo.diff_state.diff_target.as_ref() != Some(&bootstrap.target) {
+        return Some(SubmoduleDiffBootstrapAction::SelectDiff {
+            repo_id: repo.id,
+            target: bootstrap.target.clone(),
+        });
+    }
+
+    Some(SubmoduleDiffBootstrapAction::Complete)
 }
 
 pub(super) fn renders_full_chrome(view_mode: GitCometViewMode) -> bool {
@@ -2838,6 +2981,41 @@ impl DiffScrollSync {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DiffContentMode {
+    #[default]
+    Full,
+    Collapsed,
+}
+
+impl DiffContentMode {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Full => "content",
+            Self::Collapsed => "changed_lines_only",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "content" => Some(Self::Full),
+            "changed_lines_only" => Some(Self::Collapsed),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Full => "Full",
+            Self::Collapsed => "Collapsed",
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        self.label()
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2861,6 +3039,7 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
+    pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Arc<gpui::Image>,
@@ -2874,6 +3053,7 @@ pub struct GitCometView {
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
     pub(super) diff_scroll_sync: DiffScrollSync,
+    pub(super) diff_content_mode: DiffContentMode,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,

@@ -5,6 +5,7 @@ use super::diff_text::{
     syntax_highlights_for_streamed_line_slice_heuristic,
 };
 use super::*;
+use crate::view::panes::main::DiffHorizontalScrollColumn;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
@@ -20,13 +21,15 @@ use std::sync::OnceLock;
 const DIFF_FONT_SCALE: f32 = 0.80;
 
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
-const STREAMED_DIFF_TEXT_MIN_BYTES: usize = 64 * 1024;
+const STREAMED_DIFF_TEXT_MIN_BYTES: usize = LARGE_DIFF_TEXT_MIN_BYTES;
 const STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS: usize = 64;
 const STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE: &str = "0000000000";
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 44.0;
+const DIFF_ROW_HORIZONTAL_PADDING_PX: f32 = 8.0;
 const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
+const DIFF_ROW_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
 
 type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
@@ -71,6 +74,16 @@ fn hash_rgba(hasher: &mut FxHasher, color: gpui::Rgba) {
 
 fn hash_shared_string(hasher: &mut FxHasher, text: &SharedString) {
     text.as_ref().hash(hasher);
+}
+
+fn row_bg_fill_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(
+        bounds.origin,
+        size(
+            bounds.size.width,
+            bounds.size.height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX),
+        ),
+    )
 }
 
 fn inline_row_canvas_revision_key(
@@ -581,10 +594,36 @@ fn build_streamed_diff_slice_styled_text(
                             ));
                         }
                     }
-                    build_cached_diff_styled_text_from_relative_highlights(
-                        slice_text_ref,
-                        relative.as_slice(),
-                    )
+                    if relative.is_empty() {
+                        match syntax_highlights_for_streamed_line_slice_heuristic(
+                            theme,
+                            &spec.raw_text,
+                            *language,
+                            requested_slice_range.clone(),
+                            resolved_slice_range.clone(),
+                        ) {
+                            Some(highlights) => {
+                                build_cached_diff_styled_text_from_relative_highlights(
+                                    slice_text_ref,
+                                    highlights.as_slice(),
+                                )
+                            }
+                            None => build_cached_diff_styled_text(
+                                theme,
+                                slice_text_ref,
+                                &[],
+                                "",
+                                Some(*language),
+                                rows::DiffSyntaxMode::HeuristicOnly,
+                                None,
+                            ),
+                        }
+                    } else {
+                        build_cached_diff_styled_text_from_relative_highlights(
+                            slice_text_ref,
+                            relative.as_slice(),
+                        )
+                    }
                 }
                 None => build_cached_diff_styled_text(
                     theme,
@@ -684,6 +723,8 @@ pub(super) fn inline_diff_line_row_canvas(
             let y = center_text_y(bounds, line_metrics.line_height);
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
+
+            window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
 
             paint_gutter_text(
                 &old,
@@ -838,9 +879,12 @@ pub(super) fn split_diff_line_row_canvas(
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.left_hitbox);
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.right_hitbox);
 
-            window.paint_quad(fill(prepaint.left_col, left_bg));
-            window.paint_quad(fill(prepaint.sep_bounds, theme.colors.border));
-            window.paint_quad(fill(prepaint.right_col, right_bg));
+            window.paint_quad(fill(row_bg_fill_bounds(prepaint.left_col), left_bg));
+            window.paint_quad(fill(
+                row_bg_fill_bounds(prepaint.sep_bounds),
+                theme.colors.border,
+            ));
+            window.paint_quad(fill(row_bg_fill_bounds(prepaint.right_col), right_bg));
 
             paint_gutter_text(
                 &old,
@@ -1004,7 +1048,7 @@ pub(super) fn patch_split_column_row_canvas(
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
 
-            window.paint_quad(fill(prepaint.bounds, bg));
+            window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
 
             paint_gutter_text(
                 &line_no,
@@ -1439,7 +1483,7 @@ fn center_text_y(bounds: Bounds<Pixels>, line_height: Pixels) -> Pixels {
 }
 
 fn px_2(window: &Window) -> Pixels {
-    window.rem_size() * 0.5
+    crate::ui_scale::design_px_from_window(DIFF_ROW_HORIZONTAL_PADDING_PX, window)
 }
 
 fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
@@ -1448,6 +1492,25 @@ fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
 
 fn diff_row_height(ui_scale_percent: u32) -> Pixels {
     diff_scaled_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
+}
+
+pub(super) fn diff_row_horizontal_padding(ui_scale_percent: u32) -> Pixels {
+    diff_scaled_px(DIFF_ROW_HORIZONTAL_PADDING_PX, ui_scale_percent)
+}
+
+pub(super) fn diff_gutter_total_width(ui_scale_percent: u32) -> Pixels {
+    gutter_cell_total_width(
+        diff_row_horizontal_padding(ui_scale_percent),
+        ui_scale_percent,
+    )
+}
+
+pub(super) fn diff_single_column_text_start(ui_scale_percent: u32) -> Pixels {
+    diff_gutter_total_width(ui_scale_percent) + diff_row_horizontal_padding(ui_scale_percent)
+}
+
+pub(super) fn diff_inline_text_start(ui_scale_percent: u32) -> Pixels {
+    diff_gutter_total_width(ui_scale_percent) * 2.0 + diff_row_horizontal_padding(ui_scale_percent)
 }
 
 fn gutter_cell_total_width(pad: Pixels, ui_scale_percent: u32) -> Pixels {
@@ -1704,10 +1767,13 @@ fn paint_selectable_diff_text(
         if pending_prepared_syntax {
             this.ensure_prepared_syntax_chunk_poll(cx);
         }
-        if required_row_w > this.diff_horizontal_min_width {
-            this.diff_horizontal_min_width = required_row_w;
-            cx.notify();
-        }
+        let column = match region {
+            DiffTextRegion::Inline | DiffTextRegion::SplitLeft => {
+                DiffHorizontalScrollColumn::Primary
+            }
+            DiffTextRegion::SplitRight => DiffHorizontalScrollColumn::SplitRight,
+        };
+        this.record_diff_horizontal_content_width_for_column(column, required_row_w, cx);
     });
 
     if paint_text.is_empty() {
@@ -1845,6 +1911,19 @@ mod tests {
 
     fn test_bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
+
+    #[test]
+    fn row_bg_fill_bounds_overdraws_bottom_without_changing_origin_or_width() {
+        let bounds = test_bounds(4.0, 8.0, 120.0, 20.0);
+        let painted = row_bg_fill_bounds(bounds);
+
+        assert_eq!(painted.origin, bounds.origin);
+        assert_eq!(painted.size.width, bounds.size.width);
+        assert_eq!(
+            painted.size.height,
+            bounds.size.height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX)
+        );
     }
 
     #[test]

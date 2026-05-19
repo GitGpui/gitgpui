@@ -59,7 +59,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let min_width = this.diff_horizontal_min_width;
+        let min_width = this.diff_horizontal_content_width();
         let query = this.diff_search_query_or_empty();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
@@ -218,7 +218,7 @@ impl MainPaneView {
             &MarkdownPreviewRenderContext {
                 theme,
                 bar_color,
-                min_width: this.diff_horizontal_min_width.max(viewport_width),
+                min_width: this.diff_horizontal_content_width().max(viewport_width),
                 editor_font_family,
                 ui_scale_percent,
                 view: Some(cx.entity().clone()),
@@ -268,7 +268,7 @@ impl MainPaneView {
             &MarkdownPreviewRenderContext {
                 theme,
                 bar_color: None,
-                min_width: this.diff_horizontal_min_width.max(viewport_width),
+                min_width: this.diff_horizontal_content_width().max(viewport_width),
                 editor_font_family,
                 ui_scale_percent,
                 view: Some(cx.entity().clone()),
@@ -314,7 +314,7 @@ impl MainPaneView {
             &MarkdownPreviewRenderContext {
                 theme,
                 bar_color: None,
-                min_width: this.diff_horizontal_min_width.max(viewport_width),
+                min_width: this.diff_horizontal_content_width().max(viewport_width),
                 editor_font_family,
                 ui_scale_percent,
                 view: Some(cx.entity().clone()),
@@ -360,7 +360,7 @@ impl MainPaneView {
             &MarkdownPreviewRenderContext {
                 theme,
                 bar_color: None,
-                min_width: this.diff_horizontal_min_width.max(viewport_width),
+                min_width: this.diff_horizontal_content_width().max(viewport_width),
                 editor_font_family,
                 ui_scale_percent,
                 view: Some(cx.entity().clone()),
@@ -378,7 +378,7 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let mut min_width = self.diff_horizontal_min_width;
+        let mut min_width = self.diff_horizontal_content_width();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         for row in range.filter_map(|ix| document.rows.get(ix)) {
             let required = markdown_preview_row_required_width(
@@ -394,10 +394,7 @@ impl MainPaneView {
             }
         }
 
-        if min_width > self.diff_horizontal_min_width {
-            self.diff_horizontal_min_width = min_width;
-            cx.notify();
-        }
+        self.record_diff_horizontal_content_width(min_width, cx);
     }
 }
 

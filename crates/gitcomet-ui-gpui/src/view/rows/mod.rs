@@ -128,7 +128,7 @@ fn commit_file_row_presentation_signature(
     let mut total_path_bytes = 0usize;
     for (ix, file) in files.iter().enumerate() {
         let path_bytes = file.path.as_os_str().as_encoded_bytes();
-        let kind_key = commit_file_kind_visuals(file.kind).kind_key;
+        let kind_key = commit_file_visuals(file).kind_key;
 
         total_path_bytes = total_path_bytes.saturating_add(path_bytes.len());
 
@@ -183,7 +183,7 @@ impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
             .iter()
             .map(|file| CommitFileRowPresentation {
                 label: super::path_display::path_display_shared_fast(&file.path),
-                visuals: commit_file_kind_visuals(file.kind),
+                visuals: commit_file_visuals(file),
             })
             .collect::<Vec<_>>()
             .into();
@@ -303,6 +303,20 @@ pub(in crate::view) const fn commit_file_kind_visuals(
     COMMIT_FILE_KIND_VISUALS[kind as usize]
 }
 
+#[inline]
+fn commit_file_visuals(file: &gitcomet_core::domain::CommitFileChange) -> CommitFileKindVisuals {
+    let base = commit_file_kind_visuals(file.kind);
+    if file.is_submodule {
+        CommitFileKindVisuals {
+            icon: "icons/box.svg",
+            kind_key: base.kind_key | 0x40,
+            tone: base.tone,
+        }
+    } else {
+        base
+    }
+}
+
 thread_local! {
     static LINE_NUMBER_STRINGS: RefCell<Vec<SharedString>> =
         RefCell::new(vec![SharedString::default()]);
@@ -351,8 +365,8 @@ pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage,
-    DiffSyntaxMode, PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument,
-    PreparedDiffSyntaxLine, PreparedDiffSyntaxReparseSeed,
+    DiffSyntaxMode, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, PrepareDiffSyntaxDocumentResult,
+    PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine, PreparedDiffSyntaxReparseSeed,
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
@@ -527,10 +541,12 @@ mod tests {
             CommitFileChange {
                 path: PathBuf::from("src/lib.rs"),
                 kind: FileStatusKind::Modified,
+                is_submodule: false,
             },
             CommitFileChange {
                 path: PathBuf::from("README.md"),
                 kind: FileStatusKind::Added,
+                is_submodule: false,
             },
         ];
 
@@ -540,6 +556,7 @@ mod tests {
             &[CommitFileChange {
                 path: PathBuf::from("should/not/appear.rs"),
                 kind: FileStatusKind::Deleted,
+                is_submodule: false,
             }],
         );
 
@@ -565,6 +582,7 @@ mod tests {
             &[CommitFileChange {
                 path: PathBuf::from("docs/guide.md"),
                 kind: FileStatusKind::Renamed,
+                is_submodule: false,
             }],
         );
 
@@ -590,10 +608,12 @@ mod tests {
             CommitFileChange {
                 path: PathBuf::from("src/lib.rs"),
                 kind: FileStatusKind::Modified,
+                is_submodule: false,
             },
             CommitFileChange {
                 path: PathBuf::from("README.md"),
                 kind: FileStatusKind::Added,
+                is_submodule: false,
             },
         ];
 

@@ -7,7 +7,7 @@ use super::util::{
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
-use gitcomet_core::domain::FileConflictKind;
+use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
 use rustc_hash::FxHashMap as HashMap;
@@ -146,6 +146,31 @@ pub(super) fn update_submodules(
         repo_id,
         approved_sources,
         auth: None,
+    }]
+}
+
+pub(super) fn load_submodule(
+    repo_id: RepoId,
+    path: PathBuf,
+    approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+) -> Vec<Effect> {
+    vec![Effect::LoadSubmodule {
+        repo_id,
+        path,
+        approved_sources,
+        auth: None,
+    }]
+}
+
+pub(super) fn change_submodule_pointer(
+    repo_id: RepoId,
+    path: PathBuf,
+    reference: String,
+) -> Vec<Effect> {
+    vec![Effect::ChangeSubmodulePointer {
+        repo_id,
+        path,
+        reference,
     }]
 }
 
@@ -530,10 +555,12 @@ pub(super) fn commit_finished(
         Ok(()) => {
             repo_state.last_error = None;
             clear_banner = true;
-            repo_state.diff_state.diff_target = None;
+            repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             push_action_log(
@@ -580,10 +607,12 @@ pub(super) fn commit_amend_finished(
         Ok(()) => {
             repo_state.last_error = None;
             clear_banner = true;
-            repo_state.diff_state.diff_target = None;
+            repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             push_action_log(
@@ -640,11 +669,42 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::ApplyPatch { .. }
             | RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules { .. }
+            | RepoCommandKind::LoadSubmodule { .. }
+            | RepoCommandKind::ChangeSubmodulePointer { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
             | RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
     )
+}
+
+fn changed_submodule_path(command: &RepoCommandKind) -> Option<&std::path::Path> {
+    match command {
+        RepoCommandKind::LoadSubmodule { path, .. }
+        | RepoCommandKind::ChangeSubmodulePointer { path, .. } => Some(path.as_path()),
+        _ => None,
+    }
+}
+
+fn selected_submodule_target_changed_by_command(
+    repo_state: &RepoState,
+    command: &RepoCommandKind,
+) -> Option<DiffTarget> {
+    let target = repo_state.diff_state.diff_target.as_ref()?;
+    let DiffTarget::WorkingTree { path, .. } = target else {
+        return None;
+    };
+    if let Some(changed_path) = changed_submodule_path(command) {
+        if path.as_path() != changed_path {
+            return None;
+        }
+    } else if !matches!(command, RepoCommandKind::UpdateSubmodules { .. }) {
+        return None;
+    }
+
+    let summary_is_active = !matches!(repo_state.diff_state.submodule_summary, Loadable::NotLoaded);
+    (summary_is_active || selected_diff_load_plan(repo_state, target).load_submodule_summary)
+        .then(|| target.clone())
 }
 
 pub(super) fn repo_command_finished(
@@ -663,6 +723,8 @@ pub(super) fn repo_command_finished(
         &command,
         RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules { .. }
+            | RepoCommandKind::LoadSubmodule { .. }
+            | RepoCommandKind::ChangeSubmodulePointer { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
@@ -720,10 +782,12 @@ pub(super) fn repo_command_finished(
                     | RepoCommandKind::RebaseAbort
                     | RepoCommandKind::MergeAbort
             ) {
-                repo_state.diff_state.diff_target = None;
+                repo_state.set_diff_target(None);
                 repo_state.diff_state.diff = Loadable::NotLoaded;
                 repo_state.diff_state.diff_file = Loadable::NotLoaded;
                 repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+                repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+                repo_state.diff_state.inline_submodule_diff = None;
                 repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
             }
@@ -751,6 +815,15 @@ pub(super) fn repo_command_finished(
         repo_state.set_worktrees(Loadable::Loading);
         extra_effects.push(Effect::LoadWorktrees { repo_id });
     }
+    if command_succeeded
+        && let Some(target) = selected_submodule_target_changed_by_command(repo_state, &command)
+    {
+        let load_plan = selected_diff_load_plan(repo_state, &target);
+        apply_selected_diff_load_plan_state(repo_state, load_plan);
+        repo_state.diff_state.inline_submodule_diff = None;
+        repo_state.bump_diff_state_rev();
+        extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
+    }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);
         extra_effects.push(Effect::LoadSubmodules { repo_id });
@@ -766,6 +839,8 @@ pub(super) fn repo_command_finished(
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             match conflict_target {

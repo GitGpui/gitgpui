@@ -8,6 +8,7 @@ mod commit_file;
 mod conflict_resolver_chunk;
 mod conflict_resolver_input_row;
 mod conflict_resolver_output;
+mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
@@ -17,6 +18,7 @@ mod remote;
 mod stash;
 mod status_file;
 mod submodule;
+mod submodule_inner_diff;
 mod submodule_section;
 mod tag;
 mod ui_scale_picker;
@@ -261,6 +263,15 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            PopoverKind::SubmoduleInnerDiffMenu {
+                repo_id,
+                submodule_repo_path,
+                target,
+            } => Some(submodule_inner_diff::model(
+                *repo_id,
+                submodule_repo_path,
+                target,
+            )),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 Some(diff_hunk::model(self, *repo_id, *src_ix))
             }
@@ -329,6 +340,7 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(self, *repo_id))
             }
+            PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             _ => None,
@@ -413,6 +425,11 @@ impl PopoverHost {
             ContextMenuAction::OpenRepo { path } => {
                 self.store.dispatch(Msg::OpenRepo(path));
             }
+            ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.open_submodule_inner_diff(path, target, cx);
+                });
+            }
             ContextMenuAction::ExportPatch { repo_id, commit_id } => {
                 cx.stop_propagation();
                 let view = cx.weak_entity();
@@ -469,6 +486,15 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
+            }
+            ContextMenuAction::SetDiffContentMode { mode } => {
+                self.diff_content_mode = mode;
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.set_diff_content_mode_and_persist(mode, cx);
+                    });
+                });
             }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;
@@ -586,6 +612,9 @@ impl PopoverHost {
             }
             ContextMenuAction::UpdateSubmodules { repo_id } => {
                 self.store.dispatch(Msg::UpdateSubmodules { repo_id });
+            }
+            ContextMenuAction::LoadSubmodule { repo_id, path } => {
+                self.store.dispatch(Msg::LoadSubmodule { repo_id, path });
             }
             ContextMenuAction::LoadWorktrees { repo_id } => {
                 self.store.dispatch(Msg::LoadWorktrees { repo_id });

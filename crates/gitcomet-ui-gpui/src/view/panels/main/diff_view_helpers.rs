@@ -2,16 +2,20 @@ use super::*;
 
 impl MainPaneView {
     pub(super) fn diff_panel_title(&self, theme: AppTheme, cx: &gpui::Context<Self>) -> AnyElement {
-        self.active_repo()
-            .and_then(|r| r.diff_state.diff_target.as_ref())
+        self.rendered_diff_target()
             .map(|t| {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
                 {
                     DiffTarget::WorkingTree { path, area } => {
-                        let kind = self.active_repo().and_then(|repo| {
-                            repo.status_entry_for_path(*area, path.as_path())
+                        let kind = if self.is_inline_submodule_diff_active() {
+                            self.selected_inline_submodule_diff_entry()
                                 .map(|entry| entry.kind)
-                        });
+                        } else {
+                            self.active_repo().and_then(|repo| {
+                                repo.status_entry_for_path(*area, path.as_path())
+                                    .map(|entry| entry.kind)
+                            })
+                        };
 
                         let (icon, color) = match kind.unwrap_or(FileStatusKind::Modified) {
                             FileStatusKind::Untracked | FileStatusKind::Added => {
@@ -36,6 +40,22 @@ impl MainPaneView {
                             Some("icons/pencil.svg"),
                             theme.colors.text_muted,
                             "Full diff".into(),
+                        ),
+                    },
+                    DiffTarget::CommitRange {
+                        from_commit_id: _,
+                        to_commit_id: _,
+                        path,
+                    } => match path {
+                        Some(path) => (
+                            Some("icons/swap.svg"),
+                            theme.colors.accent,
+                            self.cached_path_display(path),
+                        ),
+                        None => (
+                            Some("icons/swap.svg"),
+                            theme.colors.accent,
+                            "Commit range".into(),
                         ),
                     },
                 };
@@ -88,6 +108,64 @@ impl MainPaneView {
             .child(label)
     }
 
+    pub(in crate::view) fn collapsed_diff_total_file_stat(&self) -> Option<(usize, usize)> {
+        let (added, removed) = self.diff_file_stats.iter().filter_map(|stat| *stat).fold(
+            (0usize, 0usize),
+            |(added, removed), (next_added, next_removed)| {
+                (
+                    added.saturating_add(next_added),
+                    removed.saturating_add(next_removed),
+                )
+            },
+        );
+
+        (added > 0 || removed > 0).then_some((added, removed))
+    }
+
+    pub(super) fn split_column_header_label(
+        theme: AppTheme,
+        label: &'static str,
+        count: Option<usize>,
+        prefix: char,
+        color: gpui::Rgba,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .min_w(px(0.0))
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(label),
+            )
+            .when(count.is_some_and(|count| count > 0), |this| {
+                let count = count.unwrap_or_default();
+                let debug_selector = match prefix {
+                    '-' => "diff_split_header_removed_stat",
+                    '+' => "diff_split_header_added_stat",
+                    _ => "diff_split_header_stat",
+                };
+                this.child(
+                    div()
+                        .debug_selector(move || debug_selector.to_string())
+                        .flex_none()
+                        .px_2()
+                        .py(px(1.0))
+                        .rounded(px(2.0))
+                        .bg(theme.colors.surface_bg)
+                        .border_1()
+                        .border_color(theme.colors.border)
+                        .text_color(color)
+                        .child(format!("{prefix}{count}")),
+                )
+            })
+            .into_any_element()
+    }
+
     pub(super) fn diff_prev_next_file_buttons(
         &self,
         repo_id: Option<RepoId>,
@@ -96,6 +174,47 @@ impl MainPaneView {
     ) -> (Option<AnyElement>, Option<AnyElement>) {
         let buttons = (|| {
             let repo_id = repo_id?;
+            if let Some(inline) = self.active_inline_submodule_diff() {
+                let prev_disabled = inline.selected_ix == 0;
+                let next_disabled = inline.selected_ix + 1 >= inline.entries.len();
+
+                let prev_tooltip: SharedString = "Previous file (F1)".into();
+                let next_tooltip: SharedString = "Next file (F4)".into();
+
+                let prev_btn = components::Button::new("diff_prev_file", "")
+                    .start_slot(svg_icon(
+                        "icons/arrow_left.svg",
+                        theme.colors.text,
+                        px(14.0),
+                    ))
+                    .style(components::ButtonStyle::Outlined)
+                    .disabled(prev_disabled)
+                    .on_click(theme, cx, move |this, _e, window, cx| {
+                        if this.try_select_adjacent_diff_file(repo_id, -1, window, cx) {
+                            cx.notify();
+                        }
+                    })
+                    .gitcomet_tooltip(theme, prev_tooltip.clone())
+                    .into_any_element();
+
+                let next_btn = components::Button::new("diff_next_file", "")
+                    .start_slot(svg_icon(
+                        "icons/arrow_right.svg",
+                        theme.colors.text,
+                        px(14.0),
+                    ))
+                    .style(components::ButtonStyle::Outlined)
+                    .disabled(next_disabled)
+                    .on_click(theme, cx, move |this, _e, window, cx| {
+                        if this.try_select_adjacent_diff_file(repo_id, 1, window, cx) {
+                            cx.notify();
+                        }
+                    })
+                    .gitcomet_tooltip(theme, next_tooltip.clone())
+                    .into_any_element();
+
+                return Some((prev_btn, next_btn));
+            }
             let repo = self.active_repo()?;
             let change_tracking_view = self.active_change_tracking_view(cx);
 
@@ -119,8 +238,12 @@ impl MainPaneView {
             let prev_tooltip: SharedString = "Previous file (F1)".into();
             let next_tooltip: SharedString = "Next file (F4)".into();
 
-            let prev_btn = components::Button::new("diff_prev_file", "Prev file")
-                .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F1"))
+            let prev_btn = components::Button::new("diff_prev_file", "")
+                .start_slot(svg_icon(
+                    "icons/arrow_left.svg",
+                    theme.colors.text,
+                    px(14.0),
+                ))
                 .style(components::ButtonStyle::Outlined)
                 .disabled(prev_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
@@ -131,8 +254,12 @@ impl MainPaneView {
                 .gitcomet_tooltip(theme, prev_tooltip.clone())
                 .into_any_element();
 
-            let next_btn = components::Button::new("diff_next_file", "Next file")
-                .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F4"))
+            let next_btn = components::Button::new("diff_next_file", "")
+                .start_slot(svg_icon(
+                    "icons/arrow_right.svg",
+                    theme.colors.text,
+                    px(14.0),
+                ))
                 .style(components::ButtonStyle::Outlined)
                 .disabled(next_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {

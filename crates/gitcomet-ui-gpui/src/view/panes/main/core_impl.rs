@@ -2,7 +2,7 @@ use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::view::branch_sidebar::BranchSection;
-use gitcomet_core::domain::LogScope;
+use gitcomet_core::domain::{Diff, FileDiffImage, FileDiffText, LogScope};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
@@ -618,8 +618,18 @@ impl MainPaneView {
                     commit_id.hash(&mut hasher);
                     path.hash(&mut hasher);
                 }
-                None => {
+                Some(DiffTarget::CommitRange {
+                    from_commit_id,
+                    to_commit_id,
+                    path,
+                }) => {
                     2u8.hash(&mut hasher);
+                    from_commit_id.hash(&mut hasher);
+                    to_commit_id.hash(&mut hasher);
+                    path.hash(&mut hasher);
+                }
+                None => {
+                    3u8.hash(&mut hasher);
                 }
             }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
@@ -790,6 +800,7 @@ impl MainPaneView {
         timezone: Timezone,
         show_timezone: bool,
         diff_scroll_sync: DiffScrollSync,
+        diff_content_mode: DiffContentMode,
         history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
@@ -832,6 +843,25 @@ impl MainPaneView {
                 cx,
             )
         });
+        let submodule_hash_inputs = (0..4)
+            .map(|_| {
+                cx.new(|cx| {
+                    let mut input = components::TextInput::new(
+                        components::TextInputOptions {
+                            placeholder: "".into(),
+                            multiline: false,
+                            read_only: true,
+                            chromeless: false,
+                            soft_wrap: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    input.set_read_only(true, cx);
+                    input
+                })
+            })
+            .collect::<Vec<_>>();
 
         let conflict_resolver_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
@@ -967,13 +997,15 @@ impl MainPaneView {
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap: false,
             diff_scroll_sync,
+            diff_content_mode,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
             diff_split_last_synced_x: [px(0.0); 2],
             diff_split_last_synced_y: [px(0.0); 2],
-            diff_horizontal_min_width: px(0.0),
+            diff_horizontal_scroll: DiffHorizontalScrollState::new(),
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
+            diff_cache_content_signature: None,
             diff_cache_target: None,
             diff_cache: Vec::new(),
             diff_row_provider: None,
@@ -990,11 +1022,21 @@ impl MainPaneView {
             diff_panel_focus_handle,
             diff_autoscroll_pending: false,
             diff_raw_input,
+            submodule_hash_inputs,
             diff_visible_indices: Vec::new(),
             diff_visible_inline_map: None,
+            collapsed_diff_hunks: Vec::new(),
+            collapsed_diff_hunk_ix_by_src_ix: HashMap::default(),
+            collapsed_diff_reveals: HashMap::default(),
+            collapsed_diff_visible_rows: Vec::new(),
+            collapsed_diff_hunk_visible_indices: Vec::new(),
+            collapsed_diff_header_display_cache: HashMap::default(),
+            collapsed_diff_projection_identity: None,
             diff_visible_cache_len: 0,
             diff_visible_view: DiffViewMode::Split,
             diff_visible_is_file_view: false,
+            diff_visible_projection_rev: 0,
+            diff_visible_cache_projection_rev: u64::MAX,
             diff_scrollbar_markers_cache: Vec::new(),
             diff_word_highlights: Vec::new(),
             diff_word_highlights_inflight: None,
@@ -1015,7 +1057,6 @@ impl MainPaneView {
             diff_text_hitboxes: HashMap::default(),
             diff_text_layout_cache_epoch: 0,
             diff_text_layout_cache: HashMap::default(),
-            diff_hunk_picker_search_input: None,
             diff_search_active: false,
             diff_search_query: "".into(),
             diff_search_matches: Vec::new(),
@@ -1027,20 +1068,28 @@ impl MainPaneView {
             file_diff_cache_rev: 0,
             file_diff_cache_content_signature: None,
             file_diff_cache_target: None,
+            file_diff_cache_error: None,
             file_diff_cache_path: None,
             file_diff_cache_language: None,
             file_diff_cache_rows: Vec::new(),
             file_diff_row_provider: None,
             file_diff_old_text: SharedString::default(),
             file_diff_old_line_starts: Arc::default(),
+            file_diff_old_line_to_row: Arc::default(),
+            file_diff_old_line_to_inline_row: Arc::default(),
             file_diff_new_text: SharedString::default(),
             file_diff_new_line_starts: Arc::default(),
+            file_diff_new_line_to_row: Arc::default(),
+            file_diff_new_line_to_inline_row: Arc::default(),
             file_diff_inline_cache: Vec::new(),
             file_diff_inline_row_provider: None,
             file_diff_inline_text: SharedString::default(),
-            file_diff_inline_word_highlights: Vec::new(),
-            file_diff_split_word_highlights_old: Vec::new(),
-            file_diff_split_word_highlights_new: Vec::new(),
+            file_diff_inline_word_highlights: rows::new_lru_cache(
+                FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES,
+            ),
+            file_diff_split_word_highlights: rows::new_lru_cache(
+                FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES,
+            ),
             file_diff_cache_seq: 0,
             file_diff_cache_inflight: None,
             file_diff_syntax_generation: 0,
@@ -1139,7 +1188,7 @@ impl MainPaneView {
         };
 
         pane.set_theme(theme, cx);
-        pane.rebuild_diff_cache(cx);
+        pane.ensure_rendered_patch_diff_cache(cx);
         pane
     }
 
@@ -1214,9 +1263,6 @@ impl MainPaneView {
             );
             self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
         }
-        if let Some(input) = &self.diff_hunk_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
         self.history_view
             .update(cx, |view, cx| view.set_theme(theme, cx));
         cx.notify();
@@ -1241,11 +1287,77 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
-        self.diff_horizontal_min_width = px(0.0);
         self.diff_text_hitboxes.clear();
         self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.diff_text_layout_cache.clear();
         cx.notify();
+    }
+
+    pub(in crate::view) fn reset_diff_horizontal_scroll_state(&mut self) {
+        self.diff_horizontal_scroll.reset();
+    }
+
+    pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
+        self.diff_horizontal_content_width_for_column(DiffHorizontalScrollColumn::Primary)
+    }
+
+    pub(in crate::view) fn diff_horizontal_content_width_for_column(
+        &self,
+        column: DiffHorizontalScrollColumn,
+    ) -> Pixels {
+        self.diff_horizontal_scroll.content_widths[column.index()]
+    }
+
+    pub(in crate::view) fn diff_horizontal_layout_min_width(
+        &self,
+        column: DiffHorizontalScrollColumn,
+    ) -> Pixels {
+        self.diff_horizontal_content_width_for_column(column)
+    }
+
+    pub(in crate::view) fn record_diff_horizontal_content_width(
+        &mut self,
+        width: Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.record_diff_horizontal_content_width_for_column(
+            DiffHorizontalScrollColumn::Primary,
+            width,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn record_diff_horizontal_content_width_for_column(
+        &mut self,
+        column: DiffHorizontalScrollColumn,
+        width: Pixels,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .diff_horizontal_scroll
+            .record_content_width(column, width)
+        {
+            cx.notify();
+        }
+    }
+
+    pub(in crate::view) fn diff_vertical_scrollbar_gutter_for_column(
+        &self,
+        _column: DiffHorizontalScrollColumn,
+        _handle: UniformListScrollHandle,
+    ) -> Pixels {
+        components::Scrollbar::gutter(components::ScrollbarAxis::Vertical)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn diff_horizontal_scroll_max_offset_for_viewport(
+        &self,
+        column: DiffHorizontalScrollColumn,
+        viewport_width: Pixels,
+    ) -> Pixels {
+        let viewport_width = viewport_width.max(px(0.0));
+        let content_width = self.diff_horizontal_content_width_for_column(column);
+        (content_width - viewport_width).max(px(0.0))
     }
 
     pub(in crate::view) fn conflict_resolved_output_is_streamed(&self) -> bool {
@@ -2485,6 +2597,35 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_diff_content_mode(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_content_mode == next {
+            return;
+        }
+
+        self.diff_content_mode = next;
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
+        self.clear_diff_text_style_caches();
+        self.clear_diff_text_query_overlay_cache();
+        self.clear_worktree_preview_segments_cache();
+        self.reset_collapsed_diff_projection(false);
+        self.ensure_rendered_patch_diff_cache(cx);
+        if self.current_main_diff_supports_diff_content_toggle() {
+            self.ensure_file_diff_cache(cx);
+        }
+        if self.current_main_diff_wants_file_diff() {
+            self.ensure_file_image_diff_cache(cx);
+        }
+        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            self.diff_search_recompute_matches();
+        }
+        cx.notify();
+    }
+
     pub(in crate::view) fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
@@ -2492,6 +2633,269 @@ impl MainPaneView {
     pub(in crate::view) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in crate::view) fn active_inline_submodule_diff(
+        &self,
+    ) -> Option<&gitcomet_state::model::InlineSubmoduleDiffState> {
+        self.active_repo()?
+            .diff_state
+            .inline_submodule_diff
+            .as_ref()
+    }
+
+    pub(in crate::view) fn selected_inline_submodule_diff_entry(
+        &self,
+    ) -> Option<&gitcomet_state::model::InlineSubmoduleDiffEntry> {
+        let inline = self.active_inline_submodule_diff()?;
+        inline.entries.get(inline.selected_ix)
+    }
+
+    pub(in crate::view) fn is_inline_submodule_diff_active(&self) -> bool {
+        self.active_inline_submodule_diff().is_some()
+    }
+
+    pub(in crate::view) fn rendered_diff_target(&self) -> Option<&DiffTarget> {
+        self.active_inline_submodule_diff()
+            .map(|inline| &inline.target)
+            .or_else(|| self.active_repo()?.diff_state.diff_target.as_ref())
+    }
+
+    pub(in crate::view) fn rendered_patch_diff_loadable(
+        &self,
+    ) -> Option<&gitcomet_state::model::Loadable<gitcomet_state::model::Shared<Diff>>> {
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            Some(&inline.diff)
+        } else {
+            self.active_repo().map(|repo| &repo.diff_state.diff)
+        }
+    }
+
+    pub(in crate::view) fn rendered_patch_diff_rev(&self) -> u64 {
+        self.active_inline_submodule_diff()
+            .map(|inline| inline.diff_rev)
+            .or_else(|| self.active_repo().map(|repo| repo.diff_state.diff_rev))
+            .unwrap_or(0)
+    }
+
+    fn rendered_file_target_path(target: &DiffTarget) -> Option<&std::path::Path> {
+        match target {
+            DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
+            DiffTarget::Commit {
+                path: Some(path), ..
+            }
+            | DiffTarget::CommitRange {
+                path: Some(path), ..
+            } => Some(path.as_path()),
+            DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { path: None, .. } => {
+                None
+            }
+        }
+    }
+
+    pub(in crate::view) fn rendered_file_diff_loadable(
+        &self,
+    ) -> Option<&gitcomet_state::model::Loadable<Option<gitcomet_state::model::Shared<FileDiffText>>>>
+    {
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            Some(&inline.diff_file)
+        } else {
+            self.active_repo().map(|repo| &repo.diff_state.diff_file)
+        }
+    }
+
+    pub(in crate::view) fn rendered_file_image_diff_loadable(
+        &self,
+    ) -> Option<
+        &gitcomet_state::model::Loadable<Option<gitcomet_state::model::Shared<FileDiffImage>>>,
+    > {
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            Some(&inline.diff_file_image)
+        } else {
+            self.active_repo()
+                .map(|repo| &repo.diff_state.diff_file_image)
+        }
+    }
+
+    pub(in crate::view) fn rendered_file_diff_rev(&self) -> u64 {
+        self.active_inline_submodule_diff()
+            .map(|inline| inline.diff_file_rev)
+            .or_else(|| self.active_repo().map(|repo| repo.diff_state.diff_file_rev))
+            .unwrap_or(0)
+    }
+
+    pub(in crate::view) fn rendered_diff_workdir(&self) -> Option<&std::path::Path> {
+        self.active_inline_submodule_diff()
+            .map(|inline| inline.submodule_repo_path.as_path())
+            .or_else(|| self.active_repo().map(|repo| repo.spec.workdir.as_path()))
+    }
+
+    pub(in crate::view) fn rendered_file_diff_identity(
+        &self,
+    ) -> Option<(
+        RepoId,
+        u64,
+        DiffTarget,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    )> {
+        let repo_id = self.active_repo_id()?;
+        let diff_file_rev = self.rendered_file_diff_rev();
+        let diff_target = self.rendered_diff_target()?.clone();
+        let workdir = self.rendered_diff_workdir()?.to_path_buf();
+        let rel_path = Self::rendered_file_target_path(&diff_target)?;
+        let abs_path = workdir.join(rel_path);
+        Some((repo_id, diff_file_rev, diff_target, workdir, abs_path))
+    }
+
+    pub(in crate::view) fn supports_diff_content_mode_toggle(&self, is_file_preview: bool) -> bool {
+        !is_file_preview
+            && !self.is_worktree_target_directory()
+            && Self::is_file_diff_target(self.rendered_diff_target())
+    }
+
+    pub(in crate::view) fn wants_file_diff_view(&self, is_file_preview: bool) -> bool {
+        self.diff_content_mode == DiffContentMode::Full
+            && self.supports_diff_content_mode_toggle(is_file_preview)
+    }
+
+    pub(in crate::view) fn wants_collapsed_diff_view(&self, is_file_preview: bool) -> bool {
+        self.diff_content_mode == DiffContentMode::Collapsed
+            && self.supports_diff_content_mode_toggle(is_file_preview)
+    }
+
+    fn current_main_diff_supports_diff_content_toggle(&self) -> bool {
+        let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
+        let has_submodule_summary = self
+            .active_repo()
+            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
+        let untracked_directory_notice = if has_submodule_summary || inline_submodule_diff_active {
+            None
+        } else {
+            self.untracked_directory_notice()
+        };
+        let is_file_preview = self.is_file_preview_active()
+            && untracked_directory_notice.is_none()
+            && !has_submodule_summary
+            && !inline_submodule_diff_active;
+        (inline_submodule_diff_active || !has_submodule_summary)
+            && self.supports_diff_content_mode_toggle(is_file_preview)
+    }
+
+    fn current_main_diff_wants_file_diff(&self) -> bool {
+        let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
+        let has_submodule_summary = self
+            .active_repo()
+            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
+        let untracked_directory_notice = if has_submodule_summary || inline_submodule_diff_active {
+            None
+        } else {
+            self.untracked_directory_notice()
+        };
+        let is_file_preview = self.is_file_preview_active()
+            && untracked_directory_notice.is_none()
+            && !has_submodule_summary
+            && !inline_submodule_diff_active;
+        self.current_main_diff_supports_diff_content_toggle()
+            && self.wants_file_diff_view(is_file_preview)
+    }
+
+    fn rendered_patch_diff_cache_is_current(&self) -> bool {
+        self.active_repo_id().is_some_and(|repo_id| {
+            self.diff_cache_repo_id == Some(repo_id)
+                && self.diff_cache_rev == self.rendered_patch_diff_rev()
+                && self.diff_cache_target == self.rendered_diff_target().cloned()
+        })
+    }
+
+    fn rendered_file_diff_cache_is_current(&self) -> bool {
+        let Some((repo_id, diff_file_rev, diff_target, _workdir, abs_path)) =
+            self.rendered_file_diff_identity()
+        else {
+            return false;
+        };
+
+        self.file_diff_cache_repo_id == Some(repo_id)
+            && self.file_diff_cache_rev == diff_file_rev
+            && self.file_diff_cache_target == Some(diff_target)
+            && self.file_diff_cache_path.as_ref() == Some(&abs_path)
+    }
+
+    pub(in crate::view) fn is_collapsed_diff_projection_active(&self) -> bool {
+        self.diff_content_mode == DiffContentMode::Collapsed
+            && self.current_main_diff_supports_diff_content_toggle()
+            && self.rendered_patch_diff_cache_is_current()
+            && self.rendered_file_diff_cache_is_current()
+    }
+
+    pub(in crate::view) fn collapsed_visible_row(
+        &self,
+        visible_ix: usize,
+    ) -> Option<CollapsedDiffVisibleRow> {
+        self.collapsed_diff_visible_rows.get(visible_ix).copied()
+    }
+
+    pub(in crate::view) fn current_collapsed_diff_projection_identity(
+        &self,
+    ) -> Option<CollapsedDiffProjectionIdentity> {
+        let (repo_id, _diff_file_rev, diff_target, _workdir, abs_path) =
+            self.rendered_file_diff_identity()?;
+        Some(CollapsedDiffProjectionIdentity {
+            repo_id,
+            diff_target,
+            file_path: abs_path,
+            patch_content_signature: self.diff_cache_content_signature,
+            file_content_signature: self.file_diff_cache_content_signature,
+        })
+    }
+
+    pub(in crate::view) fn reset_collapsed_diff_projection(&mut self, clear_reveals: bool) {
+        self.collapsed_diff_hunks.clear();
+        self.collapsed_diff_hunk_ix_by_src_ix.clear();
+        if clear_reveals {
+            self.collapsed_diff_reveals.clear();
+            self.collapsed_diff_projection_identity = None;
+        }
+        self.collapsed_diff_visible_rows.clear();
+        self.collapsed_diff_hunk_visible_indices.clear();
+        self.collapsed_diff_header_display_cache.clear();
+        self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
+        if clear_reveals {
+            self.diff_visible_cache_projection_rev = u64::MAX;
+        }
+    }
+
+    pub(in crate::view) fn invalidate_collapsed_diff_visible_projection(&mut self) {
+        self.collapsed_diff_visible_rows.clear();
+        self.collapsed_diff_hunk_visible_indices.clear();
+        self.collapsed_diff_header_display_cache.clear();
+        self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
+    }
+
+    // Apply the mode inside the pane first, then sync the root preference
+    // without re-entering `main_pane.update(...)`.
+    pub(in crate::view) fn set_diff_content_mode_and_persist(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_content_mode != next {
+            self.set_diff_content_mode(next, cx);
+        }
+        let root_view = self.root_view.clone();
+        let _ = root_view.update(cx, |root, cx| {
+            root.sync_diff_content_mode_from_pane(next, cx);
+        });
+    }
+
+    fn rendered_diff_target_for_state(state: &AppState) -> Option<DiffTarget> {
+        let repo_id = state.active_repo?;
+        let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+        repo.diff_state
+            .inline_submodule_diff
+            .as_ref()
+            .map(|inline| inline.target.clone())
+            .or_else(|| repo.diff_state.diff_target.clone())
     }
 
     pub(in crate::view) fn history_visible_column_preferences(
@@ -2809,23 +3213,6 @@ impl MainPaneView {
         );
     }
 
-    pub(in crate::view) fn open_popover_at_cursor(
-        &mut self,
-        kind: PopoverKind,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let root_view = self.root_view.clone();
-        let window_handle = window.window_handle();
-        cx.defer(move |cx| {
-            let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(kind, root.last_mouse_pos, window, cx);
-                });
-            });
-        });
-    }
-
     pub(in crate::view) fn clear_status_multi_selection(
         &mut self,
         repo_id: RepoId,
@@ -2836,6 +3223,20 @@ impl MainPaneView {
                 pane.status_multi_selection.remove(&repo_id);
                 cx.notify();
             });
+        });
+    }
+
+    pub(in crate::view) fn open_submodule_inner_diff(
+        &mut self,
+        submodule_repo_path: std::path::PathBuf,
+        target: DiffTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, move |root, cx| {
+            root.submodule_diff_bootstrap =
+                Some(SubmoduleDiffBootstrap::new(submodule_repo_path, target));
+            root.drive_submodule_diff_bootstrap();
+            cx.notify();
         });
     }
 
@@ -2894,17 +3295,10 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let prev_active_repo_id = self.state.active_repo;
-        let prev_diff_target = self
-            .active_repo()
-            .and_then(|r| r.diff_state.diff_target.as_ref())
-            .cloned();
+        let prev_diff_target = Self::rendered_diff_target_for_state(self.state.as_ref());
 
         let next_repo_id = next.active_repo;
-        let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
-        let next_diff_target = next_repo
-            .and_then(|r| r.diff_state.diff_target.as_ref())
-            .cloned();
-        let next_diff_rev = next_repo.map(|r| r.diff_state.diff_rev).unwrap_or(0);
+        let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
 
         if prev_diff_target != next_diff_target {
             self.diff_selection_anchor = None;
@@ -2919,13 +3313,17 @@ impl MainPaneView {
             self.worktree_markdown_preview_inflight = None;
             self.worktree_preview_syntax_language = None;
             self.reset_worktree_preview_source_state();
-            self.diff_horizontal_min_width = px(0.0);
+            self.reset_diff_horizontal_scroll_state();
+            self.reset_collapsed_diff_projection(true);
         }
 
         self.state = next;
 
         self.sync_conflict_resolver(cx);
         self.ensure_file_image_diff_cache(cx);
+        if self.current_main_diff_supports_diff_content_toggle() {
+            self.ensure_file_diff_cache(cx);
+        }
 
         if prev_active_repo_id != next_repo_id {
             self.history_view.update(cx, |view, _| {
@@ -2934,12 +3332,7 @@ impl MainPaneView {
             });
         }
 
-        let should_rebuild_diff_cache = self.diff_cache_repo_id != next_repo_id
-            || self.diff_cache_rev != next_diff_rev
-            || self.diff_cache_target != next_diff_target;
-        if should_rebuild_diff_cache {
-            self.rebuild_diff_cache(cx);
-        }
+        self.ensure_rendered_patch_diff_cache(cx);
 
         // History caches are now managed by HistoryView.
     }
@@ -3140,23 +3533,23 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn is_file_diff_view_active(&self) -> bool {
-        let Some(repo) = self.active_repo() else {
-            return false;
-        };
-        self.file_diff_cache_repo_id == Some(repo.id)
-            && self.file_diff_cache_rev == repo.diff_state.diff_file_rev
-            && self.file_diff_cache_target == repo.diff_state.diff_target
-            && self.file_diff_cache_path.is_some()
+        self.diff_content_mode == DiffContentMode::Full
+            && self.rendered_file_diff_cache_is_current()
     }
 
     pub(in crate::view) fn is_file_image_diff_view_active(&self) -> bool {
-        let Some(repo) = self.active_repo() else {
+        if self.diff_content_mode != DiffContentMode::Full {
+            return false;
+        }
+        let Some((repo_id, diff_file_rev, diff_target, _workdir, abs_path)) =
+            self.rendered_file_diff_identity()
+        else {
             return false;
         };
-        self.file_image_diff_cache_repo_id == Some(repo.id)
-            && self.file_image_diff_cache_rev == repo.diff_state.diff_file_rev
-            && self.file_image_diff_cache_target == repo.diff_state.diff_target
-            && self.file_image_diff_cache_path.is_some()
+        self.file_image_diff_cache_repo_id == Some(repo_id)
+            && self.file_image_diff_cache_rev == diff_file_rev
+            && self.file_image_diff_cache_target == Some(diff_target)
+            && self.file_image_diff_cache_path.as_ref() == Some(&abs_path)
             && (self.file_image_diff_cache_old.is_some()
                 || self.file_image_diff_cache_new.is_some()
                 || self.file_image_diff_cache_old_svg_path.is_some()
@@ -3173,6 +3566,9 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn diff_visible_len(&self) -> usize {
+        if self.is_collapsed_diff_projection_active() {
+            return self.collapsed_diff_visible_rows.len();
+        }
         self.diff_visible_inline_map
             .as_ref()
             .map(|map| map.visible_len())
@@ -3183,6 +3579,11 @@ impl MainPaneView {
         &self,
         visible_ix: usize,
     ) -> Option<usize> {
+        if self.is_collapsed_diff_projection_active() {
+            return self
+                .collapsed_visible_row(visible_ix)
+                .and_then(CollapsedDiffVisibleRow::row_ix);
+        }
         if let Some(map) = self.diff_visible_inline_map.as_ref() {
             return map.src_ix_for_visible_ix(visible_ix);
         }
@@ -3190,6 +3591,76 @@ impl MainPaneView {
     }
 
     pub(super) fn diff_src_ixs_for_visible_ix(&self, visible_ix: usize) -> Vec<usize> {
+        if self.is_collapsed_diff_projection_active() {
+            let Some(row) = self.collapsed_visible_row(visible_ix) else {
+                return Vec::new();
+            };
+            match row {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                    return row.header_action_src_ix().into_iter().collect();
+                }
+                CollapsedDiffVisibleRow::FileRow { row_ix } => {
+                    let Some(abs) = self.file_diff_cache_path.as_ref() else {
+                        return Vec::new();
+                    };
+                    let Some(workdir) = self.rendered_diff_workdir() else {
+                        return Vec::new();
+                    };
+                    let rel = abs.strip_prefix(workdir).unwrap_or(abs);
+                    let rel_str = rel.to_str().map(|text| text.replace('\\', "/"));
+                    let lookup_change =
+                        |old_line: Option<u32>, new_line: Option<u32>| -> Vec<usize> {
+                            let mut out = Vec::with_capacity(2);
+                            for src_ix in 0..self.patch_diff_row_len() {
+                                if self
+                                    .diff_file_for_src_ix
+                                    .get(src_ix)
+                                    .and_then(|p| p.as_deref())
+                                    != rel_str.as_deref()
+                                {
+                                    continue;
+                                }
+                                let Some(line) = self.patch_diff_row(src_ix) else {
+                                    continue;
+                                };
+                                match line.kind {
+                                    gitcomet_core::domain::DiffLineKind::Add => {
+                                        if line.new_line == new_line {
+                                            out.push(src_ix);
+                                        }
+                                    }
+                                    gitcomet_core::domain::DiffLineKind::Remove => {
+                                        if line.old_line == old_line {
+                                            out.push(src_ix);
+                                        }
+                                    }
+                                    gitcomet_core::domain::DiffLineKind::Context => {
+                                        if line.old_line == old_line {
+                                            out.push(src_ix);
+                                        }
+                                    }
+                                    gitcomet_core::domain::DiffLineKind::Header
+                                    | gitcomet_core::domain::DiffLineKind::Hunk => {}
+                                }
+                            }
+                            out.sort_unstable();
+                            out.dedup();
+                            out
+                        };
+                    return match self.diff_view {
+                        DiffViewMode::Inline => self
+                            .file_diff_inline_render_data(row_ix)
+                            .map(|line| lookup_change(line.old_line, line.new_line))
+                            .unwrap_or_default(),
+                        DiffViewMode::Split => self
+                            .file_diff_split_render_data(row_ix)
+                            .map(|row| lookup_change(row.old_line, row.new_line))
+                            .unwrap_or_default(),
+                    };
+                }
+            }
+        }
+
         if self.is_file_diff_view_active() {
             return Vec::new();
         }

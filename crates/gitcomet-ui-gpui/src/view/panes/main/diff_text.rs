@@ -1,39 +1,5 @@
 use super::*;
 
-fn expanded_diff_display_text<'a>(text: &'a str, expanded_tabs: &'a mut String) -> &'a str {
-    if !text.contains('\t') {
-        return text;
-    }
-
-    expanded_tabs.clear();
-    expanded_tabs.reserve(crate::view::diff_utils::diff_text_display_len(text));
-    for ch in text.chars() {
-        match ch {
-            '\t' => expanded_tabs.push_str("    "),
-            _ => expanded_tabs.push(ch),
-        }
-    }
-    expanded_tabs.as_str()
-}
-
-fn append_diff_display_text_slice(
-    out: &mut String,
-    text: &str,
-    range: Range<usize>,
-    expanded_tabs: &mut String,
-) {
-    if range.start >= range.end {
-        return;
-    }
-
-    let display = expanded_diff_display_text(text, expanded_tabs);
-    let start = range.start.min(display.len());
-    let end = range.end.min(display.len());
-    if start < end {
-        out.push_str(&display[start..end]);
-    }
-}
-
 impl MainPaneView {
     fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
         let a = self.diff_text_anchor?;
@@ -274,7 +240,9 @@ impl MainPaneView {
         let autoscroll_seq = self.diff_text_autoscroll_seq;
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
-                smol::Timer::after(Duration::from_millis(16)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
                 let mut keep_going = false;
                 let _ = view.update(cx, |this, cx| {
                     if !this.diff_text_selecting {
@@ -427,9 +395,74 @@ impl MainPaneView {
                 return fallback;
             }
             return self
-                .worktree_preview_line_text(visible_ix)
-                .map(|line| expand_tabs(line.as_ref()))
+                .worktree_preview_line_raw_text(visible_ix)
+                .map(|line| file_diff_display_text(&line))
                 .unwrap_or(fallback);
+        }
+
+        if self.is_collapsed_diff_projection_active() {
+            let Some(row) = self.collapsed_visible_row(visible_ix) else {
+                return fallback;
+            };
+            match row {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                    if self.diff_view == DiffViewMode::Inline && region != DiffTextRegion::Inline {
+                        return fallback;
+                    }
+                    if self.diff_view == DiffViewMode::Split
+                        && !matches!(
+                            region,
+                            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                        )
+                    {
+                        return fallback;
+                    }
+                    return row
+                        .header_display_src_ix()
+                        .and_then(|src_ix| self.collapsed_diff_hunk_header_display(src_ix))
+                        .unwrap_or(fallback);
+                }
+                CollapsedDiffVisibleRow::FileRow { row_ix } => match self.diff_view {
+                    DiffViewMode::Inline => {
+                        if region != DiffTextRegion::Inline {
+                            return fallback;
+                        }
+                        let Some(row) = self.file_diff_inline_render_data(row_ix) else {
+                            return fallback;
+                        };
+                        let cache_epoch = self.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                        if let Some(styled) = self.diff_text_segments_cache_get(row_ix, cache_epoch)
+                        {
+                            return styled.text.clone();
+                        }
+                        return file_diff_display_text(&row.text);
+                    }
+                    DiffViewMode::Split => {
+                        if !matches!(
+                            region,
+                            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                        ) {
+                            return fallback;
+                        }
+                        let cache_epoch = self.file_diff_split_style_cache_epoch(region);
+                        if let Some(key) = self.file_diff_split_cache_key(row_ix, region)
+                            && let Some(styled) =
+                                self.diff_text_segments_cache_get(key, cache_epoch)
+                        {
+                            return styled.text.clone();
+                        }
+                        let Some(row) = self.file_diff_split_render_data(row_ix) else {
+                            return fallback;
+                        };
+                        let text = match region {
+                            DiffTextRegion::SplitLeft => row.old.as_ref(),
+                            DiffTextRegion::SplitRight => row.new.as_ref(),
+                            DiffTextRegion::Inline => unreachable!(),
+                        };
+                        return text.map(file_diff_display_text).unwrap_or(fallback);
+                    }
+                },
+            }
         }
 
         let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
@@ -441,14 +474,22 @@ impl MainPaneView {
                 return fallback;
             }
             if self.is_file_diff_view_active() {
-                let Some(line) = self.file_diff_inline_row(mapped_ix) else {
-                    return fallback;
-                };
-                let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
-                if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch) {
-                    return styled.text.clone();
+                if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
+                    let cache_epoch = self.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                    if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
+                    {
+                        return styled.text.clone();
+                    }
+                    return file_diff_display_text(&row.text);
+                } else if let Some(line) = self.file_diff_inline_row(mapped_ix) {
+                    let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
+                    if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
+                    {
+                        return styled.text.clone();
+                    }
+                    return expand_tabs(diff_content_text(&line));
                 }
-                return expand_tabs(diff_content_text(&line));
+                return fallback;
             }
 
             if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, 0) {
@@ -484,15 +525,15 @@ impl MainPaneView {
             {
                 return styled.text.clone();
             }
-            let Some(row) = self.file_diff_split_row(mapped_ix) else {
+            let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
                 return fallback;
             };
             let text = match region {
-                DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
-                DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                DiffTextRegion::SplitLeft => row.old.as_ref(),
+                DiffTextRegion::SplitRight => row.new.as_ref(),
                 DiffTextRegion::Inline => unreachable!(),
             };
-            return expand_tabs(text);
+            return text.map(file_diff_display_text).unwrap_or(fallback);
         }
 
         let Some(split_row) = self.patch_diff_split_row(mapped_ix) else {
@@ -542,14 +583,76 @@ impl MainPaneView {
             }
             return self
                 .worktree_preview_line_raw_text(visible_ix)
-                .map(|line| {
-                    if line.has_tabs_without_loading() {
-                        display_len(line.as_ref())
-                    } else {
-                        line.len()
-                    }
-                })
+                .map(|line| file_diff_display_len(&line))
                 .unwrap_or(0);
+        }
+
+        if self.is_collapsed_diff_projection_active() {
+            let Some(row) = self.collapsed_visible_row(visible_ix) else {
+                return 0;
+            };
+            match row {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                    if self.diff_view == DiffViewMode::Inline && region != DiffTextRegion::Inline {
+                        return 0;
+                    }
+                    if self.diff_view == DiffViewMode::Split
+                        && !matches!(
+                            region,
+                            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                        )
+                    {
+                        return 0;
+                    }
+                    return row
+                        .header_display_src_ix()
+                        .and_then(|src_ix| {
+                            self.collapsed_diff_hunk_header_display(src_ix)
+                                .map(|display| display_len(display.as_ref()))
+                        })
+                        .unwrap_or(0);
+                }
+                CollapsedDiffVisibleRow::FileRow { row_ix } => match self.diff_view {
+                    DiffViewMode::Inline => {
+                        if region != DiffTextRegion::Inline {
+                            return 0;
+                        }
+                        let Some(row) = self.file_diff_inline_render_data(row_ix) else {
+                            return 0;
+                        };
+                        let cache_epoch = self.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                        if let Some(styled) = self.diff_text_segments_cache_get(row_ix, cache_epoch)
+                        {
+                            return styled.text.len();
+                        }
+                        return file_diff_display_len(&row.text);
+                    }
+                    DiffViewMode::Split => {
+                        if !matches!(
+                            region,
+                            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                        ) {
+                            return 0;
+                        }
+                        let cache_epoch = self.file_diff_split_style_cache_epoch(region);
+                        if let Some(key) = self.file_diff_split_cache_key(row_ix, region)
+                            && let Some(styled) =
+                                self.diff_text_segments_cache_get(key, cache_epoch)
+                        {
+                            return styled.text.len();
+                        }
+                        let Some(row) = self.file_diff_split_render_data(row_ix) else {
+                            return 0;
+                        };
+                        let text = match region {
+                            DiffTextRegion::SplitLeft => row.old.as_ref(),
+                            DiffTextRegion::SplitRight => row.new.as_ref(),
+                            DiffTextRegion::Inline => unreachable!(),
+                        };
+                        return text.map(file_diff_display_len).unwrap_or(0);
+                    }
+                },
+            }
         }
 
         let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
@@ -561,14 +664,22 @@ impl MainPaneView {
                 return 0;
             }
             if self.is_file_diff_view_active() {
-                let Some(line) = self.file_diff_inline_row(mapped_ix) else {
-                    return 0;
-                };
-                let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
-                if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch) {
-                    return styled.text.len();
+                if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
+                    let cache_epoch = self.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                    if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
+                    {
+                        return styled.text.len();
+                    }
+                    return file_diff_display_len(&row.text);
+                } else if let Some(line) = self.file_diff_inline_row(mapped_ix) {
+                    let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
+                    if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch)
+                    {
+                        return styled.text.len();
+                    }
+                    return display_len(diff_content_text(&line));
                 }
-                return display_len(diff_content_text(&line));
+                return 0;
             }
 
             if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, 0) {
@@ -604,15 +715,15 @@ impl MainPaneView {
             {
                 return styled.text.len();
             }
-            let Some(row) = self.file_diff_split_row(mapped_ix) else {
+            let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
                 return 0;
             };
             let text = match region {
-                DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
-                DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                DiffTextRegion::SplitLeft => row.old.as_ref(),
+                DiffTextRegion::SplitRight => row.new.as_ref(),
                 DiffTextRegion::Inline => unreachable!(),
             };
-            return display_len(text);
+            return text.map(file_diff_display_len).unwrap_or(0);
         }
 
         let Some(split_row) = self.patch_diff_split_row(mapped_ix) else {
@@ -676,16 +787,57 @@ impl MainPaneView {
             if region != DiffTextRegion::Inline {
                 return;
             }
-            if let Some(raw_text) = self.worktree_preview_line_raw_text(visible_ix)
-                && !raw_text.has_tabs_without_loading()
-                && let Some(slice) = raw_text.slice_text(range.clone())
-            {
-                out.push_str(slice.as_ref());
-                return;
+            if let Some(raw_text) = self.worktree_preview_line_raw_text(visible_ix) {
+                append_file_diff_display_text_slice(out, &raw_text, range, expanded_tabs);
             }
-            if let Some(text) = self.worktree_preview_line_text(visible_ix) {
-                append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+            return;
+        }
+
+        if self.is_collapsed_diff_projection_active() {
+            if let Some(row) = self.collapsed_visible_row(visible_ix) {
+                match (row, self.diff_view, region) {
+                    (
+                        CollapsedDiffVisibleRow::FileRow { row_ix },
+                        DiffViewMode::Inline,
+                        DiffTextRegion::Inline,
+                    ) => {
+                        if let Some(row) = self.file_diff_inline_render_data(row_ix) {
+                            append_file_diff_display_text_slice(
+                                out,
+                                &row.text,
+                                range,
+                                expanded_tabs,
+                            );
+                            return;
+                        }
+                    }
+                    (
+                        CollapsedDiffVisibleRow::FileRow { row_ix },
+                        DiffViewMode::Split,
+                        DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight,
+                    ) => {
+                        let raw_text =
+                            self.file_diff_split_render_data(row_ix)
+                                .and_then(|row| match region {
+                                    DiffTextRegion::SplitLeft => row.old,
+                                    DiffTextRegion::SplitRight => row.new,
+                                    DiffTextRegion::Inline => None,
+                                });
+                        if let Some(raw_text) = raw_text {
+                            append_file_diff_display_text_slice(
+                                out,
+                                &raw_text,
+                                range,
+                                expanded_tabs,
+                            );
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
             }
+            let text = self.diff_text_line_for_region(visible_ix, region);
+            append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
             return;
         }
 
@@ -698,21 +850,23 @@ impl MainPaneView {
                 return;
             }
             if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
-                append_diff_display_text_slice(out, row.text.as_ref(), range, expanded_tabs);
+                append_file_diff_display_text_slice(out, &row.text, range, expanded_tabs);
             }
             return;
         }
 
         if self.diff_view == DiffViewMode::Split && self.is_file_diff_view_active() {
-            let Some(row) = self.file_diff_split_row(mapped_ix) else {
+            let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
                 return;
             };
             let text = match region {
-                DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
-                DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                DiffTextRegion::SplitLeft => row.old.as_ref(),
+                DiffTextRegion::SplitRight => row.new.as_ref(),
                 DiffTextRegion::Inline => return,
             };
-            append_diff_display_text_slice(out, text, range, expanded_tabs);
+            if let Some(text) = text {
+                append_file_diff_display_text_slice(out, text, range, expanded_tabs);
+            }
             return;
         }
 
@@ -921,6 +1075,9 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.is_inline_submodule_diff_active() {
+            return;
+        }
         let Some(repo) = self.active_repo() else {
             return;
         };
@@ -1057,7 +1214,7 @@ impl MainPaneView {
                 };
                 match self.diff_view {
                     DiffViewMode::Inline => {
-                        let Some(line) = self.file_diff_inline_row(mapped_ix) else {
+                        let Some(line) = self.file_diff_inline_render_data(mapped_ix) else {
                             return Vec::new();
                         };
                         match line.kind {
@@ -1081,7 +1238,7 @@ impl MainPaneView {
                         }
                     }
                     DiffViewMode::Split => {
-                        let Some(row) = self.file_diff_split_row(mapped_ix) else {
+                        let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
                             return Vec::new();
                         };
                         match row.kind {

@@ -15,6 +15,18 @@ pub(crate) fn sync_store_snapshot(view: &GitCometView, cx: &mut impl gpui::AppCo
     push_test_state(view, view.store.snapshot(), cx);
 }
 
+pub(crate) fn set_sidebar_width_for_test(
+    view: &mut GitCometView,
+    width: gpui::Pixels,
+    cx: &mut gpui::Context<GitCometView>,
+) {
+    view.set_sidebar_width_from_pixels(width);
+    view.sidebar_render_width = width;
+    view.sidebar_width_anim_seq = view.sidebar_width_anim_seq.wrapping_add(1);
+    view.sidebar_width_animating = false;
+    cx.notify();
+}
+
 pub(crate) fn popover_is_open(view: &GitCometView, app: &App) -> bool {
     popover_kind(view, app).is_some()
 }
@@ -58,4 +70,8 @@ pub(in crate::view) fn change_tracking_view(view: &GitCometView) -> ChangeTracki
 
 pub(in crate::view) fn diff_scroll_sync(view: &GitCometView) -> DiffScrollSync {
     view.diff_scroll_sync
+}
+
+pub(in crate::view) fn diff_content_mode(view: &GitCometView) -> DiffContentMode {
+    view.diff_content_mode
 }

@@ -20,25 +20,10 @@ pub(in crate::view) fn diff_text_display_len(text: &str) -> usize {
     })
 }
 
-pub(super) fn scrollbar_markers_from_flags(
-    len: usize,
-    mut flag_at_index: impl FnMut(usize) -> u8,
-) -> Vec<components::ScrollbarMarker> {
-    if len == 0 {
+fn scrollbar_markers_from_bucket_flags(buckets: &[u8]) -> Vec<components::ScrollbarMarker> {
+    let bucket_count = buckets.len();
+    if bucket_count == 0 {
         return Vec::new();
-    }
-
-    let bucket_count = 240usize.min(len).max(1);
-    let mut buckets = vec![0u8; bucket_count];
-    for ix in 0..len {
-        let flag = flag_at_index(ix);
-        if flag == 0 {
-            continue;
-        }
-        let b = (ix * bucket_count) / len;
-        if let Some(cell) = buckets.get_mut(b) {
-            *cell |= flag;
-        }
     }
 
     let mut out = Vec::with_capacity(bucket_count);
@@ -71,6 +56,61 @@ pub(super) fn scrollbar_markers_from_flags(
     }
 
     out
+}
+
+pub(super) fn scrollbar_markers_from_flags(
+    len: usize,
+    mut flag_at_index: impl FnMut(usize) -> u8,
+) -> Vec<components::ScrollbarMarker> {
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let bucket_count = 240usize.min(len).max(1);
+    let mut buckets = vec![0u8; bucket_count];
+    for ix in 0..len {
+        let flag = flag_at_index(ix);
+        if flag == 0 {
+            continue;
+        }
+        let b = (ix * bucket_count) / len;
+        if let Some(cell) = buckets.get_mut(b) {
+            *cell |= flag;
+        }
+    }
+
+    scrollbar_markers_from_bucket_flags(buckets.as_slice())
+}
+
+pub(super) fn scrollbar_markers_from_visible_ranges(
+    len: usize,
+    ranges: impl IntoIterator<Item = (usize, usize, u8)>,
+) -> Vec<components::ScrollbarMarker> {
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let bucket_count = 240usize.min(len).max(1);
+    let mut buckets = vec![0u8; bucket_count];
+    for (start, end, flag) in ranges {
+        if flag == 0 || start >= end || start >= len {
+            continue;
+        }
+        let clamped_end = end.min(len);
+        if clamped_end <= start {
+            continue;
+        }
+
+        let bucket_start = start.saturating_mul(bucket_count) / len;
+        let bucket_end = clamped_end.saturating_sub(1).saturating_mul(bucket_count) / len;
+        for bucket_ix in bucket_start..=bucket_end.min(bucket_count.saturating_sub(1)) {
+            if let Some(cell) = buckets.get_mut(bucket_ix) {
+                *cell |= flag;
+            }
+        }
+    }
+
+    scrollbar_markers_from_bucket_flags(buckets.as_slice())
 }
 
 pub(super) fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
@@ -199,22 +239,38 @@ pub(super) struct ParsedHunkHeader {
     pub(super) old: String,
     pub(super) new: String,
     pub(super) heading: Option<String>,
+    pub(super) old_start_line: u32,
+    pub(super) old_line_count: u32,
+    pub(super) new_start_line: u32,
+    pub(super) new_line_count: u32,
 }
 
 pub(super) fn parse_unified_hunk_header_for_display(text: &str) -> Option<ParsedHunkHeader> {
+    fn parse_range(token: &str, prefix: char) -> Option<(String, u32, u32)> {
+        let body = token.strip_prefix(prefix)?;
+        let (start_text, count_text) = body.split_once(',').unwrap_or((body, "1"));
+        let start_line = start_text.parse::<u32>().ok()?;
+        let line_count = count_text.parse::<u32>().ok()?;
+        Some((token.to_string(), start_line, line_count))
+    }
+
     let text = text.strip_prefix("@@")?.trim_start();
     let (ranges, rest) = text.split_once("@@")?;
     let ranges = ranges.trim();
     let heading = rest.trim();
 
     let mut it = ranges.split_whitespace();
-    let old = it.next()?.trim().to_string();
-    let new = it.next()?.trim().to_string();
+    let (old, old_start_line, old_line_count) = parse_range(it.next()?.trim(), '-')?;
+    let (new, new_start_line, new_line_count) = parse_range(it.next()?.trim(), '+')?;
 
     Some(ParsedHunkHeader {
         old,
         new,
         heading: (!heading.is_empty()).then_some(heading.to_string()),
+        old_start_line,
+        old_line_count,
+        new_start_line,
+        new_line_count,
     })
 }
 
@@ -1196,5 +1252,20 @@ mod tests {
     fn diff_text_display_len_expands_tabs_without_allocating() {
         assert_eq!(diff_text_display_len("hello"), 5);
         assert_eq!(diff_text_display_len("\twide\tcell"), 16);
+    }
+
+    #[test]
+    fn scrollbar_markers_from_visible_ranges_matches_per_row_flags() {
+        let per_row = scrollbar_markers_from_flags(20, |ix| {
+            if (3..7).contains(&ix) {
+                1
+            } else if (10..12).contains(&ix) {
+                2
+            } else {
+                0
+            }
+        });
+        let ranged = scrollbar_markers_from_visible_ranges(20, [(3, 7, 1), (10, 12, 2)]);
+        assert_eq!(ranged, per_row);
     }
 }

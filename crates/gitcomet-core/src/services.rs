@@ -569,6 +569,15 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    fn submodule_diff_summary(
+        &self,
+        _target: &crate::domain::DiffTarget,
+    ) -> Result<crate::domain::SubmoduleDiffSummary> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule diff summary is not implemented for this backend",
+        )))
+    }
+
     fn check_submodule_add_trust(
         &self,
         _url: &str,
@@ -580,6 +589,12 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule trust checks are not implemented for this backend",
+        )))
+    }
+
+    fn check_submodule_load_trust(&self, _path: &Path) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
@@ -605,6 +620,26 @@ pub trait GitRepository: Send + Sync {
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule update is not implemented for this backend",
+        )))
+    }
+
+    fn load_submodule_with_output(
+        &self,
+        _path: &Path,
+        _approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule update is not implemented for this backend",
+        )))
+    }
+
+    fn change_submodule_pointer_with_output(
+        &self,
+        _path: &Path,
+        _reference: &str,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule pointer changes are not implemented for this backend",
         )))
     }
 

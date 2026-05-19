@@ -71,7 +71,7 @@ pub(super) fn wait_for_diff_text_click_position_for_offset_range(
 
         if let Some(position) = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            diff_text_click_position_for_offset_range(&pane, visible_ix, region, target.clone())
+            diff_text_click_position_for_offset_range(pane, visible_ix, region, target.clone())
         }) {
             return position;
         }
@@ -596,6 +596,19 @@ pub(super) fn set_diff_scroll_sync_for_test(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_scroll_sync(mode, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+}
+
+pub(super) fn set_diff_content_mode_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    mode: DiffContentMode,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(mode, cx);
         });
     });
     draw_and_drain_test_window(cx);

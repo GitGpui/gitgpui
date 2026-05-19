@@ -175,7 +175,7 @@ jobs:
         run: cargo test -p gitcomet-ui-gpui smoke_tests::smoke_view_renders_without_panicking -- --exact
 
   macos-tests:
-    name: macOS Tests (${{ matrix.target_platform }})
+    name: macOS Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
     strategy:
@@ -183,8 +183,11 @@ jobs:
       matrix:
         include:
           - target_platform: aarch64-darwin
-            name: apple-silicon (macos-latest)
-            runs_on: macos-latest
+            name: macbook-m1 / macos-15
+            runs_on: macos-15
+          - target_platform: aarch64-darwin
+            name: latest-macos / macos-26
+            runs_on: macos-26
           - target_platform: x86_64-darwin
             name: intel (macos-15-intel)
             runs_on: macos-15-intel
@@ -198,6 +201,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Show host target
         run: rustc -vV
+      - name: Assert Apple Silicon runner
+        if: matrix.target_platform == 'aarch64-darwin'
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          rust_host="$(rustc -vV | sed -n 's/^host: //p')"
+          test "$rust_host" = "aarch64-apple-darwin"
       - name: Run headless test suite
         run: |
           cargo test --workspace \

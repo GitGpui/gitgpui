@@ -721,6 +721,125 @@ fn submodule_commands_reload_submodules_on_success() {
 }
 
 #[test]
+fn selected_submodule_command_reloads_selected_summary() {
+    use gitcomet_core::domain::{
+        Diff, FileStatus, FileStatusKind, Submodule, SubmoduleDiffSummary,
+        SubmoduleDiffSummaryMode, SubmoduleStatus,
+    };
+
+    fn seeded_state(
+        repo_id: RepoId,
+        command_path: &std::path::Path,
+    ) -> (AppState, gitcomet_core::domain::DiffTarget) {
+        let mut state = AppState::default();
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.set_status(Loadable::Ready(Arc::new(RepoStatus {
+            unstaged: vec![FileStatus {
+                path: command_path.to_path_buf(),
+                kind: FileStatusKind::Modified,
+                conflict: None,
+            }],
+            staged: Vec::new(),
+        })));
+        repo.set_submodules(Loadable::Ready(vec![Submodule {
+            path: command_path.to_path_buf(),
+            recorded_head: CommitId("old-recorded".into()),
+            checked_out_head: None,
+            status: SubmoduleStatus::NotInitialized,
+        }]));
+        let target = DiffTarget::WorkingTree {
+            path: command_path.to_path_buf(),
+            area: DiffArea::Unstaged,
+        };
+        repo.diff_state.diff_target = Some(target.clone());
+        repo.diff_state.submodule_summary = Loadable::Ready(Arc::new(SubmoduleDiffSummary {
+            path: command_path.to_path_buf(),
+            mode: SubmoduleDiffSummaryMode::Worktree,
+            status: Some(SubmoduleStatus::NotInitialized),
+            commit_id: None,
+            parent_commit_id: None,
+            checked_out_head: None,
+            ranges: Vec::new(),
+            live_staged: Vec::new(),
+            live_unstaged: Vec::new(),
+        }));
+        let inline_target = DiffTarget::WorkingTree {
+            path: PathBuf::from("inner.rs"),
+            area: DiffArea::Unstaged,
+        };
+        repo.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+            submodule_repo_path: PathBuf::from("/tmp/repo/vendor/lib"),
+            parent_submodule_path: command_path.to_path_buf(),
+            entries: vec![crate::model::InlineSubmoduleDiffEntry {
+                path: PathBuf::from("inner.rs"),
+                kind: FileStatusKind::Modified,
+                target: inline_target.clone(),
+                section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
+            }],
+            selected_ix: 0,
+            target: inline_target,
+            rev: 1,
+            diff: Loadable::Ready(Arc::new(Diff {
+                target: target.clone(),
+                lines: Vec::new(),
+            })),
+            diff_rev: 1,
+            diff_file_rev: 1,
+            diff_file: Loadable::NotLoaded,
+            diff_file_image: Loadable::NotLoaded,
+        });
+        state.repos.push(repo);
+        (state, target)
+    }
+
+    let repo_id = RepoId(1);
+    let path = PathBuf::from("vendor/lib");
+    for command in [
+        RepoCommandKind::LoadSubmodule {
+            path: path.clone(),
+            approved_sources: Vec::new(),
+        },
+        RepoCommandKind::UpdateSubmodules {
+            approved_sources: Vec::new(),
+        },
+        RepoCommandKind::ChangeSubmodulePointer {
+            path: path.clone(),
+            reference: "main".to_string(),
+        },
+    ] {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let id_alloc = AtomicU64::new(1);
+        let (mut state, target) = seeded_state(repo_id, path.as_path());
+
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command,
+                result: Ok(CommandOutput::empty_success("git submodule command")),
+            }),
+        );
+
+        assert!(state.repos[0].diff_state.submodule_summary.is_loading());
+        assert!(state.repos[0].diff_state.inline_submodule_diff.is_none());
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSubmoduleSummary {
+                repo_id: id,
+                target: effect_target,
+            } if *id == repo_id && *effect_target == target
+        )));
+    }
+}
+
+#[test]
 fn merge_ref_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

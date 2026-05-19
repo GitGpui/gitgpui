@@ -121,6 +121,14 @@ pub enum RepoCommandKind {
     UpdateSubmodules {
         approved_sources: Vec<SubmoduleTrustTarget>,
     },
+    LoadSubmodule {
+        path: PathBuf,
+        approved_sources: Vec<SubmoduleTrustTarget>,
+    },
+    ChangeSubmodulePointer {
+        path: PathBuf,
+        reference: String,
+    },
     RemoveSubmodule {
         path: PathBuf,
     },

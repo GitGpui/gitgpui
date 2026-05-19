@@ -427,7 +427,8 @@ impl RealRepoFixture {
         let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
             &file,
             self._repo_root.path(),
-        );
+        )
+        .expect("real_repo large diff file text should index");
         let split = rebuild.row_provider;
         let inline = rebuild.inline_row_provider;
         let split_rows_painted = split

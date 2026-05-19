@@ -49,7 +49,10 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
             }
         }
-        PopoverKind::ChangeTrackingSettings | PopoverKind::UiScalePicker | PopoverKind::AppMenu => {
+        PopoverKind::DiffContentModeSettings
+        | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::UiScalePicker
+        | PopoverKind::AppMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
             state.active_repo.hash(&mut hasher);
             if let Some(repo) = repo_for_popover(state, popover) {
@@ -85,6 +88,10 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                     SubmoduleTrustPromptOperation::Update => {
                         1u8.hash(&mut hasher);
                     }
+                    SubmoduleTrustPromptOperation::Load { path } => {
+                        2u8.hash(&mut hasher);
+                        path.hash(&mut hasher);
+                    }
                 }
                 for source in &prompt.sources {
                     source.submodule_path.hash(&mut hasher);
@@ -110,6 +117,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo
+        | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker => None,
 
@@ -120,7 +128,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
-        | PopoverKind::DiffHunks
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
@@ -149,6 +156,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::BranchMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
+        | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
         | PopoverKind::HistoryBranchFilter { repo_id } => Some(*repo_id),
     }?;
@@ -208,8 +216,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             view_fingerprint::hash_loadable_arc(&repo.history_state.file_history, hasher);
         }
 
-        PopoverKind::DiffHunks
-        | PopoverKind::DiffHunkMenu { .. }
+        PopoverKind::DiffHunkMenu { .. }
         | PopoverKind::DiffEditorMenu { .. }
         | PopoverKind::DiscardChangesConfirm { .. } => {
             repo.diff_state.diff_rev.hash(hasher);
@@ -262,7 +269,9 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::CommitFileMenu { .. }
+        | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
+        | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -319,7 +328,8 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::CloneRepo => 4u8.hash(hasher),
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
-        PopoverKind::UiScalePicker => 67u8.hash(hasher),
+        PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
+        PopoverKind::UiScalePicker => 68u8.hash(hasher),
 
         PopoverKind::ResetPrompt {
             repo_id,
@@ -386,7 +396,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::PullPicker => 36u8.hash(hasher),
         PopoverKind::PushPicker => 37u8.hash(hasher),
         PopoverKind::AppMenu => 38u8.hash(hasher),
-        PopoverKind::DiffHunks => 39u8.hash(hasher),
         PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
             40u8.hash(hasher);
             repo_id.hash(hasher);
@@ -489,6 +498,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             commit_id.hash(hasher);
             path.hash(hasher);
         }
+        PopoverKind::SubmoduleInnerDiffMenu {
+            repo_id,
+            submodule_repo_path,
+            target,
+        } => {
+            60u8.hash(hasher);
+            repo_id.hash(hasher);
+            submodule_repo_path.hash(hasher);
+            view_fingerprint::hash_diff_target(target, hasher);
+        }
         PopoverKind::TagMenu { repo_id, commit_id } => {
             47u8.hash(hasher);
             repo_id.hash(hasher);
@@ -590,6 +609,11 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
             SubmodulePopoverKind::AddPrompt => {
                 24u8.hash(hasher);
                 repo_id.hash(hasher);
+            }
+            SubmodulePopoverKind::ChangePointerPrompt { path } => {
+                29u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
             }
             SubmodulePopoverKind::TrustConfirm => {
                 28u8.hash(hasher);

@@ -1,19 +1,140 @@
-use crate::model::ConflictFileLoadMode;
+use crate::model::{AppState, ConflictFileLoadMode};
 use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
-use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogScope};
+use gitcomet_core::domain::{DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
-use gitcomet_core::services::ConflictFileStages;
+use gitcomet_core::services::{ConflictFileStages, GitBackend, GitRepository};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::mpsc;
+use std::sync::{Arc, RwLock, mpsc};
 use std::time::Instant;
 
 use super::super::{RepoId, executor::TaskExecutor};
 use super::util::{RepoMap, send_or_log, spawn_with_repo, spawn_with_repo_or_else};
+
+pub(super) struct SelectedDiffLoadOptions {
+    pub(super) load_patch_diff: bool,
+    pub(super) load_file_text: bool,
+    pub(super) preview_text_side: Option<DiffPreviewTextSide>,
+    pub(super) load_submodule_summary: bool,
+    pub(super) load_file_image: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct SelectedDiffLoadGuard {
+    thread_state: Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+    target: DiffTarget,
+    target_rev: u64,
+}
+
+impl SelectedDiffLoadGuard {
+    pub(super) fn new(
+        thread_state: Arc<RwLock<Arc<AppState>>>,
+        repo_id: RepoId,
+        target: DiffTarget,
+        target_rev: u64,
+    ) -> Self {
+        Self {
+            thread_state,
+            repo_id,
+            target,
+            target_rev,
+        }
+    }
+
+    fn is_current(&self) -> bool {
+        let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == self.repo_id)
+            .is_some_and(|repo| {
+                repo.diff_state.diff_target_rev == self.target_rev
+                    && repo.diff_state.diff_target.as_ref() == Some(&self.target)
+            })
+    }
+}
+
+fn spawn_with_selected_diff_guard(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    repo_id: RepoId,
+    msg_tx: mpsc::Sender<Msg>,
+    guard: SelectedDiffLoadGuard,
+    task: impl FnOnce(Arc<dyn GitRepository>, mpsc::Sender<Msg>, SelectedDiffLoadGuard) + Send + 'static,
+) -> bool {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        if !guard.is_current() {
+            return;
+        }
+        task(repo, msg_tx, guard);
+    })
+}
+
+#[cfg(test)]
+mod selected_diff_guard_tests {
+    use super::*;
+    use crate::model::RepoState;
+    use gitcomet_core::domain::RepoSpec;
+
+    fn target(path: &str) -> DiffTarget {
+        DiffTarget::WorkingTree {
+            path: PathBuf::from(path),
+            area: DiffArea::Unstaged,
+        }
+    }
+
+    fn thread_state_with_target(
+        repo_id: RepoId,
+        selected: DiffTarget,
+        target_rev: u64,
+    ) -> Arc<RwLock<Arc<AppState>>> {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/selected-diff-guard-test"),
+            },
+        );
+        repo.diff_state.diff_target = Some(selected);
+        repo.diff_state.diff_target_rev = target_rev;
+
+        let mut state = AppState::default();
+        state.repos.push(repo);
+        Arc::new(RwLock::new(Arc::new(state)))
+    }
+
+    #[test]
+    fn selected_diff_guard_accepts_current_target_and_revision() {
+        let repo_id = RepoId(1);
+        let selected = target("src/lib.rs");
+        let guard = SelectedDiffLoadGuard::new(
+            thread_state_with_target(repo_id, selected.clone(), 7),
+            repo_id,
+            selected,
+            7,
+        );
+
+        assert!(guard.is_current());
+    }
+
+    #[test]
+    fn selected_diff_guard_rejects_stale_target_or_revision() {
+        let repo_id = RepoId(1);
+        let selected = target("src/lib.rs");
+        let thread_state = thread_state_with_target(repo_id, selected.clone(), 7);
+
+        let stale_revision =
+            SelectedDiffLoadGuard::new(Arc::clone(&thread_state), repo_id, selected.clone(), 6);
+        assert!(!stale_revision.is_current());
+
+        let stale_target =
+            SelectedDiffLoadGuard::new(thread_state, repo_id, target("src/main.rs"), 7);
+        assert!(!stale_target.is_current());
+    }
+}
 
 fn missing_repo_error(repo_id: RepoId) -> Error {
     Error::new(ErrorKind::Backend(format!(
@@ -952,7 +1073,7 @@ pub(super) fn schedule_load_diff_preview_text_file(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     target: DiffTarget,
-    side: gitcomet_core::domain::DiffPreviewTextSide,
+    side: DiffPreviewTextSide,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = repo.diff_preview_text_file(&target, side);
@@ -964,6 +1085,121 @@ pub(super) fn schedule_load_diff_preview_text_file(
                 side,
                 result,
             }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_submodule_summary(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    target: DiffTarget,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.submodule_diff_summary(&target);
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                repo_id,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_inline_submodule_selected_diff(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_parsed(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_inline_submodule_selected_diff_file(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_file_text(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_file_image(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(
+                crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+                    repo_id,
+                    inline_rev,
+                    target,
+                    result,
+                },
+            ),
         );
     });
 }
@@ -991,31 +1227,133 @@ pub(super) fn schedule_load_diff_file_image(
 pub(super) fn schedule_load_selected_diff(
     executor: &TaskExecutor,
     repos: &RepoMap,
+    thread_state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     target: DiffTarget,
-    load_patch_diff: bool,
-    load_file_text: bool,
-    preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
-    load_file_image: bool,
+    target_rev: u64,
+    options: SelectedDiffLoadOptions,
 ) {
-    if load_file_image {
-        schedule_load_diff_file_image(executor, repos, msg_tx.clone(), repo_id, target.clone());
-    }
-    if let Some(side) = preview_text_side {
-        schedule_load_diff_preview_text_file(
+    let guard = SelectedDiffLoadGuard::new(thread_state, repo_id, target.clone(), target_rev);
+    if options.load_submodule_summary {
+        let target = target.clone();
+        spawn_with_selected_diff_guard(
             executor,
             repos,
-            msg_tx.clone(),
             repo_id,
-            target.clone(),
-            side,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.submodule_diff_summary(&target);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
         );
     }
-    if load_file_text {
-        schedule_load_diff_file(executor, repos, msg_tx.clone(), repo_id, target.clone());
+    if options.load_file_image {
+        let target = target.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.diff_file_image(&target);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
     }
-    if load_patch_diff {
-        schedule_load_diff(executor, repos, msg_tx, repo_id, target);
+    if let Some(side) = options.preview_text_side {
+        let target = target.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.diff_preview_text_file(&target, side);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
+                        repo_id,
+                        target,
+                        side,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
+    if options.load_file_text {
+        let target = target.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.diff_file_text(&target);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
+    if options.load_patch_diff {
+        spawn_with_selected_diff_guard(
+            executor,
+            repos,
+            repo_id,
+            msg_tx,
+            guard,
+            move |repo, msg_tx, guard| {
+                // UI consumes this parsed diff through paged/lazy row adapters.
+                let result = repo.diff_parsed(&target);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
     }
 }

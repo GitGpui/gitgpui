@@ -1,6 +1,7 @@
 use super::*;
 use crate::ui_scale;
 use gitcomet_core::domain::LogScope;
+use gitcomet_core::domain::SubmoduleStatus;
 use std::num::NonZeroU32;
 
 const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
@@ -38,6 +39,108 @@ fn branch_workspace_badge_path(
     listed_workspace_path
         .map(std::path::Path::to_path_buf)
         .or_else(|| active_workspace_path.map(std::path::Path::to_path_buf))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WorktreeBadgePalette {
+    bg: gpui::Rgba,
+    active_bg: gpui::Rgba,
+    border: gpui::Rgba,
+    hover_border: gpui::Rgba,
+    open_border: gpui::Rgba,
+    open_hover_border: gpui::Rgba,
+    active_border: gpui::Rgba,
+    text: gpui::Rgba,
+    hover_text: gpui::Rgba,
+    open_text: gpui::Rgba,
+    active_text: gpui::Rgba,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WorktreeBadgeColors {
+    border: gpui::Rgba,
+    hover_border: gpui::Rgba,
+    text: gpui::Rgba,
+    hover_text: gpui::Rgba,
+}
+
+fn worktree_badge_palette(theme: AppTheme) -> WorktreeBadgePalette {
+    WorktreeBadgePalette {
+        bg: gpui::rgba(0x00000000),
+        active_bg: gpui::rgba(0x00000000),
+        border: with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.38 } else { 0.28 },
+        ),
+        hover_border: with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.55 } else { 0.40 },
+        ),
+        open_border: with_alpha(theme.colors.accent, if theme.is_dark { 0.56 } else { 0.34 }),
+        open_hover_border: with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.46 }),
+        active_border: with_alpha(theme.colors.accent, if theme.is_dark { 0.84 } else { 0.68 }),
+        text: theme.colors.text_muted,
+        hover_text: theme.colors.text,
+        open_text: theme.colors.accent,
+        active_text: theme.colors.accent,
+    }
+}
+
+fn worktree_badge_colors(
+    palette: WorktreeBadgePalette,
+    is_open: bool,
+    menu_active: bool,
+) -> WorktreeBadgeColors {
+    WorktreeBadgeColors {
+        border: if menu_active {
+            palette.active_border
+        } else if is_open {
+            palette.open_border
+        } else {
+            palette.border
+        },
+        hover_border: if is_open {
+            palette.open_hover_border
+        } else {
+            palette.hover_border
+        },
+        text: if menu_active {
+            palette.active_text
+        } else if is_open {
+            palette.open_text
+        } else {
+            palette.text
+        },
+        hover_text: if is_open {
+            palette.open_text
+        } else {
+            palette.hover_text
+        },
+    }
+}
+
+fn worktree_branch_badge_label(
+    branch: Option<&SharedString>,
+    detached: bool,
+    open_repo: Option<&RepoState>,
+) -> Option<SharedString> {
+    if let Some(open_repo) = open_repo {
+        if open_repo.detached_head_commit.is_some() {
+            return Some("(detached)".into());
+        }
+
+        match &open_repo.head_branch {
+            Loadable::Ready(head_branch) if head_branch != "HEAD" => {
+                return Some(SharedString::new(head_branch.as_str()));
+            }
+            Loadable::Ready(_) if detached => return Some("(detached)".into()),
+            _ => {}
+        }
+    }
+
+    branch
+        .cloned()
+        .or_else(|| detached.then(|| "(detached)".into()))
 }
 
 pub(in crate::view) fn active_workspace_paths_by_branch(
@@ -187,6 +290,7 @@ impl SidebarPaneView {
         let workspace_badges = presentation.workspace_badges;
         let repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
         let theme = this.theme;
+        let worktree_badge_palette = worktree_badge_palette(theme);
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
         let selected_branch = this.selected_branch().cloned();
@@ -655,18 +759,27 @@ impl SidebarPaneView {
                     let path_for_menu = path.clone();
                     let branch_for_menu = branch.as_ref().map(|name| name.to_string());
                     let path_label = this.cached_path_display(&path);
-                    let branch_tooltip_host = this.tooltip_host.clone();
-                    let detached_tooltip_host = this.tooltip_host.clone();
                     let context_menu_invoker: SharedString =
                         format!("worktree_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+                    let open_worktree_repo = this.open_repo_for_workdir(&path);
+                    let worktree_tab_open = open_worktree_repo.is_some();
+                    let branch_badge_label =
+                        worktree_branch_badge_label(branch.as_ref(), detached, open_worktree_repo);
+                    let branch_badge_colors = worktree_badge_colors(
+                        worktree_badge_palette,
+                        worktree_tab_open,
+                        context_menu_active,
+                    );
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("worktree_row_{}_{}", repo_id.0, ix).into();
+                    let row_debug_selector = row_group.as_ref().to_owned();
 
                     div()
                         .id(("worktree_item", ix))
+                        .debug_selector(move || row_debug_selector.clone())
                         .relative()
                         .h(scaled_px(22.0))
                         .w_full()
@@ -675,7 +788,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
-                        .pr_2()
+                        .pr(px(0.0))
                         .rounded(px(theme.radii.row))
                         .when(is_active, |d| {
                             d.bg(with_alpha(
@@ -702,72 +815,68 @@ impl SidebarPaneView {
                                 .flex()
                                 .items_center()
                                 .overflow_hidden()
+                                .gap(scaled_px(5.0))
                                 .child(
                                     div()
+                                        .debug_selector(move || format!("worktree_path_label_{ix}"))
+                                        .flex_1()
                                         .min_w(px(0.0))
-                                        .when_some(branch.clone(), |label, branch| {
-                                            let tooltip_host = branch_tooltip_host.clone();
-                                            let mut prefix = div()
-                                                .debug_selector(move || {
-                                                    format!("worktree_branch_label_{ix}")
-                                                })
-                                                .min_w(px(0.0))
-                                                .overflow_hidden()
-                                                .whitespace_nowrap();
-                                            prefix.style().flex_shrink = Some(1.0);
-                                            label
-                                                .child(
-                                                    prefix.child(
-                                                        components::TruncatedText::new(branch)
-                                                            .id(("worktree_branch_text", ix))
-                                                            .full_text_tooltip(tooltip_host)
-                                                            .render(cx),
-                                                    ),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex_shrink_0()
-                                                        .whitespace_nowrap()
-                                                        .child("  "),
-                                                )
-                                        })
-                                        .when(branch.is_none() && detached, |label| {
-                                            let tooltip_host = detached_tooltip_host.clone();
-                                            let mut prefix = div()
-                                                .debug_selector(move || {
-                                                    format!("worktree_branch_label_{ix}")
-                                                })
-                                                .min_w(px(0.0))
-                                                .overflow_hidden()
-                                                .whitespace_nowrap();
-                                            prefix.style().flex_shrink = Some(1.0);
-                                            label
-                                                .child(
-                                                    prefix.child(
+                                        .overflow_hidden()
+                                        .child(
+                                            components::TruncatedText::path(path_label.clone())
+                                                .id(("worktree_path_text", ix))
+                                                .text_sm()
+                                                .full_text_tooltip(this.tooltip_host.clone())
+                                                .render(cx),
+                                        ),
+                                )
+                                .when_some(branch_badge_label.clone(), |row, badge_label| {
+                                    row.child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(scaled_px(3.0))
+                                            .px(scaled_px(4.0))
+                                            .py(scaled_px(0.0))
+                                            .rounded(scaled_px(2.0))
+                                            .border_1()
+                                            .border_color(branch_badge_colors.border)
+                                            .bg(worktree_badge_palette.bg)
+                                            .text_size(scaled_px(11.0))
+                                            .text_color(branch_badge_colors.text)
+                                            .id(("worktree_branch_badge", ix))
+                                            .debug_selector(move || {
+                                                format!("worktree_branch_badge_{ix}")
+                                            })
+                                            .max_w_1_2()
+                                            .min_w(px(0.0))
+                                            .overflow_hidden()
+                                            .child(svg_icon(
+                                                "icons/git_branch.svg",
+                                                branch_badge_colors.text,
+                                                9.0,
+                                            ))
+                                            .child(
+                                                div()
+                                                    .debug_selector(move || {
+                                                        format!("worktree_branch_badge_label_{ix}")
+                                                    })
+                                                    .min_w(px(0.0))
+                                                    .overflow_hidden()
+                                                    .child(
                                                         components::TruncatedText::new(
-                                                            "(detached)",
+                                                            badge_label.clone(),
                                                         )
-                                                        .id(("worktree_branch_text", ix))
-                                                        .full_text_tooltip(tooltip_host)
+                                                        .id(("worktree_branch_badge_text", ix))
+                                                        .text_size(scaled_px(11.0))
+                                                        .full_text_tooltip(
+                                                            this.tooltip_host.clone(),
+                                                        )
                                                         .render(cx),
                                                     ),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex_shrink_0()
-                                                        .whitespace_nowrap()
-                                                        .child("  "),
-                                                )
-                                        })
-                                        .child(
-                                            div().flex_1().min_w(px(0.0)).child(
-                                                components::TruncatedText::path(path_label.clone())
-                                                    .id(("worktree_path_text", ix))
-                                                    .full_text_tooltip(this.tooltip_host.clone())
-                                                    .render(cx),
                                             ),
-                                        ),
-                                ),
+                                    )
+                                }),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
@@ -909,7 +1018,63 @@ impl SidebarPaneView {
                     let path_for_menu = path.clone();
                     let repo_workdir_for_open = repo_workdir.clone();
                     let path_label = this.cached_path_display(&path);
-                    let tooltip = path_label.clone();
+                    let submodule_info =
+                        this.active_repo().and_then(|repo| match &repo.submodules {
+                            Loadable::Ready(submodules) => submodules
+                                .iter()
+                                .find(|submodule| submodule.path == path)
+                                .map(|submodule| {
+                                    (
+                                        submodule.status,
+                                        submodule.recorded_head.clone(),
+                                        submodule.checked_out_head.clone(),
+                                    )
+                                }),
+                            _ => None,
+                        });
+                    let (icon_color, badge_label, can_open, tooltip) =
+                        if let Some((status, recorded_head, checked_out_head)) = submodule_info {
+                            let badge_label = match status {
+                                SubmoduleStatus::NotInitialized => Some("Not loaded"),
+                                SubmoduleStatus::HeadMismatch => Some("Head mismatch"),
+                                SubmoduleStatus::MergeConflict => Some("Conflict"),
+                                SubmoduleStatus::MissingMapping => Some("Missing mapping"),
+                                SubmoduleStatus::Unknown(_) => Some("Unknown"),
+                                SubmoduleStatus::UpToDate => None,
+                            };
+                            let icon_color = match status {
+                                SubmoduleStatus::NotInitialized => with_alpha(
+                                    theme.colors.text_muted,
+                                    if theme.is_dark { 0.78 } else { 0.92 },
+                                ),
+                                SubmoduleStatus::HeadMismatch => theme.colors.warning,
+                                SubmoduleStatus::MergeConflict
+                                | SubmoduleStatus::MissingMapping => theme.colors.danger,
+                                SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_) => {
+                                    icon_primary
+                                }
+                            };
+                            let can_open = !matches!(
+                                status,
+                                SubmoduleStatus::NotInitialized
+                                    | SubmoduleStatus::MergeConflict
+                                    | SubmoduleStatus::MissingMapping
+                            );
+                            let checked_out = checked_out_head
+                                .as_ref()
+                                .map(|head| head.as_ref())
+                                .unwrap_or("not loaded");
+                            let tooltip: SharedString = format!(
+                                "{}\nRecorded: {}\nChecked out: {}",
+                                path.display(),
+                                recorded_head.as_ref(),
+                                checked_out,
+                            )
+                            .into();
+                            (icon_color, badge_label, can_open, tooltip)
+                        } else {
+                            (icon_primary, None, true, path_label.clone())
+                        };
                     let context_menu_invoker: SharedString =
                         format!("submodule_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
@@ -928,7 +1093,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
-                        .pr_2()
+                        .pr(px(0.0))
                         .rounded(px(theme.radii.row))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -940,7 +1105,7 @@ impl SidebarPaneView {
                         })
                         .active(move |s| s.bg(theme.colors.active))
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot("icons/box.svg", icon_primary, 12.0))
+                        .child(tree_icon_slot("icons/box.svg", icon_color, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -951,8 +1116,38 @@ impl SidebarPaneView {
                                 .debug_selector(move || format!("submodule_label_{ix}"))
                                 .child(path_label),
                         )
+                        .when_some(badge_label, |row, badge_label| {
+                            row.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(scaled_px(3.0))
+                                    .px(scaled_px(4.0))
+                                    .py(scaled_px(0.0))
+                                    .rounded(scaled_px(2.0))
+                                    .border_1()
+                                    .border_color(if context_menu_active {
+                                        theme.colors.border
+                                    } else {
+                                        with_alpha(
+                                            theme.colors.text_muted,
+                                            if theme.is_dark { 0.32 } else { 0.24 },
+                                        )
+                                    })
+                                    .bg(with_alpha(
+                                        theme.colors.surface_bg,
+                                        if theme.is_dark { 0.9 } else { 0.7 },
+                                    ))
+                                    .text_size(scaled_px(11.0))
+                                    .text_color(theme.colors.text_muted)
+                                    .child(badge_label),
+                            )
+                        })
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
+                                return;
+                            }
+                            if !can_open {
                                 return;
                             }
                             let Some(base) = repo_workdir_for_open.clone() else {
@@ -1189,26 +1384,6 @@ impl SidebarPaneView {
                         }
                         BranchSection::Remote => theme.colors.text_muted,
                     };
-                    let worktree_action_bg = gpui::rgba(0x00000000);
-                    let worktree_action_active_bg = gpui::rgba(0x00000000);
-                    let worktree_action_border = with_alpha(
-                        theme.colors.text_muted,
-                        if theme.is_dark { 0.38 } else { 0.28 },
-                    );
-                    let worktree_action_hover_border = with_alpha(
-                        theme.colors.text_muted,
-                        if theme.is_dark { 0.55 } else { 0.40 },
-                    );
-                    let worktree_action_open_border =
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.56 } else { 0.34 });
-                    let worktree_action_open_hover_border =
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.46 });
-                    let worktree_action_active_border =
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.84 } else { 0.68 });
-                    let worktree_action_text = theme.colors.text_muted;
-                    let worktree_action_hover_text = theme.colors.text;
-                    let worktree_action_open_text = theme.colors.accent;
-                    let worktree_action_active_text = theme.colors.accent;
                     let badge_gap_px = scaled_px(BRANCH_BADGE_GAP_PX);
                     let divergence_badge =
                         |icon_path: &'static str,
@@ -1369,30 +1544,11 @@ impl SidebarPaneView {
                             workspace_badge_path.display().to_string().into();
                         let branch_name_for_click = name.to_string();
                         let branch_name_for_right_click = branch_name_for_click.clone();
-                        let badge_border = if workspace_menu_active {
-                            worktree_action_active_border
-                        } else if has_active_workspace {
-                            worktree_action_open_border
-                        } else {
-                            worktree_action_border
-                        };
-                        let badge_hover_border = if has_active_workspace {
-                            worktree_action_open_hover_border
-                        } else {
-                            worktree_action_hover_border
-                        };
-                        let badge_text = if workspace_menu_active {
-                            worktree_action_active_text
-                        } else if has_active_workspace {
-                            worktree_action_open_text
-                        } else {
-                            worktree_action_text
-                        };
-                        let badge_hover_text = if has_active_workspace {
-                            worktree_action_open_text
-                        } else {
-                            worktree_action_hover_text
-                        };
+                        let badge_colors = worktree_badge_colors(
+                            worktree_badge_palette,
+                            has_active_workspace,
+                            workspace_menu_active,
+                        );
                         let worktree_badge = div()
                             .id(("branch_workspace_badge", ix))
                             .debug_selector(move || format!("branch_workspace_badge_{ix}"))
@@ -1403,22 +1559,22 @@ impl SidebarPaneView {
                             .py(scaled_px(0.0))
                             .rounded(scaled_px(2.0))
                             .border_1()
-                            .border_color(badge_border)
-                            .bg(worktree_action_bg)
+                            .border_color(badge_colors.border)
+                            .bg(worktree_badge_palette.bg)
                             .text_size(scaled_px(11.0))
-                            .text_color(badge_text)
+                            .text_color(badge_colors.text)
                             .cursor(CursorStyle::PointingHand)
-                            .child(svg_icon(WORKTREE_ICON_PATH, badge_text, 9.0))
+                            .child(svg_icon(WORKTREE_ICON_PATH, badge_colors.text, 9.0))
                             .child(workspace_badge_label)
                             .hover(move |s| {
                                 if workspace_menu_active {
-                                    s.bg(worktree_action_active_bg)
-                                        .border_color(worktree_action_active_border)
-                                        .text_color(worktree_action_active_text)
+                                    s.bg(worktree_badge_palette.active_bg)
+                                        .border_color(worktree_badge_palette.active_border)
+                                        .text_color(worktree_badge_palette.active_text)
                                 } else {
-                                    s.bg(worktree_action_bg)
-                                        .border_color(badge_hover_border)
-                                        .text_color(badge_hover_text)
+                                    s.bg(worktree_badge_palette.bg)
+                                        .border_color(badge_colors.hover_border)
+                                        .text_color(badge_colors.hover_text)
                                 }
                             })
                             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -1474,7 +1630,6 @@ impl SidebarPaneView {
                                 }),
                             )
                             .gitcomet_tooltip(theme, worktree_badge_tooltip.clone());
-
                         end_accessories = end_accessories.child(worktree_badge);
                     }
 
@@ -1707,6 +1862,7 @@ impl DetailsPaneView {
                                     path_label,
                                     path_alignment_group.clone(),
                                 )
+                                .text_sm()
                                 .render(cx),
                             ),
                     )
@@ -1874,6 +2030,56 @@ mod tests {
             author: "author".into(),
             time: SystemTime::UNIX_EPOCH,
         }
+    }
+
+    #[test]
+    fn worktree_badge_colors_follow_open_and_menu_state() {
+        let palette = worktree_badge_palette(AppTheme::gitcomet_dark());
+
+        let closed = worktree_badge_colors(palette, false, false);
+        assert_eq!(closed.border, palette.border);
+        assert_eq!(closed.text, palette.text);
+
+        let open = worktree_badge_colors(palette, true, false);
+        assert_eq!(open.border, palette.open_border);
+        assert_eq!(open.text, palette.open_text);
+
+        let menu_active = worktree_badge_colors(palette, true, true);
+        assert_eq!(menu_active.border, palette.active_border);
+        assert_eq!(menu_active.text, palette.active_text);
+    }
+
+    #[test]
+    fn worktree_branch_badge_label_prefers_open_repo_head_branch() {
+        let listed: SharedString = "feature/listed".into();
+        let mut open_repo = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo-feature"),
+            },
+        );
+        open_repo.head_branch = Loadable::Ready("feature/live".to_string());
+
+        let label = worktree_branch_badge_label(Some(&listed), false, Some(&open_repo))
+            .expect("expected live branch badge label");
+        assert_eq!(label.as_ref(), "feature/live");
+    }
+
+    #[test]
+    fn worktree_branch_badge_label_reports_detached_open_repo() {
+        let listed: SharedString = "feature/listed".into();
+        let mut open_repo = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo-feature"),
+            },
+        );
+        open_repo.head_branch = Loadable::Ready("HEAD".to_string());
+        open_repo.detached_head_commit = Some(commit_id("detached"));
+
+        let label = worktree_branch_badge_label(Some(&listed), false, Some(&open_repo))
+            .expect("expected detached branch badge label");
+        assert_eq!(label.as_ref(), "(detached)");
     }
 
     #[test]

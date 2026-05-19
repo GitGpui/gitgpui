@@ -619,7 +619,8 @@ fn branch_sidebar_defaults_secondary_sections_to_collapsed() {
     }]));
     repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
         path: PathBuf::from("vendor/lib"),
-        head: CommitId("beadfeed".into()),
+        recorded_head: CommitId("beadfeed".into()),
+        checked_out_head: Some(CommitId("beadfeed".into())),
         status: SubmoduleStatus::UpToDate,
     }]));
     repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {
@@ -848,7 +849,8 @@ fn branch_sidebar_collapses_branch_sections_without_hiding_other_sections() {
     }]));
     repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
         path: PathBuf::from("vendor/lib"),
-        head: CommitId("beadfeed".into()),
+        recorded_head: CommitId("beadfeed".into()),
+        checked_out_head: Some(CommitId("beadfeed".into())),
         status: SubmoduleStatus::UpToDate,
     }]));
     repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {

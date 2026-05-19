@@ -903,13 +903,13 @@ impl DetailsPaneView {
             .map(|repo| {
                 (
                     StatusSectionEntries::from_repo(repo, StatusSection::Staged)
-                        .map_or(0, StatusSectionEntries::len),
+                        .map_or(0, |entries| entries.len()),
                     StatusSectionEntries::from_repo(repo, StatusSection::CombinedUnstaged)
-                        .map_or(0, StatusSectionEntries::len),
+                        .map_or(0, |entries| entries.len()),
                     StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
-                        .map_or(0, StatusSectionEntries::len),
+                        .map_or(0, |entries| entries.len()),
                     StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
-                        .map_or(0, StatusSectionEntries::len),
+                        .map_or(0, |entries| entries.len()),
                 )
             })
             .unwrap_or((0, 0, 0, 0));
@@ -918,9 +918,9 @@ impl DetailsPaneView {
             .map(|repo| {
                 (
                     StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
-                        .map_or_else(Vec::new, StatusSectionEntries::path_vec),
+                        .map_or_else(Vec::new, |entries| entries.path_vec()),
                     StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
-                        .map_or_else(Vec::new, StatusSectionEntries::path_vec),
+                        .map_or_else(Vec::new, |entries| entries.path_vec()),
                 )
             })
             .unwrap_or_else(|| (Vec::new(), Vec::new()));

@@ -68,6 +68,7 @@ mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+mod file_diff_display;
 mod fingerprint;
 mod history_graph;
 pub(crate) mod history_mode;
@@ -117,7 +118,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
-use word_diff::capped_word_diff_ranges;
+use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
@@ -129,7 +130,11 @@ use diff_utils::{
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
     parse_diff_git_header_path, parse_unified_hunk_header_for_display,
-    scrollbar_markers_from_flags,
+    scrollbar_markers_from_flags, scrollbar_markers_from_visible_ranges,
+};
+use file_diff_display::{
+    LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
+    file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
 use mod_helpers::*;
 pub use mod_helpers::{
@@ -614,6 +619,11 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffScrollSync::from_key)
             .unwrap_or_default();
+        let diff_content_mode = ui_session
+            .diff_content_mode
+            .as_deref()
+            .and_then(DiffContentMode::from_key)
+            .unwrap_or_default();
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
 
@@ -746,6 +756,7 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 diff_scroll_sync,
+                diff_content_mode,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -792,6 +803,7 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 change_tracking_view,
+                diff_content_mode,
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 main_pane.clone(),
@@ -935,6 +947,7 @@ impl GitCometView {
             toast_host,
             popover_host,
             focused_mergetool_bootstrap,
+            submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
             startup_repo_bootstrap_pending,
             splash_backdrop_image: splash::load_splash_backdrop_image(),
@@ -946,6 +959,7 @@ impl GitCometView {
             show_timezone,
             change_tracking_view,
             diff_scroll_sync,
+            diff_content_mode,
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
@@ -985,6 +999,7 @@ impl GitCometView {
         view.maybe_auto_install_linux_desktop_integration(cx);
 
         view.drive_focused_mergetool_bootstrap();
+        view.drive_submodule_diff_bootstrap();
         view.maybe_show_user_survey_on_startup(cx);
         view.maybe_check_for_updates_on_startup(cx);
 
@@ -1193,6 +1208,46 @@ impl GitCometView {
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
         self.schedule_ui_settings_persist(cx);
+    }
+
+    fn apply_diff_content_mode_preference(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_content_mode == next {
+            return false;
+        }
+
+        self.diff_content_mode = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_content_mode(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    // MainPaneView sometimes owns the active GPUI update when the diff-header
+    // toggle is clicked, so syncing the root preference must not call back into
+    // `main_pane.update(...)`.
+    pub(in crate::view) fn sync_diff_content_mode_from_pane(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_content_mode_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_content_mode(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_content_mode_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_content_mode(next, cx));
     }
 
     pub(in crate::view) fn set_history_column_preferences(
@@ -1611,6 +1666,34 @@ impl GitCometView {
             }
             FocusedMergetoolBootstrapAction::Complete => {
                 self.focused_mergetool_bootstrap = None;
+            }
+        }
+    }
+
+    pub(super) fn drive_submodule_diff_bootstrap(&mut self) {
+        if !self.state.git_runtime.is_available() {
+            return;
+        }
+
+        let Some(bootstrap) = self.submodule_diff_bootstrap.as_ref() else {
+            return;
+        };
+        let Some(action) = submodule_diff_bootstrap_action(&self.state, bootstrap) else {
+            return;
+        };
+
+        match action {
+            SubmoduleDiffBootstrapAction::OpenRepo(path) => {
+                self.store.dispatch(Msg::OpenRepo(path))
+            }
+            SubmoduleDiffBootstrapAction::SetActiveRepo(repo_id) => {
+                self.store.dispatch(Msg::SetActiveRepo { repo_id });
+            }
+            SubmoduleDiffBootstrapAction::SelectDiff { repo_id, target } => {
+                self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            }
+            SubmoduleDiffBootstrapAction::Complete => {
+                self.submodule_diff_bootstrap = None;
             }
         }
     }
