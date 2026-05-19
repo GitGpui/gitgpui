@@ -45,6 +45,7 @@ fn schedule_effect_with_state_for_test(
     effect: Effect,
 ) {
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
     super::effects::schedule_effect(
         executor,
         session_persist_executor,

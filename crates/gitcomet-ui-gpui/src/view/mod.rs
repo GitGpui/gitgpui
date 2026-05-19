@@ -48,6 +48,7 @@ actions!(
         TextInputDiffNextSearchMatchOrChange,
         TextInputDiffPrevChange,
         TextInputDiffNextChange,
+        OpenActiveViewSearch,
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
@@ -2383,6 +2384,14 @@ impl Render for GitCometView {
         root = root.relative();
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
+            .on_action(cx.listener(|this, _: &OpenActiveViewSearch, window, cx| {
+                let handled = this
+                    .main_pane
+                    .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
+                if handled {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &TextInputCommitSubmit, window, cx| {
                 let handled = this.details_pane.update(cx, |pane, cx| {
                     pane.handle_commit_submit_shortcut(window, cx)

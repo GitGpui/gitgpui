@@ -357,6 +357,27 @@ fn retain_refined_visible_matches(
     }
 }
 
+#[derive(Clone, Copy)]
+enum DiffSearchFinalizeMode {
+    ScrollToFirst,
+    PreserveCurrent {
+        previous_match_ix: Option<usize>,
+        previous_visible_ix: Option<usize>,
+    },
+}
+
+impl DiffSearchFinalizeMode {
+    fn preserve_current(
+        previous_match_ix: Option<usize>,
+        previous_visible_ix: Option<usize>,
+    ) -> Self {
+        Self::PreserveCurrent {
+            previous_match_ix,
+            previous_visible_ix,
+        }
+    }
+}
+
 impl MainPaneView {
     pub(in crate::view) fn active_conflict_target(
         &self,
@@ -382,6 +403,18 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn diff_search_recompute_matches(&mut self) {
+        self.diff_search_recompute_matches_with_finalize(DiffSearchFinalizeMode::preserve_current(
+            self.diff_search_match_ix,
+            self.diff_search_match_ix
+                .and_then(|ix| self.diff_search_matches.get(ix).copied()),
+        ));
+    }
+
+    pub(in super::super::super) fn diff_search_recompute_matches_and_scroll_to_first(&mut self) {
+        self.diff_search_recompute_matches_with_finalize(DiffSearchFinalizeMode::ScrollToFirst);
+    }
+
+    fn diff_search_recompute_matches_with_finalize(&mut self, finalize: DiffSearchFinalizeMode) {
         if !self.diff_search_active {
             self.diff_search_matches.clear();
             self.diff_search_match_ix = None;
@@ -392,7 +425,7 @@ impl MainPaneView {
             self.ensure_diff_visible_indices();
         }
 
-        self.diff_search_recompute_matches_for_current_view();
+        self.diff_search_recompute_matches_for_current_view_with_finalize(finalize);
     }
 
     pub(super) fn diff_search_recompute_matches_for_query_change(&mut self, previous_query: &str) {
@@ -442,20 +475,32 @@ impl MainPaneView {
             }
         }
 
-        self.diff_search_finalize_matches();
+        self.diff_search_finalize_matches(DiffSearchFinalizeMode::ScrollToFirst);
     }
 
     pub(super) fn diff_search_recompute_matches_for_current_view(&mut self) {
-        self.diff_search_match_ix = None;
+        let previous_match_ix = self.diff_search_match_ix;
+        let previous_visible_ix =
+            previous_match_ix.and_then(|ix| self.diff_search_matches.get(ix).copied());
+        self.diff_search_recompute_matches_for_current_view_with_finalize(
+            DiffSearchFinalizeMode::preserve_current(previous_match_ix, previous_visible_ix),
+        );
+    }
+
+    fn diff_search_recompute_matches_for_current_view_with_finalize(
+        &mut self,
+        finalize: DiffSearchFinalizeMode,
+    ) {
         let query_text = self.diff_search_query.clone();
 
         let Some(query) = AsciiCaseInsensitiveNeedle::new(query_text.as_ref().trim()) else {
             self.diff_search_matches.clear();
+            self.diff_search_match_ix = None;
             return;
         };
 
         self.diff_search_scan_current_view_with_needle(query);
-        self.diff_search_finalize_matches();
+        self.diff_search_finalize_matches(finalize);
     }
 
     fn diff_search_scan_current_view_with_needle(&mut self, query: AsciiCaseInsensitiveNeedle<'_>) {
@@ -803,13 +848,42 @@ impl MainPaneView {
         }
     }
 
-    fn diff_search_finalize_matches(&mut self) {
+    fn diff_search_finalize_matches(&mut self, mode: DiffSearchFinalizeMode) {
         if self.diff_search_matches.is_empty() {
+            self.diff_search_match_ix = None;
             return;
         }
-        self.diff_search_match_ix = Some(0);
-        let first = self.diff_search_matches[0];
-        self.diff_search_scroll_to_visible_ix(first);
+
+        match mode {
+            DiffSearchFinalizeMode::ScrollToFirst => {
+                self.diff_search_match_ix = Some(0);
+                let first = self.diff_search_matches[0];
+                self.diff_search_scroll_to_visible_ix(first);
+            }
+            DiffSearchFinalizeMode::PreserveCurrent {
+                previous_match_ix,
+                previous_visible_ix,
+            } => {
+                let had_previous_match =
+                    previous_match_ix.is_some() || previous_visible_ix.is_some();
+                let next_ix = previous_visible_ix
+                    .and_then(|visible_ix| {
+                        self.diff_search_matches
+                            .iter()
+                            .position(|&match_visible_ix| match_visible_ix == visible_ix)
+                    })
+                    .or_else(|| {
+                        previous_match_ix
+                            .map(|ix| ix.min(self.diff_search_matches.len().saturating_sub(1)))
+                    })
+                    .unwrap_or(0);
+                self.diff_search_match_ix = Some(next_ix);
+                if !had_previous_match {
+                    let first = self.diff_search_matches[next_ix];
+                    self.diff_search_scroll_to_visible_ix(first);
+                }
+            }
+        }
     }
 
     pub(in super::super::super) fn diff_search_prev_match(&mut self) {

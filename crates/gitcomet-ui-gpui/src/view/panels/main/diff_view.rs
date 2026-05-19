@@ -104,14 +104,139 @@ impl MainPaneView {
 
     fn activate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.prepare_source_mode_for_diff_search(cx);
+        let was_search_active = self.diff_search_active;
         self.diff_search_active = true;
         self.clear_diff_text_query_overlay_cache();
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
         self.clear_conflict_diff_query_overlay_caches();
-        self.diff_search_recompute_matches();
+        if was_search_active {
+            self.diff_search_recompute_matches();
+        } else {
+            self.diff_search_recompute_matches_and_scroll_to_first();
+        }
         let focus = self.diff_search_input.read(cx).focus_handle();
         window.focus(&focus, cx);
+        self.diff_search_input
+            .update(cx, |input, cx| input.select_all_text(cx));
+    }
+
+    fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.diff_search_active = false;
+        self.diff_search_matches.clear();
+        self.diff_search_match_ix = None;
+        self.clear_diff_text_query_overlay_cache();
+        self.clear_worktree_preview_segments_cache();
+        self.clear_conflict_diff_query_overlay_caches();
+        window.focus(&self.diff_panel_focus_handle, cx);
+    }
+
+    pub(in crate::view) fn open_search_for_active_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let diff_visible = self
+            .active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+            .is_some();
+        if !diff_visible {
+            return false;
+        }
+
+        self.activate_diff_search(window, cx);
+        true
+    }
+
+    fn render_diff_search_overlay(
+        &mut self,
+        theme: AppTheme,
+        ui_scale_percent: u32,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.diff_search_active {
+            return None;
+        }
+
+        let query = self.diff_search_query.as_ref().trim();
+        let match_label: SharedString = if query.is_empty() {
+            "Type to search".into()
+        } else if self.diff_search_matches.is_empty() {
+            "No matches".into()
+        } else {
+            let ix = self
+                .diff_search_match_ix
+                .unwrap_or(0)
+                .min(self.diff_search_matches.len().saturating_sub(1));
+            format!("{}/{}", ix + 1, self.diff_search_matches.len()).into()
+        };
+
+        let panel = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .rounded(px(theme.radii.row))
+            .border_1()
+            .border_color(theme.colors.border)
+            .bg(theme.colors.surface_bg_elevated)
+            .shadow_sm()
+            .child(
+                div()
+                    .w(px(240.0))
+                    .min_w(px(120.0))
+                    .debug_selector(|| "diff_search_input_slot".to_string())
+                    .child(self.diff_search_input.clone()),
+            )
+            .child(
+                div()
+                    .w(px(96.0))
+                    .min_w(px(96.0))
+                    .max_w(px(96.0))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .debug_selector(|| "diff_search_match_label".to_string())
+                    .child(match_label),
+            )
+            .child(
+                components::Button::new("diff_search_close", "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.text_muted,
+                        px(12.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.deactivate_diff_search(window, cx);
+                        cx.notify();
+                    })
+                    .debug_selector(|| "diff_search_close".to_string()),
+            )
+            .with_animation(
+                "diff_search_overlay_mount",
+                Animation::new(Duration::from_millis(120)).with_easing(gpui::quadratic),
+                |panel, delta| {
+                    let slide_y = (1.0 - delta) * -8.0;
+                    panel.opacity(delta).relative().top(px(slide_y))
+                },
+            );
+
+        Some(
+            div()
+                .id("diff_search_overlay")
+                .debug_selector(|| "diff_search_overlay".to_string())
+                .absolute()
+                .top(components::control_height_md(ui_scale_percent))
+                .right(px(8.0))
+                .child(panel)
+                .into_any_element(),
+        )
     }
 
     fn prepare_submodule_hash_input(
@@ -1225,56 +1350,9 @@ impl MainPaneView {
                         this.clear_diff_selection_or_exit(repo_id, cx);
                         cx.notify();
                     })
+                    .debug_selector(|| "diff_close".to_string())
                     .gitcomet_tooltip(theme, "Close diff".into()),
             );
-        }
-
-        if self.diff_search_active {
-            let query = self.diff_search_query.as_ref().trim();
-            let match_label: SharedString = if query.is_empty() {
-                "Type to search".into()
-            } else if self.diff_search_matches.is_empty() {
-                "No matches".into()
-            } else {
-                let ix = self
-                    .diff_search_match_ix
-                    .unwrap_or(0)
-                    .min(self.diff_search_matches.len().saturating_sub(1));
-                format!("{}/{}", ix + 1, self.diff_search_matches.len()).into()
-            };
-
-            controls = controls
-                .child(
-                    div()
-                        .w(px(240.0))
-                        .min_w(px(120.0))
-                        .child(self.diff_search_input.clone()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child(match_label),
-                )
-                .child(
-                    components::Button::new("diff_search_close", "")
-                        .start_slot(svg_icon(
-                            "icons/generic_close.svg",
-                            theme.colors.text_muted,
-                            px(12.0),
-                        ))
-                        .style(components::ButtonStyle::Transparent)
-                        .on_click(theme, cx, |this, _e, window, cx| {
-                            this.diff_search_active = false;
-                            this.diff_search_matches.clear();
-                            this.diff_search_match_ix = None;
-                            this.clear_diff_text_query_overlay_cache();
-                            this.clear_worktree_preview_segments_cache();
-                            this.clear_conflict_diff_query_overlay_caches();
-                            window.focus(&this.diff_panel_focus_handle, cx);
-                            cx.notify();
-                        }),
-                );
         }
 
         let header = div()
@@ -3555,8 +3633,10 @@ impl MainPaneView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == "diff_editor_menu");
+        let diff_search_overlay = self.render_diff_search_overlay(theme, ui_scale_percent, cx);
 
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -3635,13 +3715,7 @@ impl MainPaneView {
                 if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function
                 {
                     if this.diff_search_active {
-                        this.diff_search_active = false;
-                        this.diff_search_matches.clear();
-                        this.diff_search_match_ix = None;
-                        this.clear_diff_text_query_overlay_cache();
-                        this.clear_worktree_preview_segments_cache();
-                        this.clear_conflict_diff_query_overlay_caches();
-                        window.focus(&this.diff_panel_focus_handle, cx);
+                        this.deactivate_diff_search(window, cx);
                         handled = true;
                     }
                     if !handled
@@ -3659,14 +3733,8 @@ impl MainPaneView {
                     }
                 }
 
-                if !handled
-                    && (mods.control || mods.platform)
-                    && !mods.alt
-                    && !mods.function
-                    && key == "f"
-                {
-                    this.activate_diff_search(window, cx);
-                    handled = true;
+                if !handled && mods.secondary() && mods.number_of_modifiers() == 1 && key == "f" {
+                    handled = this.open_search_for_active_view(window, cx);
                 }
 
                 if !handled
@@ -3932,7 +4000,17 @@ impl MainPaneView {
                     .border_b_1()
                     .border_color(theme.colors.border),
             )
-            .child(div().flex_1().min_h(px(0.0)).w_full().h_full().child(body))
+            .child(
+                div()
+                    .id("diff_body_container")
+                    .debug_selector(|| "diff_body_container".to_string())
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .w_full()
+                    .h_full()
+                    .child(body),
+            )
+            .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
             .child(DiffTextSelectionTracker { view: cx.entity() })
     }
 

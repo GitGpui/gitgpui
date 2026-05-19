@@ -8,10 +8,10 @@ use gitcomet_core::mergetool_trace::{
 };
 use gitcomet_core::services::{ConflictFileStages, GitBackend, GitRepository};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use super::super::{RepoId, executor::TaskExecutor};
+use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{RepoMap, send_or_log, spawn_with_repo, spawn_with_repo_or_else};
 
 pub(super) struct SelectedDiffLoadOptions {
@@ -62,9 +62,9 @@ fn spawn_with_selected_diff_guard(
     executor: &TaskExecutor,
     repos: &RepoMap,
     repo_id: RepoId,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     guard: SelectedDiffLoadGuard,
-    task: impl FnOnce(Arc<dyn GitRepository>, mpsc::Sender<Msg>, SelectedDiffLoadGuard) + Send + 'static,
+    task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender, SelectedDiffLoadGuard) + Send + 'static,
 ) -> bool {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         if !guard.is_current() {
@@ -195,7 +195,7 @@ fn conflict_file_current_from_session(session: &ConflictSession) -> Option<Confl
 pub(super) fn schedule_load_branches(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -227,7 +227,7 @@ pub(super) fn schedule_load_branches(
 pub(super) fn schedule_load_remotes(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -259,7 +259,7 @@ pub(super) fn schedule_load_remotes(
 pub(super) fn schedule_load_remote_branches(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -291,7 +291,7 @@ pub(super) fn schedule_load_remote_branches(
 pub(super) fn schedule_load_status(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -323,7 +323,7 @@ pub(super) fn schedule_load_status(
 pub(super) fn schedule_load_worktree_status(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -355,7 +355,7 @@ pub(super) fn schedule_load_worktree_status(
 pub(super) fn schedule_load_staged_status(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -387,7 +387,7 @@ pub(super) fn schedule_load_staged_status(
 pub(super) fn schedule_load_head_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -419,7 +419,7 @@ pub(super) fn schedule_load_head_branch(
 pub(super) fn schedule_load_upstream_divergence(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -451,7 +451,7 @@ pub(super) fn schedule_load_upstream_divergence(
 pub(super) fn schedule_load_log(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     scope: LogScope,
     limit: usize,
@@ -495,7 +495,7 @@ pub(super) fn schedule_load_log(
 pub(super) fn schedule_load_tags(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -527,7 +527,7 @@ pub(super) fn schedule_load_tags(
 pub(super) fn schedule_load_remote_tags(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -559,7 +559,7 @@ pub(super) fn schedule_load_remote_tags(
 pub(super) fn schedule_load_stashes(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
 ) {
@@ -596,7 +596,7 @@ pub(super) fn schedule_load_stashes(
 pub(super) fn schedule_load_conflict_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     mode: ConflictFileLoadMode,
@@ -761,7 +761,7 @@ pub(super) fn schedule_load_conflict_file(
 pub(super) fn schedule_load_reflog(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
 ) {
@@ -794,7 +794,7 @@ pub(super) fn schedule_load_reflog(
 pub(super) fn schedule_load_file_history(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     limit: usize,
@@ -814,7 +814,7 @@ pub(super) fn schedule_load_file_history(
 pub(super) fn schedule_load_blame(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     rev: Option<String>,
@@ -836,7 +836,7 @@ pub(super) fn schedule_load_blame(
 pub(super) fn schedule_load_worktrees(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -868,7 +868,7 @@ pub(super) fn schedule_load_worktrees(
 pub(super) fn schedule_load_submodules(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -900,7 +900,7 @@ pub(super) fn schedule_load_submodules(
 pub(super) fn schedule_load_rebase_state(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -932,7 +932,7 @@ pub(super) fn schedule_load_rebase_state(
 pub(super) fn schedule_load_rebase_and_merge_state(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -978,7 +978,7 @@ pub(super) fn schedule_load_rebase_and_merge_state(
 pub(super) fn schedule_load_merge_commit_message(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo_or_else(
@@ -1010,7 +1010,7 @@ pub(super) fn schedule_load_merge_commit_message(
 pub(super) fn schedule_load_commit_details(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
@@ -1029,7 +1029,7 @@ pub(super) fn schedule_load_commit_details(
 pub(super) fn schedule_load_diff(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
@@ -1050,7 +1050,7 @@ pub(super) fn schedule_load_diff(
 pub(super) fn schedule_load_diff_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
@@ -1070,7 +1070,7 @@ pub(super) fn schedule_load_diff_file(
 pub(super) fn schedule_load_diff_preview_text_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
     side: DiffPreviewTextSide,
@@ -1092,7 +1092,7 @@ pub(super) fn schedule_load_diff_preview_text_file(
 pub(super) fn schedule_load_submodule_summary(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
@@ -1112,7 +1112,7 @@ pub(super) fn schedule_load_submodule_summary(
 pub(super) fn schedule_load_inline_submodule_selected_diff(
     executor: &TaskExecutor,
     backend: Arc<dyn GitBackend>,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     inline_rev: u64,
     selected: Option<(PathBuf, DiffTarget, u64)>,
@@ -1143,7 +1143,7 @@ pub(super) fn schedule_load_inline_submodule_selected_diff(
 pub(super) fn schedule_load_inline_submodule_selected_diff_file(
     executor: &TaskExecutor,
     backend: Arc<dyn GitBackend>,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     inline_rev: u64,
     selected: Option<(PathBuf, DiffTarget, u64)>,
@@ -1174,7 +1174,7 @@ pub(super) fn schedule_load_inline_submodule_selected_diff_file(
 pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
     executor: &TaskExecutor,
     backend: Arc<dyn GitBackend>,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     inline_rev: u64,
     selected: Option<(PathBuf, DiffTarget, u64)>,
@@ -1207,7 +1207,7 @@ pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
 pub(super) fn schedule_load_diff_file_image(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
@@ -1228,7 +1228,7 @@ pub(super) fn schedule_load_selected_diff(
     executor: &TaskExecutor,
     repos: &RepoMap,
     thread_state: Arc<RwLock<Arc<AppState>>>,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
     target_rev: u64,

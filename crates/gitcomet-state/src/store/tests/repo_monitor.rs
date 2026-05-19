@@ -17,6 +17,7 @@ fn repo_monitor_start_failures_are_recorded_for_missing_workdir() {
     let _ = std::fs::remove_file(&missing_workdir);
     let _ = std::fs::remove_dir_all(&missing_workdir);
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
 
     monitors.start(
         RepoId(1),

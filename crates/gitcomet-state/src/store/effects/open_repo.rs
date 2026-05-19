@@ -2,15 +2,15 @@ use crate::msg::Msg;
 use gitcomet_core::domain::RepoSpec;
 use gitcomet_core::services::GitBackend;
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
-use super::super::{RepoId, executor::TaskExecutor};
+use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::send_or_log;
 
 pub(super) fn schedule_open_repo(
     executor: &TaskExecutor,
     backend: Arc<dyn GitBackend>,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {

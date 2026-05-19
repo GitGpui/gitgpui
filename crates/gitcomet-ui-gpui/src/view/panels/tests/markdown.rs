@@ -244,7 +244,9 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
 }
 
 #[gpui::test]
-fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui::TestAppContext) {
+fn secondary_f_from_markdown_file_preview_switches_back_to_text_search(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -300,7 +302,7 @@ fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui:
 
     focus_diff_panel(cx, &view);
 
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("secondary-f");
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -312,11 +314,11 @@ fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui:
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
             RenderedPreviewMode::Source,
-            "Ctrl+F should switch markdown preview back to source mode before search"
+            "secondary-f should switch markdown preview back to source mode before search"
         );
         assert!(
             pane.diff_search_active,
-            "Ctrl+F should activate diff search from markdown preview"
+            "secondary-f should activate diff search from markdown preview"
         );
     });
 
@@ -881,7 +883,7 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
 }
 
 #[gpui::test]
-fn ctrl_f_from_conflict_markdown_preview_switches_back_to_text_search(
+fn secondary_f_from_conflict_markdown_preview_switches_back_to_text_search(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -941,7 +943,7 @@ fn ctrl_f_from_conflict_markdown_preview_switches_back_to_text_search(
 
     focus_diff_panel(cx, &view);
 
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("secondary-f");
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -952,11 +954,11 @@ fn ctrl_f_from_conflict_markdown_preview_switches_back_to_text_search(
         assert_eq!(
             pane.conflict_resolver.resolver_preview_mode,
             ConflictResolverPreviewMode::Text,
-            "Ctrl+F should switch conflict markdown preview back to text mode before search"
+            "secondary-f should switch conflict markdown preview back to text mode before search"
         );
         assert!(
             pane.diff_search_active,
-            "Ctrl+F should activate diff search from conflict markdown preview"
+            "secondary-f should activate diff search from conflict markdown preview"
         );
     });
 

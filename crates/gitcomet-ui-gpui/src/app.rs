@@ -3,10 +3,11 @@ use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
 use crate::ui_scale;
 use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, PopoverPromptDismiss, PopoverPromptTabNext,
-    PopoverPromptTabPrev, SettingsWindowView, StartupCrashReport, TextInputCommitSubmit,
-    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange,
-    TextInputDiffPrevChange, TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
+    GitCometViewMode, InitialRepositoryLaunchMode, OpenActiveViewSearch, PopoverPromptDismiss,
+    PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView, StartupCrashReport,
+    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
+    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
+    TextInputDiffPrevSearchMatchOrChange,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -633,6 +634,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-o", OpenRepository, None),
         KeyBinding::new("secondary-shift-o", OpenRecentPicker, None),
+        KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
@@ -1336,6 +1338,11 @@ pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {
 }
 
 #[cfg(test)]
+pub(crate) fn bind_app_keys_for_test(cx: &mut App) {
+    bind_app_keys(cx);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use gpui::{
@@ -1500,6 +1507,7 @@ mod tests {
                 .on_action(record_action_listener!(
                     crate::view::TextInputDiffNextChange
                 ))
+                .on_action(record_action_listener!(crate::view::OpenActiveViewSearch))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenRepository))
@@ -1851,6 +1859,7 @@ mod tests {
             ("secondary-,", OpenSettings.name()),
             ("secondary-o", OpenRepository.name()),
             ("secondary-shift-o", OpenRecentPicker.name()),
+            ("secondary-f", crate::view::OpenActiveViewSearch.name()),
             ("secondary-w", Close.name()),
             ("secondary-shift-w", CloseWindow.name()),
             ("secondary-pageup", PreviousRepository.name()),
