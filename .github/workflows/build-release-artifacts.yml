@@ -230,7 +230,7 @@ jobs:
           cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
 
       - name: Sign Windows release binary
-        uses: Azure/artifact-signing-action@v1
+        uses: Azure/artifact-signing-action@v2
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
@@ -307,7 +307,7 @@ jobs:
           cargo wix --package gitcomet --profile release --nocapture --no-build --bin-path "$wixBin" --output "dist\$msiName"
 
       - name: Sign Windows MSI installer
-        uses: Azure/artifact-signing-action@v1
+        uses: Azure/artifact-signing-action@v2
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
           trusted-signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
