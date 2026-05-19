@@ -1241,7 +1241,7 @@ impl MainPaneView {
                         if this.diff_search_active
                             && !this.diff_search_query.as_ref().trim().is_empty()
                         {
-                            this.diff_search_recompute_matches();
+                            this.diff_search_recompute_matches_preserving_current();
                         }
                         cx.notify();
                     })
@@ -1258,7 +1258,7 @@ impl MainPaneView {
                         if this.diff_search_active
                             && !this.diff_search_query.as_ref().trim().is_empty()
                         {
-                            this.diff_search_recompute_matches();
+                            this.diff_search_recompute_matches_preserving_current();
                         }
                         cx.notify();
                     })

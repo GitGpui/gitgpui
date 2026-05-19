@@ -397,6 +397,13 @@ fn open_change_tracking_settings_popover(
     });
 }
 
+fn bind_app_keys_for_test(cx: &mut gpui::VisualTestContext) {
+    cx.update(|_window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+    });
+}
+
 fn open_popover_for_test(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -3143,6 +3150,213 @@ fn commit_message_text_input_space_does_not_stage_or_advance_diff(cx: &mut gpui:
     assert!(
         commit_message_input_is_focused(cx, &view),
         "expected commit-message input to keep focus after Space"
+    );
+}
+
+#[gpui::test]
+fn diff_editor_staging_context_menu_restores_diff_panel_focus_for_f4(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70560);
+    let commit_id = CommitId("abcdef0011223344".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_editor_stage_focus",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+    open_popover_for_test(
+        cx,
+        &view,
+        PopoverKind::DiffEditorMenu {
+            repo_id,
+            area: DiffArea::Unstaged,
+            path: Some(first.clone()),
+            hunk_patch: Some("diff --git a/src/first.rs b/src/first.rs\n".into()),
+            hunks_count: 1,
+            lines_patch: Some("diff --git a/src/first.rs b/src/first.rs\n".into()),
+            discard_lines_patch: None,
+            lines_count: 1,
+            copy_text: None,
+            copy_target: None,
+        },
+    );
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the diff editor context menu to open"
+    );
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected the diff editor context menu to take focus"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_activate_action(
+                    ContextMenuAction::ApplyIndexPatch {
+                        repo_id,
+                        patch: "diff --git a/src/first.rs b/src/first.rs\n".into(),
+                        reverse: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected staging from the diff editor context menu to close the menu"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected staging from the diff editor context menu to restore diff-panel focus"
+    );
+
+    cx.simulate_keystrokes("f4");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(second),
+        "expected F4 to navigate immediately after staging from the diff editor context menu"
+    );
+}
+
+#[gpui::test]
+fn non_text_context_menu_focus_f4_uses_app_level_diff_navigation(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70561);
+    let commit_id = CommitId("abcdef0011223355".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_context_menu_f4",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    open_change_tracking_settings_popover(cx, &view);
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the change-tracking context menu to remain open before F4"
+    );
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected context-menu focus to exercise the app-level shortcut fallback"
+    );
+
+    cx.simulate_keystrokes("f4");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(second),
+        "expected F4 from non-text context-menu focus to select the next diff target"
+    );
+    assert!(
+        popover_is_open(cx, &view),
+        "expected app-level F4 navigation not to dismiss an unrelated context menu"
+    );
+}
+
+#[gpui::test]
+fn non_text_context_menu_focus_f2_f3_use_diff_search_matches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70562);
+    let commit_id = CommitId("abcdef0011223366".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_context_menu_f2_f3",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_matches = vec![3, 5];
+                pane.diff_search_match_ix = Some(0);
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    open_change_tracking_settings_popover(cx, &view);
+
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected context-menu focus to exercise the app-level search shortcut fallback"
+    );
+
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_match_ix),
+        Some(1),
+        "expected F3 from non-text context-menu focus to advance the diff search match"
+    );
+
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_match_ix),
+        Some(0),
+        "expected F2 from non-text context-menu focus to move to the previous diff search match"
+    );
+    assert!(
+        popover_is_open(cx, &view),
+        "expected app-level F2/F3 navigation not to dismiss an unrelated context menu"
     );
 }
 

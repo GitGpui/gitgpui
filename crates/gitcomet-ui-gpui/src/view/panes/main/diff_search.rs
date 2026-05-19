@@ -75,6 +75,27 @@ pub(in crate::view) enum DiffSearchQueryReuse {
     Refinement,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffSearchFinalizeMode {
+    ScrollToFirst,
+    PreserveCurrent {
+        previous_match_ix: Option<usize>,
+        previous_visible_ix: Option<usize>,
+    },
+}
+
+impl DiffSearchFinalizeMode {
+    fn preserve_current(
+        previous_match_ix: Option<usize>,
+        previous_visible_ix: Option<usize>,
+    ) -> Self {
+        Self::PreserveCurrent {
+            previous_match_ix,
+            previous_visible_ix,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct DiffSearchVisibleTrigramIndex {
     postings: FxHashMap<u32, Vec<u32>>,
@@ -212,6 +233,24 @@ fn encode_ascii_folded_byte_trigram(window: &[u8]) -> u32 {
     (u32::from(window[0].to_ascii_lowercase()) << 16)
         | (u32::from(window[1].to_ascii_lowercase()) << 8)
         | u32::from(window[2].to_ascii_lowercase())
+}
+
+fn diff_search_resume_match_ix(
+    previous_visible_ix: Option<usize>,
+    matches: &[usize],
+) -> Option<usize> {
+    if matches.is_empty() {
+        return None;
+    }
+
+    let Some(previous_visible_ix) = previous_visible_ix else {
+        return Some(0);
+    };
+
+    match matches.binary_search(&previous_visible_ix) {
+        Ok(ix) => Some(ix),
+        Err(insert_ix) => Some(insert_ix.checked_sub(1).unwrap_or(matches.len() - 1)),
+    }
 }
 
 fn inline_patch_diff_search_text<'a>(
@@ -357,27 +396,6 @@ fn retain_refined_visible_matches(
     }
 }
 
-#[derive(Clone, Copy)]
-enum DiffSearchFinalizeMode {
-    ScrollToFirst,
-    PreserveCurrent {
-        previous_match_ix: Option<usize>,
-        previous_visible_ix: Option<usize>,
-    },
-}
-
-impl DiffSearchFinalizeMode {
-    fn preserve_current(
-        previous_match_ix: Option<usize>,
-        previous_visible_ix: Option<usize>,
-    ) -> Self {
-        Self::PreserveCurrent {
-            previous_match_ix,
-            previous_visible_ix,
-        }
-    }
-}
-
 impl MainPaneView {
     pub(in crate::view) fn active_conflict_target(
         &self,
@@ -403,11 +421,17 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn diff_search_recompute_matches(&mut self) {
-        self.diff_search_recompute_matches_with_finalize(DiffSearchFinalizeMode::preserve_current(
-            self.diff_search_match_ix,
-            self.diff_search_match_ix
-                .and_then(|ix| self.diff_search_matches.get(ix).copied()),
-        ));
+        if !self.diff_search_active {
+            self.diff_search_matches.clear();
+            self.diff_search_match_ix = None;
+            return;
+        }
+
+        if !self.is_file_preview_active() && self.active_conflict_target().is_none() {
+            self.ensure_diff_visible_indices();
+        }
+
+        self.diff_search_recompute_matches_for_current_view();
     }
 
     pub(in super::super::super) fn diff_search_recompute_matches_and_scroll_to_first(&mut self) {
@@ -426,6 +450,20 @@ impl MainPaneView {
         }
 
         self.diff_search_recompute_matches_for_current_view_with_finalize(finalize);
+    }
+
+    pub(in super::super::super) fn diff_search_recompute_matches_preserving_current(&mut self) {
+        if !self.diff_search_active {
+            self.diff_search_matches.clear();
+            self.diff_search_match_ix = None;
+            return;
+        }
+
+        if !self.is_file_preview_active() && self.active_conflict_target().is_none() {
+            self.ensure_diff_visible_indices();
+        }
+
+        self.diff_search_recompute_matches_for_current_view_preserving_current();
     }
 
     pub(super) fn diff_search_recompute_matches_for_query_change(&mut self, previous_query: &str) {
@@ -482,6 +520,14 @@ impl MainPaneView {
         let previous_match_ix = self.diff_search_match_ix;
         let previous_visible_ix =
             previous_match_ix.and_then(|ix| self.diff_search_matches.get(ix).copied());
+        self.diff_search_recompute_matches_for_current_view_with_finalize(
+            DiffSearchFinalizeMode::preserve_current(previous_match_ix, previous_visible_ix),
+        );
+    }
+
+    pub(super) fn diff_search_recompute_matches_for_current_view_preserving_current(&mut self) {
+        let previous_match_ix = self.diff_search_match_ix;
+        let previous_visible_ix = self.diff_search_current_match_visible_ix();
         self.diff_search_recompute_matches_for_current_view_with_finalize(
             DiffSearchFinalizeMode::preserve_current(previous_match_ix, previous_visible_ix),
         );
@@ -848,6 +894,15 @@ impl MainPaneView {
         }
     }
 
+    fn diff_search_current_match_visible_ix(&self) -> Option<usize> {
+        let len = self.diff_search_matches.len();
+        if len == 0 {
+            return None;
+        }
+        self.diff_search_match_ix
+            .map(|ix| self.diff_search_matches[ix.min(len - 1)])
+    }
+
     fn diff_search_finalize_matches(&mut self, mode: DiffSearchFinalizeMode) {
         if self.diff_search_matches.is_empty() {
             self.diff_search_match_ix = None;
@@ -868,9 +923,7 @@ impl MainPaneView {
                     previous_match_ix.is_some() || previous_visible_ix.is_some();
                 let next_ix = previous_visible_ix
                     .and_then(|visible_ix| {
-                        self.diff_search_matches
-                            .iter()
-                            .position(|&match_visible_ix| match_visible_ix == visible_ix)
+                        diff_search_resume_match_ix(Some(visible_ix), &self.diff_search_matches)
                     })
                     .or_else(|| {
                         previous_match_ix
@@ -1276,8 +1329,9 @@ mod tests {
         AsciiCaseInsensitiveNeedle, ConflictResolverSearchContext,
         ConflictResolverSearchTwoWayRows, ConflictResolverSearchVisibleRows, DiffSearchQueryReuse,
         conflict_resolver_visible_match_indices, contains_ascii_case_insensitive,
-        diff_search_query_reuse, diff_search_split_row_texts_match_query,
-        empty_conflict_resolver_search_two_way_rows, three_way_visible_item_matches_query,
+        diff_search_query_reuse, diff_search_resume_match_ix,
+        diff_search_split_row_texts_match_query, empty_conflict_resolver_search_two_way_rows,
+        three_way_visible_item_matches_query,
     };
     use crate::view::conflict_resolver;
     use crate::view::conflict_resolver::{
@@ -1344,6 +1398,33 @@ mod tests {
             diff_search_query_reuse("render_cache", "cache_render"),
             DiffSearchQueryReuse::None
         );
+    }
+
+    #[test]
+    fn diff_search_resume_keeps_exact_visible_match() {
+        assert_eq!(diff_search_resume_match_ix(Some(20), &[4, 20, 30]), Some(1));
+    }
+
+    #[test]
+    fn diff_search_resume_positions_before_next_later_match_when_previous_disappears() {
+        let matches = [4, 30, 50];
+        let ix = diff_search_resume_match_ix(Some(20), &matches).expect("resume ix");
+        assert_eq!(ix, 0);
+        assert_eq!(matches[(ix + 1) % matches.len()], 30);
+    }
+
+    #[test]
+    fn diff_search_resume_wraps_when_no_later_match_remains() {
+        let matches = [4, 12];
+        let ix = diff_search_resume_match_ix(Some(20), &matches).expect("resume ix");
+        assert_eq!(ix, 1);
+        assert_eq!(matches[(ix + 1) % matches.len()], 4);
+    }
+
+    #[test]
+    fn diff_search_resume_starts_at_first_without_previous_match() {
+        assert_eq!(diff_search_resume_match_ix(None, &[4, 20, 30]), Some(0));
+        assert_eq!(diff_search_resume_match_ix(Some(20), &[]), None);
     }
 
     #[test]

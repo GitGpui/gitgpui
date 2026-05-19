@@ -2621,7 +2621,7 @@ impl MainPaneView {
             self.ensure_file_image_diff_cache(cx);
         }
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
-            self.diff_search_recompute_matches();
+            self.diff_search_recompute_matches_preserving_current();
         }
         cx.notify();
     }

@@ -2,6 +2,7 @@ use crate::assets::GitCometAssets;
 use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
 use crate::ui_scale;
 use crate::view::{
+    DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, OpenActiveViewSearch, PopoverPromptDismiss,
     PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView, StartupCrashReport,
@@ -365,7 +366,6 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
         if let Err(err) = crate::bundled_fonts::register(cx) {
             eprintln!("Failed to register bundled fonts: {err:#}");
         }
-        bind_text_input_keys(cx);
         if quit_when_all_windows_closed {
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
@@ -387,6 +387,7 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
                 }
             }
         }
+        bind_text_input_keys(cx);
 
         open_gitcomet_window(cx, Arc::clone(&backend), &launch);
 
@@ -648,6 +649,10 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary--", DecreaseUiScale, None),
         KeyBinding::new("secondary-0", ResetUiScale, None),
         KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("f1", DiffPrevFile, None),
+        KeyBinding::new("f4", DiffNextFile, None),
+        KeyBinding::new("f2", DiffPrevSearchMatchOrChange, None),
+        KeyBinding::new("f3", DiffNextSearchMatchOrChange, None),
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-cmd-o", OpenRecentPicker, None),
         #[cfg(target_os = "macos")]
@@ -1492,6 +1497,14 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::Copy))
                 .on_action(record_action_listener!(crate::kit::Undo))
                 .on_action(record_action_listener!(crate::kit::Redo))
+                .on_action(record_action_listener!(crate::view::DiffPrevFile))
+                .on_action(record_action_listener!(crate::view::DiffNextFile))
+                .on_action(record_action_listener!(
+                    crate::view::DiffPrevSearchMatchOrChange
+                ))
+                .on_action(record_action_listener!(
+                    crate::view::DiffNextSearchMatchOrChange
+                ))
                 .on_action(record_action_listener!(crate::view::TextInputCommitSubmit))
                 .on_action(record_action_listener!(crate::view::TextInputDiffPrevFile))
                 .on_action(record_action_listener!(crate::view::TextInputDiffNextFile))
@@ -1693,6 +1706,55 @@ mod tests {
     }
 
     #[gpui::test]
+    fn text_input_diff_keybindings_stay_scoped_when_app_keys_are_installed(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            KeyBindingProbe::new(Some("TextInput"), Arc::clone(&observed_actions), cx)
+        });
+
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_app_keys(app);
+            bind_text_input_keys(app);
+            let focus = view.update(app, |view, _cx| view.focus_handle());
+            window.focus(&focus, app);
+            let _ = window.draw(app);
+        });
+
+        let cases = [
+            ("f1", crate::view::TextInputDiffPrevFile.name()),
+            ("f4", crate::view::TextInputDiffNextFile.name()),
+            (
+                "f2",
+                crate::view::TextInputDiffPrevSearchMatchOrChange.name(),
+            ),
+            (
+                "f3",
+                crate::view::TextInputDiffNextSearchMatchOrChange.name(),
+            ),
+        ];
+
+        for (keystroke, expected_action) in cases {
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            cx.simulate_keystrokes(keystroke);
+            let actual_actions = observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            assert_eq!(
+                actual_actions,
+                vec![expected_action.to_string()],
+                "expected `{keystroke}` to resolve only to the TextInput-scoped diff action"
+            );
+        }
+    }
+
+    #[gpui::test]
     fn text_input_command_shortcuts_trigger_undo_and_redo(cx: &mut gpui::TestAppContext) {
         let (input, cx) = cx.add_window_view(|window, cx| {
             crate::kit::TextInput::new(
@@ -1869,6 +1931,10 @@ mod tests {
             ("secondary--", DecreaseUiScale.name()),
             ("secondary-0", ResetUiScale.name()),
             ("secondary-q", Quit.name()),
+            ("f1", crate::view::DiffPrevFile.name()),
+            ("f4", crate::view::DiffNextFile.name()),
+            ("f2", crate::view::DiffPrevSearchMatchOrChange.name()),
+            ("f3", crate::view::DiffNextSearchMatchOrChange.name()),
         ];
 
         #[cfg(target_os = "macos")]

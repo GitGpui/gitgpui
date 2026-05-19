@@ -1123,8 +1123,14 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let restore_diff_panel_focus =
-            matches!(self.popover, Some(PopoverKind::ChangeTrackingSettings));
+        let restore_diff_panel_focus = matches!(
+            self.popover,
+            Some(
+                PopoverKind::ChangeTrackingSettings
+                    | PopoverKind::DiffHunkMenu { .. }
+                    | PopoverKind::DiffEditorMenu { .. }
+            )
+        );
         self.close_popover(cx);
         if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();

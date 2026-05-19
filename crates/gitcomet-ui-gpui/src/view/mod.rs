@@ -41,6 +41,10 @@ use std::time::{Duration, Instant};
 actions!(
     text_input_diff_navigation,
     [
+        DiffPrevFile,
+        DiffNextFile,
+        DiffPrevSearchMatchOrChange,
+        DiffNextSearchMatchOrChange,
         TextInputCommitSubmit,
         TextInputDiffPrevFile,
         TextInputDiffNextFile,
@@ -1881,6 +1885,15 @@ impl GitCometView {
         });
     }
 
+    fn defer_adjacent_diff_file_navigation(&self, direction: i8, cx: &mut gpui::Context<Self>) {
+        self.defer_text_input_main_pane_action(cx, move |pane, window, cx| {
+            let Some(repo_id) = pane.active_repo_id() else {
+                return false;
+            };
+            pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
+        });
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
@@ -2424,6 +2437,30 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                 },
             ))
+            .on_action(cx.listener(|this, _: &DiffPrevFile, _window, cx| {
+                this.defer_adjacent_diff_file_navigation(-1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
+                this.defer_adjacent_diff_file_navigation(1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(
+                cx.listener(|this, _: &DiffPrevSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_prev_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &DiffNextSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_next_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &TextInputDiffPrevChange, _window, cx| {
                     this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
