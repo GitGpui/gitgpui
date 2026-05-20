@@ -1512,7 +1512,7 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 pane.diff_view = DiffViewMode::Split;
-                pane.show_whitespace = false;
+                pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
         });
@@ -1545,7 +1545,7 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_view, DiffViewMode::Split);
-        assert!(!pane.show_whitespace);
+        assert!(!pane.reveal_whitespace_chars);
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -1572,7 +1572,7 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_view, DiffViewMode::Inline);
-        assert!(!pane.show_whitespace);
+        assert!(!pane.reveal_whitespace_chars);
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -1643,7 +1643,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.show_whitespace = false;
+                pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
         });
@@ -1671,7 +1671,8 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
         assert!(pane.is_conflict_rendered_preview_active());
     });
     assert!(
-        cx.debug_bounds("conflict_show_whitespace_pill").is_none(),
+        cx.debug_bounds("conflict_reveal_whitespace_chars_pill")
+            .is_none(),
         "conflict markdown preview should hide whitespace control"
     );
     assert!(
@@ -1703,7 +1704,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
         );
-        assert!(!pane.show_whitespace);
+        assert!(!pane.reveal_whitespace_chars);
         assert_eq!(pane.conflict_resolver.active_conflict, 0);
         assert!(
             pane.conflict_resolver.nav_anchor.is_none(),
@@ -1734,7 +1735,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
         );
-        assert!(!pane.show_whitespace);
+        assert!(!pane.reveal_whitespace_chars);
         assert_eq!(pane.conflict_resolver.active_conflict, 1);
         assert!(
             pane.conflict_resolver.nav_anchor.is_none(),

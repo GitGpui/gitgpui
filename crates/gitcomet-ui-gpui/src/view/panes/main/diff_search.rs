@@ -1540,6 +1540,9 @@ impl MainPaneView {
     }
 
     fn diff_search_scroll_to_visible_ix(&mut self, visible_ix: usize) {
+        self.clear_diff_text_selection();
+        self.diff_selection_range = None;
+
         if self.is_file_preview_active() {
             self.worktree_preview_scroll
                 .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);

@@ -6,6 +6,7 @@ use gitcomet_core::domain::{
     SubmoduleStatus,
 };
 use gitcomet_state::model::{InlineSubmoduleDiffEntry, InlineSubmoduleDiffSection};
+use gpui::Focusable;
 
 fn short_submodule_hash(commit_id: &CommitId) -> String {
     let raw = commit_id.as_ref();
@@ -78,6 +79,12 @@ fn inline_submodule_entries(summary: &SubmoduleDiffSummary) -> Vec<InlineSubmodu
             }),
     );
     entries
+}
+
+impl Focusable for MainPaneView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.diff_panel_focus_handle.clone()
+    }
 }
 
 impl MainPaneView {
@@ -286,7 +293,7 @@ impl MainPaneView {
                     }
                 }
                 "w" if !markdown_preview_active && !conflict_preview_active => {
-                    self.toggle_show_whitespace();
+                    self.toggle_reveal_whitespace_chars();
                     handled = true;
                 }
                 "up" => {
@@ -369,8 +376,8 @@ impl MainPaneView {
         handled
     }
 
-    fn toggle_show_whitespace(&mut self) {
-        self.show_whitespace = !self.show_whitespace;
+    fn toggle_reveal_whitespace_chars(&mut self) {
+        self.reveal_whitespace_chars = !self.reveal_whitespace_chars;
         // Clear styled text caches so they rebuild with new whitespace setting.
         self.clear_diff_text_style_caches();
         self.clear_conflict_diff_style_caches();
@@ -457,6 +464,20 @@ impl MainPaneView {
         });
         self.focus_diff_search_input(window, cx);
         cx.notify();
+    }
+
+    fn restore_diff_panel_focus_after_toolbar_action(
+        &self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let focus = self.diff_panel_focus_handle.clone();
+        window.focus(&focus, cx);
+        cx.focus_self(window);
+        let focus = self.diff_panel_focus_handle.clone();
+        window.on_next_frame(move |window, cx| {
+            window.focus(&focus, cx);
+        });
     }
 
     pub(in crate::view) fn open_search_for_active_view(
@@ -1613,11 +1634,16 @@ impl MainPaneView {
 
             if !is_image_diff_view {
                 let nav_entries = self.diff_nav_entries();
-                let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
-                let can_nav_prev =
-                    diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
-                let can_nav_next =
-                    diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+                let can_nav_prev = diff_navigation::diff_nav_prev_target(
+                    &nav_entries,
+                    self.diff_nav_prev_current_ix(),
+                )
+                .is_some();
+                let can_nav_next = diff_navigation::diff_nav_next_target(
+                    &nav_entries,
+                    self.diff_nav_next_current_ix(),
+                )
+                .is_some();
 
                 let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
                     .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
@@ -1648,14 +1674,16 @@ impl MainPaneView {
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Inline)
                     .selected_bg(view_toggle_selected_bg)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
+                    .on_click(theme, cx, |this, _e, window, cx| {
                         this.diff_view = DiffViewMode::Inline;
                         this.clear_diff_text_style_caches();
                         if this.diff_search_has_query() {
                             this.diff_search_recompute_matches_preserving_current();
                         }
+                        this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         cx.notify();
                     })
+                    .debug_selector(|| "diff_inline".to_string())
                     .gitcomet_tooltip(theme, "Inline diff view (Alt+I)".into());
 
                 let diff_split_btn = components::Button::new("diff_split", "Split")
@@ -1663,14 +1691,16 @@ impl MainPaneView {
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Split)
                     .selected_bg(view_toggle_selected_bg)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
+                    .on_click(theme, cx, |this, _e, window, cx| {
                         this.diff_view = DiffViewMode::Split;
                         this.clear_diff_text_style_caches();
                         if this.diff_search_has_query() {
                             this.diff_search_recompute_matches_preserving_current();
                         }
+                        this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         cx.notify();
                     })
+                    .debug_selector(|| "diff_split".to_string())
                     .gitcomet_tooltip(theme, "Split diff view (Alt+S)".into());
 
                 let view_toggle = div()
@@ -1721,11 +1751,16 @@ impl MainPaneView {
                         } else {
                             components::ButtonStyle::Outlined
                         })
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            this.rendered_preview_modes
-                                .set(preview_kind, RenderedPreviewMode::Rendered);
-                            cx.notify();
-                        }),
+                        .on_click(
+                            theme,
+                            cx,
+                            move |this, _e, window, cx| {
+                                this.rendered_preview_modes
+                                    .set(preview_kind, RenderedPreviewMode::Rendered);
+                                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                                cx.notify();
+                            },
+                        ),
                     )
                     .child(
                         components::Button::new(
@@ -1737,16 +1772,39 @@ impl MainPaneView {
                         } else {
                             components::ButtonStyle::Outlined
                         })
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            this.rendered_preview_modes
-                                .set(preview_kind, RenderedPreviewMode::Source);
-                            cx.notify();
-                        }),
+                        .on_click(
+                            theme,
+                            cx,
+                            move |this, _e, window, cx| {
+                                this.rendered_preview_modes
+                                    .set(preview_kind, RenderedPreviewMode::Source);
+                                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                                cx.notify();
+                            },
+                        ),
                     ),
             );
         }
 
         if let Some(repo_id) = repo_id {
+            let diff_action_invoker: SharedString = "diff_action_menu".into();
+            let diff_action_active = self
+                .active_context_menu_invoker
+                .as_ref()
+                .is_some_and(|id| id == &diff_action_invoker);
+            controls = controls.child(
+                components::Button::new("diff_action_menu", "")
+                    .start_slot(svg_icon("icons/cog.svg", theme.colors.text_muted, px(14.0)))
+                    .style(components::ButtonStyle::Transparent)
+                    .selected(diff_action_active)
+                    .selected_bg(theme.colors.active)
+                    .on_click(theme, cx, move |this, e, window, cx| {
+                        this.activate_context_menu_invoker(diff_action_invoker.clone(), cx);
+                        this.open_popover_at(PopoverKind::DiffActionMenu, e.position(), window, cx);
+                    })
+                    .debug_selector(|| "diff_action_menu".to_string())
+                    .gitcomet_tooltip(theme, "Diff actions".into()),
+            );
             controls = controls.child(
                 components::Button::new("diff_close", "")
                     .start_slot(svg_icon(
@@ -2053,8 +2111,8 @@ impl MainPaneView {
                                 if theme.is_dark { 0.38 } else { 0.28 },
                             );
                             let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
-                            let show_whitespace = self.show_whitespace;
-                            let ws_pill_border_hover = if show_whitespace {
+                            let reveal_whitespace_chars = self.reveal_whitespace_chars;
+                            let ws_pill_border_hover = if reveal_whitespace_chars {
                                 theme.colors.accent
                             } else {
                                 view_toggle_border
@@ -2064,8 +2122,8 @@ impl MainPaneView {
                             } else {
                                 gpui::rgba(0xffffffff)
                             };
-                            let show_whitespace_control = div()
-                                .id("conflict_show_whitespace_pill")
+                            let reveal_whitespace_control = div()
+                                .id("conflict_reveal_whitespace_chars_pill")
                                 .h(components::control_height(ui_scale_percent))
                                 .px(crate::ui_scale::design_px_from_percent(
                                     8.0,
@@ -2090,17 +2148,17 @@ impl MainPaneView {
                                 .active(move |pill| pill.border_color(ws_pill_border_hover))
                                 .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
                                 .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                                    this.toggle_show_whitespace();
+                                    this.toggle_reveal_whitespace_chars();
                                     cx.notify();
                                 }))
-                                .gitcomet_tooltip(theme, "Show whitespace (Alt+W)".into())
+                                .gitcomet_tooltip(theme, "Reveal whitespace characters (Alt+W)".into())
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap_1()
-                                        .child("Show whitespace")
-                                        .when(show_whitespace, |d| {
+                                        .child("Reveal whitespace")
+                                        .when(reveal_whitespace_chars, |d| {
                                             d.child(
                                                 div().child(svg_icon(
                                                     "icons/check.svg",
@@ -2366,7 +2424,7 @@ impl MainPaneView {
                                         .items_center()
                                         .gap_2()
                                         .when(!is_rendered_preview_active, |d| {
-                                            d.child(show_whitespace_control)
+                                            d.child(reveal_whitespace_control)
                                                 .child(view_mode_controls)
                                         }),
                                 );

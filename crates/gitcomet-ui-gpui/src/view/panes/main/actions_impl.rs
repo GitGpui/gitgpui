@@ -333,31 +333,40 @@ impl MainPaneView {
                 if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
                     return provider.change_visible_indices();
                 }
-                diff_navigation::change_block_entries(self.diff_visible_len(), |visible_ix| {
-                    let Some(inline_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return false;
-                    };
-                    self.file_diff_inline_row(inline_ix).is_some_and(|l| {
+                (0..self.diff_visible_len())
+                    .filter(|&visible_ix| {
+                        let Some(inline_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                            return false;
+                        };
                         matches!(
-                            l.kind,
+                            self.file_diff_inline_visual_kind(inline_ix),
                             gitcomet_core::domain::DiffLineKind::Add
                                 | gitcomet_core::domain::DiffLineKind::Remove
-                        )
+                        ) && self.file_diff_inline_row(inline_ix).is_some_and(|l| {
+                            matches!(
+                                l.kind,
+                                gitcomet_core::domain::DiffLineKind::Add
+                                    | gitcomet_core::domain::DiffLineKind::Remove
+                            )
+                        })
                     })
-                })
+                    .collect()
             }
             DiffViewMode::Split => {
                 if let Some(provider) = self.file_diff_row_provider.as_ref() {
                     return provider.change_visible_indices();
                 }
-                diff_navigation::change_block_entries(self.diff_visible_len(), |visible_ix| {
-                    let Some(row_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return false;
-                    };
-                    self.file_diff_split_row(row_ix).is_some_and(|row| {
-                        !matches!(row.kind, gitcomet_core::file_diff::FileDiffRowKind::Context)
+                (0..self.diff_visible_len())
+                    .filter(|&visible_ix| {
+                        let Some(row_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                            return false;
+                        };
+                        !matches!(
+                            self.file_diff_split_visual_kind(row_ix),
+                            gitcomet_core::file_diff::FileDiffRowKind::Context
+                        )
                     })
-                })
+                    .collect()
             }
         }
     }
@@ -410,9 +419,10 @@ impl MainPaneView {
                 .iter()
                 .enumerate()
                 .filter_map(|(hunk_ix, &visible_ix)| {
-                    self.collapsed_diff_hunks
-                        .get(hunk_ix)
-                        .map(|hunk| (visible_ix, hunk.src_ix))
+                    self.collapsed_diff_hunks.get(hunk_ix).and_then(|hunk| {
+                        (hunk.has_additions || hunk.has_removals)
+                            .then_some((visible_ix, hunk.src_ix))
+                    })
                 })
                 .collect();
         }
@@ -427,7 +437,10 @@ impl MainPaneView {
                     let Some(line) = self.patch_diff_row(ix) else {
                         continue;
                     };
-                    if matches!(line.kind, gitcomet_core::domain::DiffLineKind::Hunk) {
+                    if matches!(line.kind, gitcomet_core::domain::DiffLineKind::Hunk) && {
+                        let (has_additions, has_removals) = self.collapsed_hunk_change_summary(ix);
+                        has_additions || has_removals
+                    } {
                         out.push((visible_ix, ix));
                     }
                 }
@@ -440,6 +453,11 @@ impl MainPaneView {
                         click_kind: DiffClickKind::HunkHeader,
                     } = row
                     {
+                        let (has_additions, has_removals) =
+                            self.collapsed_hunk_change_summary(src_ix);
+                        if !has_additions && !has_removals {
+                            continue;
+                        }
                         out.push((visible_ix, src_ix));
                     }
                 }
@@ -456,12 +474,49 @@ impl MainPaneView {
             return self.file_change_visible_indices();
         }
         if self.is_collapsed_diff_projection_active() {
-            return self.collapsed_diff_hunk_visible_indices.clone();
+            return self
+                .collapsed_diff_hunk_visible_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(hunk_ix, visible_ix)| {
+                    self.collapsed_diff_hunks.get(hunk_ix).and_then(|hunk| {
+                        (hunk.has_additions || hunk.has_removals).then_some(*visible_ix)
+                    })
+                })
+                .collect();
         }
         self.patch_hunk_entries()
             .into_iter()
             .map(|(visible_ix, _)| visible_ix)
             .collect()
+    }
+
+    fn diff_row_focus_visible_range(&self) -> Option<(usize, usize)> {
+        self.diff_selection_range
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .or_else(|| self.diff_selection_anchor.map(|ix| (ix, ix)))
+    }
+
+    pub(in crate::view) fn diff_focus_visible_range(&self) -> Option<(usize, usize)> {
+        self.diff_text_selection_visible_range()
+            .or_else(|| self.diff_row_focus_visible_range())
+    }
+
+    pub(in crate::view) fn diff_nav_prev_current_ix(&self) -> usize {
+        self.diff_focus_visible_range()
+            .map(|(start, _end)| start)
+            .unwrap_or(0)
+    }
+
+    pub(in crate::view) fn diff_nav_next_current_ix(&self) -> usize {
+        self.diff_focus_visible_range()
+            .map(|(_start, end)| end)
+            .unwrap_or(0)
+    }
+
+    fn clear_diff_navigation_selection(&mut self) {
+        self.clear_diff_text_selection();
+        self.diff_selection_range = None;
     }
 
     pub(super) fn conflict_marker_nav_entries(&self) -> Vec<usize> {
@@ -824,32 +879,46 @@ impl MainPaneView {
 
     pub(in crate::view) fn diff_jump_prev(&mut self) {
         let entries = self.diff_nav_entries();
+        let focus_range = self.diff_focus_visible_range();
+        let current = focus_range.map(|(start, _end)| start).unwrap_or(0);
         if entries.is_empty() {
             return;
         }
 
-        let current = self.diff_selection_anchor.unwrap_or(0);
         let Some(target) = diff_navigation::diff_nav_prev_target(&entries, current) else {
+            if focus_range.is_some() {
+                self.clear_diff_navigation_selection();
+                self.diff_selection_range = Some((current, current));
+            }
+            self.diff_selection_anchor = Some(current);
             return;
         };
 
         self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
+        self.clear_diff_navigation_selection();
         self.diff_selection_anchor = Some(target);
         self.diff_selection_range = Some((target, target));
     }
 
     pub(in crate::view) fn diff_jump_next(&mut self) {
         let entries = self.diff_nav_entries();
+        let focus_range = self.diff_focus_visible_range();
+        let current = focus_range.map(|(_start, end)| end).unwrap_or(0);
         if entries.is_empty() {
             return;
         }
 
-        let current = self.diff_selection_anchor.unwrap_or(0);
         let Some(target) = diff_navigation::diff_nav_next_target(&entries, current) else {
+            if focus_range.is_some() {
+                self.clear_diff_navigation_selection();
+                self.diff_selection_range = Some((current, current));
+            }
+            self.diff_selection_anchor = Some(current);
             return;
         };
 
         self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
+        self.clear_diff_navigation_selection();
         self.diff_selection_anchor = Some(target);
         self.diff_selection_range = Some((target, target));
     }
@@ -1314,6 +1383,7 @@ impl MainPaneView {
             three_way_horizontal_measure_rows: [0; 3],
             conflict_has_base: Vec::new(),
             conflict_choices: Vec::new(),
+            two_way_split_visual_kind_cache: HashMap::default(),
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights,
             nav_anchor,

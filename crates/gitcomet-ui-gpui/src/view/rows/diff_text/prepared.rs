@@ -801,13 +801,15 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_byte_rang
             line_range.len()
         };
         let estimated_highlight_capacity = {
-            let estimated_pending_line_highlights = if ready_line_count == 0 {
-                pending_line_count.saturating_mul(8)
-            } else {
-                let avg_ready_highlights =
-                    (ready_highlight_count + ready_line_count.saturating_sub(1)) / ready_line_count;
-                pending_line_count.saturating_mul(avg_ready_highlights.max(1))
-            };
+            let estimated_pending_line_highlights = ready_highlight_count
+                .saturating_add(ready_line_count.saturating_sub(1))
+                .checked_div(ready_line_count)
+                .map_or_else(
+                    || pending_line_count.saturating_mul(8),
+                    |avg_ready_highlights| {
+                        pending_line_count.saturating_mul(avg_ready_highlights.max(1))
+                    },
+                );
             ready_highlight_count.saturating_add(estimated_pending_line_highlights)
         };
         let mut highlights = Vec::with_capacity(estimated_highlight_capacity);

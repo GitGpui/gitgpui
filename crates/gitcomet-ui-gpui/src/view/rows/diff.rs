@@ -116,8 +116,29 @@ fn collapsed_hunk_header_bg(theme: AppTheme) -> gpui::Rgba {
     )
 }
 
-fn collapsed_hunk_header_selected_bg(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(theme.colors.accent, if theme.is_dark { 0.14 } else { 0.10 })
+fn focused_diff_row_alpha(theme: AppTheme) -> f32 {
+    if theme.is_dark { 0.30 } else { 0.20 }
+}
+
+fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(
+        theme.colors.text_muted,
+        if theme.is_dark { 0.26 } else { 0.16 },
+    )
+}
+
+fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
+    match kind {
+        DiffLineKind::Add => with_alpha(theme.colors.success, focused_diff_row_alpha(theme)),
+        DiffLineKind::Remove => with_alpha(theme.colors.danger, focused_diff_row_alpha(theme)),
+        DiffLineKind::Context | DiffLineKind::Header | DiffLineKind::Hunk => {
+            focused_diff_neutral_row_bg(theme)
+        }
+    }
+}
+
+fn focused_collapsed_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
+    with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 })
 }
 
 fn collapsed_inline_hunk_bg(
@@ -619,6 +640,7 @@ impl MainPaneView {
                                     ui_scale_percent,
                                 );
                             };
+                            let visual_kind = this.file_diff_inline_visual_kind(row_ix);
                             let line = AnnotatedDiffLine {
                                 kind: row.kind,
                                 text: "".into(),
@@ -632,7 +654,7 @@ impl MainPaneView {
                                 )
                                 .then_some(language)
                                 .flatten();
-                                let word_color = diff_line_word_color(row.kind, theme);
+                                let word_color = diff_line_word_color(visual_kind, theme);
                                 let prepared_line = match row.kind {
                                     DiffLineKind::Remove => {
                                         rows::prepared_diff_syntax_line_for_one_based_line(
@@ -694,7 +716,7 @@ impl MainPaneView {
                                     .diff_text_segments_cache_get(row_ix, cache_epoch)
                                     .is_none()
                                 {
-                                    let word_color = diff_line_word_color(line.kind, theme);
+                                    let word_color = diff_line_word_color(visual_kind, theme);
                                     let is_content_line = matches!(
                                         line.kind,
                                         DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -738,6 +760,7 @@ impl MainPaneView {
                                 DiffViewMode::Inline,
                                 min_width,
                                 &line,
+                                visual_kind,
                                 None,
                                 None,
                                 styled,
@@ -839,7 +862,7 @@ impl MainPaneView {
                             DiffSyntaxMode::Auto,
                         );
                     let mut pending_batch = false;
-                    for (row, prepared) in syntax_only_rows.iter().zip(batched_styles.into_iter()) {
+                    for (row, prepared) in syntax_only_rows.iter().zip(batched_styles) {
                         let (styled, is_pending) = prepared.into_parts();
                         pending_batch |= is_pending;
                         this.diff_text_segments_cache_set(row.inline_ix, row.cache_epoch, styled);
@@ -864,6 +887,7 @@ impl MainPaneView {
                         );
                     };
                     let row_word_ranges = this.file_diff_inline_word_ranges(inline_ix);
+                    let visual_kind = this.file_diff_inline_visual_kind(inline_ix);
                     let render_data = this.file_diff_inline_render_data(inline_ix);
                     let streamed_spec = render_data.as_ref().and_then(|row| {
                         let line_language = matches!(
@@ -872,7 +896,7 @@ impl MainPaneView {
                         )
                         .then_some(language)
                         .flatten();
-                        let word_color = diff_line_word_color(row.kind, theme);
+                        let word_color = diff_line_word_color(visual_kind, theme);
                         let prepared_line = match row.kind {
                             DiffLineKind::Remove => rows::prepared_diff_syntax_line_for_one_based_line(
                                 this.file_diff_split_prepared_syntax_document(
@@ -934,7 +958,7 @@ impl MainPaneView {
                                 .diff_text_segments_cache_get(inline_ix, cache_epoch)
                                 .is_none()
                             {
-                                let word_color = diff_line_word_color(line.kind, theme);
+                                let word_color = diff_line_word_color(visual_kind, theme);
                                 let is_content_line = matches!(
                                     line.kind,
                                     DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -988,7 +1012,7 @@ impl MainPaneView {
                             .diff_text_segments_cache_get(inline_ix, cache_epoch)
                             .is_none()
                         {
-                            let word_color = diff_line_word_color(line.kind, theme);
+                            let word_color = diff_line_word_color(visual_kind, theme);
                             let is_content_line = matches!(
                                 line.kind,
                                 DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -1038,6 +1062,7 @@ impl MainPaneView {
                         DiffViewMode::Inline,
                         min_width,
                         &line,
+                        visual_kind,
                         None,
                         None,
                         styled,
@@ -1086,6 +1111,7 @@ impl MainPaneView {
                 let Some(line) = this.patch_diff_row(src_ix) else {
                     return diff_placeholder_row(("diff_oob", visible_ix), theme, ui_scale_percent);
                 };
+                let visual_kind = this.patch_visual_line_kind(src_ix);
                 let streamed_spec = matches!(click_kind, DiffClickKind::Line)
                     .then(|| {
                         heuristic_streamed_diff_text_spec(
@@ -1093,7 +1119,7 @@ impl MainPaneView {
                             &query,
                             query_options,
                             word_ranges.to_vec(),
-                            diff_line_word_color(line.kind, theme),
+                            diff_line_word_color(visual_kind, theme),
                             language,
                             syntax_mode,
                         )
@@ -1108,7 +1134,7 @@ impl MainPaneView {
                         .is_none()
                 {
                     let computed = if matches!(click_kind, DiffClickKind::Line) {
-                        let word_color = diff_line_word_color(line.kind, theme);
+                        let word_color = diff_line_word_color(visual_kind, theme);
                         let content_text = diff_content_text(&line);
 
                         build_cached_diff_styled_text_with_source_identity(
@@ -1168,6 +1194,7 @@ impl MainPaneView {
                     DiffViewMode::Inline,
                     min_width,
                     &line,
+                    visual_kind,
                     file_stat,
                     header_display,
                     styled,
@@ -1318,9 +1345,11 @@ impl MainPaneView {
                             let Some(row) = this.file_diff_split_render_data(row_ix) else {
                                 return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
                             };
+                            let visual_kind = this.file_diff_split_visual_kind(row_ix);
                             let row_word_ranges =
                                 this.file_diff_split_word_ranges(row_ix, region);
-                            let row_word_color = file_diff_split_word_color(column, row.kind, theme);
+                            let row_word_color =
+                                file_diff_split_word_color(column, visual_kind, theme);
                             let streamed_spec =
                                 file_diff_split_side_text_owned(&row, is_left).and_then(
                                     |raw_text| {
@@ -1395,6 +1424,7 @@ impl MainPaneView {
                                 selected,
                                 min_width,
                                 &row,
+                                visual_kind,
                                 styled,
                                 streamed_spec,
                                 cx,
@@ -1434,8 +1464,9 @@ impl MainPaneView {
                     let Some(row) = this.file_diff_split_render_data(row_ix) else {
                         return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
                     };
+                    let visual_kind = this.file_diff_split_visual_kind(row_ix);
                     let row_word_ranges = this.file_diff_split_word_ranges(row_ix, region);
-                    let row_word_color = file_diff_split_word_color(column, row.kind, theme);
+                    let row_word_color = file_diff_split_word_color(column, visual_kind, theme);
                     let streamed_spec = file_diff_split_side_text_owned(&row, is_left).and_then(
                         |raw_text| {
                             prepared_streamed_diff_text_spec(
@@ -1515,6 +1546,7 @@ impl MainPaneView {
                         selected,
                         min_width,
                         &row,
+                        visual_kind,
                         styled,
                         streamed_spec,
                         cx,
@@ -1546,6 +1578,18 @@ impl MainPaneView {
                         new_src_ix,
                     } => {
                         let src_ix = if is_left { old_src_ix } else { new_src_ix };
+                        let old_changed = old_src_ix.is_some_and(|src_ix| {
+                            matches!(this.patch_visual_line_kind(src_ix), DiffLineKind::Remove)
+                        });
+                        let new_changed = new_src_ix.is_some_and(|src_ix| {
+                            matches!(this.patch_visual_line_kind(src_ix), DiffLineKind::Add)
+                        });
+                        let visual_kind = match (old_changed, new_changed) {
+                            (true, true) => FileDiffRowKind::Modify,
+                            (true, false) => FileDiffRowKind::Remove,
+                            (false, true) => FileDiffRowKind::Add,
+                            (false, false) => FileDiffRowKind::Context,
+                        };
                         let (streamed_spec, styled) = if let Some(src_ix) = src_ix {
                             let language =
                                 this.diff_language_for_src_ix.get(src_ix).copied().flatten();
@@ -1555,9 +1599,8 @@ impl MainPaneView {
                                 .get(src_ix)
                                 .and_then(|r| r.as_ref().cloned())
                                 .unwrap_or_default();
-                            let word_color = this
-                                .patch_diff_row(src_ix)
-                                .and_then(|line| diff_line_word_color(line.kind, theme));
+                            let word_color =
+                                diff_line_word_color(this.patch_visual_line_kind(src_ix), theme);
                             let streamed_spec = file_diff_split_side_text_owned(&row, is_left)
                                 .and_then(|raw_text| {
                                     heuristic_streamed_diff_text_spec(
@@ -1624,6 +1667,7 @@ impl MainPaneView {
                             selected,
                             min_width,
                             &row,
+                            visual_kind,
                             styled,
                             streamed_spec,
                             cx,
@@ -1718,6 +1762,7 @@ fn diff_row(
     mode: DiffViewMode,
     min_width: Pixels,
     line: &AnnotatedDiffLine,
+    visual_kind: DiffLineKind,
     file_stat: Option<(usize, usize)>,
     header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
@@ -1767,10 +1812,7 @@ fn diff_row(
             .on_click(on_click);
 
         if selected {
-            row = row.bg(with_alpha(
-                theme.colors.accent,
-                if theme.is_dark { 0.10 } else { 0.07 },
-            ));
+            row = row.bg(focused_diff_neutral_row_bg(theme));
         }
 
         return row.into_any_element();
@@ -1833,10 +1875,7 @@ fn diff_row(
         row = row.on_mouse_down(MouseButton::Right, on_right_click);
 
         if selected {
-            row = row.bg(with_alpha(
-                theme.colors.accent,
-                if theme.is_dark { 0.14 } else { 0.10 },
-            ));
+            row = row.bg(focused_diff_neutral_row_bg(theme));
         }
         if context_menu_active {
             row = row.bg(theme.colors.active);
@@ -1845,7 +1884,10 @@ fn diff_row(
         return row.into_any_element();
     }
 
-    let (bg, fg, gutter_fg) = diff_line_colors(theme, line.kind);
+    let (mut bg, fg, gutter_fg) = diff_line_colors(theme, visual_kind);
+    if selected {
+        bg = focused_diff_line_bg(theme, visual_kind);
+    }
 
     let old = line_number_string(line.old_line);
     let new = line_number_string(line.new_line);
@@ -1867,19 +1909,23 @@ fn diff_row(
             streamed_spec,
         ),
         DiffViewMode::Split => {
-            let left_kind = if line.kind == DiffLineKind::Remove {
+            let left_kind = if visual_kind == DiffLineKind::Remove {
                 DiffLineKind::Remove
             } else {
                 DiffLineKind::Context
             };
-            let right_kind = if line.kind == DiffLineKind::Add {
+            let right_kind = if visual_kind == DiffLineKind::Add {
                 DiffLineKind::Add
             } else {
                 DiffLineKind::Context
             };
 
-            let (left_bg, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
-            let (right_bg, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
+            let (mut left_bg, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
+            let (mut right_bg, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
+            if selected {
+                left_bg = focused_diff_line_bg(theme, left_kind);
+                right_bg = focused_diff_line_bg(theme, right_kind);
+            }
 
             let (left_text, right_text) = match line.kind {
                 DiffLineKind::Remove => (styled, None),
@@ -1971,10 +2017,7 @@ fn collapsed_inline_header_row(
                 });
 
             if selected {
-                row = row.bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.10 } else { 0.07 },
-                ));
+                row = row.bg(focused_diff_neutral_row_bg(theme));
             }
 
             row.into_any_element()
@@ -2101,6 +2144,11 @@ fn collapsed_inline_header_row(
             };
 
             let row_bg = collapsed_inline_hunk_bg(theme, collapsed_hunk, expansion_kind);
+            let painted_row_bg = if selected {
+                focused_collapsed_hunk_bg(theme, collapsed_hunk)
+            } else {
+                row_bg
+            };
             let mut row = div()
                 .id(("collapsed_diff_hunk_hdr", visible_ix))
                 .debug_selector(|| COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR.to_string())
@@ -2111,7 +2159,7 @@ fn collapsed_inline_header_row(
                 .overflow_hidden()
                 .flex()
                 .items_center()
-                .bg(row_bg)
+                .bg(painted_row_bg)
                 .text_xs()
                 .text_color(text_color);
             row = row
@@ -2146,7 +2194,7 @@ fn collapsed_inline_header_row(
                 .on_mouse_down(MouseButton::Right, on_right_click);
 
             if selected {
-                row = row.bg(collapsed_hunk_header_selected_bg(theme));
+                row = row.bg(painted_row_bg);
             }
             if context_menu_active {
                 row = row.bg(theme.colors.active);
@@ -2155,10 +2203,10 @@ fn collapsed_inline_header_row(
             div()
                 .h(collapsed_hunk_header_row_height(ui_scale_percent))
                 .min_w(min_width)
-                .bg(row_bg)
+                .bg(painted_row_bg)
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
-                    Some(row_bg),
+                    Some(painted_row_bg),
                     row.into_any_element(),
                 ))
                 .into_any_element()
@@ -2186,11 +2234,12 @@ fn patch_split_column_row(
     selected: bool,
     min_width: Pixels,
     row: &gitcomet_core::file_diff::FileDiffRow,
+    visual_kind: FileDiffRowKind,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
-    let line_kind = match (column, row.kind) {
+    let line_kind = match (column, visual_kind) {
         (PatchSplitColumn::Left, FileDiffRowKind::Remove | FileDiffRowKind::Modify) => {
             DiffLineKind::Remove
         }
@@ -2199,7 +2248,10 @@ fn patch_split_column_row(
         }
         _ => DiffLineKind::Context,
     };
-    let (bg, fg, gutter_fg) = diff_line_colors(theme, line_kind);
+    let (mut bg, fg, gutter_fg) = diff_line_colors(theme, line_kind);
+    if selected {
+        bg = focused_diff_line_bg(theme, line_kind);
+    }
 
     let line_no = match column {
         PatchSplitColumn::Left => line_number_string(row.old_line),
@@ -2292,10 +2344,7 @@ fn patch_split_header_row(
                 .on_click(on_click);
 
             if selected {
-                row = row.bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.10 } else { 0.07 },
-                ));
+                row = row.bg(focused_diff_neutral_row_bg(theme));
             }
 
             row.into_any_element()
@@ -2370,10 +2419,7 @@ fn patch_split_header_row(
             row = row.on_mouse_down(MouseButton::Right, on_right_click);
 
             if selected {
-                row = row.bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.14 } else { 0.10 },
-                ));
+                row = row.bg(focused_diff_neutral_row_bg(theme));
             }
             if context_menu_active {
                 row = row.bg(theme.colors.active);
@@ -2456,10 +2502,7 @@ fn collapsed_split_header_row(
                 });
 
             if selected {
-                row = row.bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.10 } else { 0.07 },
-                ));
+                row = row.bg(focused_diff_neutral_row_bg(theme));
             }
 
             row.into_any_element()
@@ -2620,6 +2663,11 @@ fn collapsed_split_header_row(
             };
 
             let row_bg = collapsed_split_hunk_bg(theme, collapsed_hunk, column);
+            let painted_row_bg = if selected {
+                focused_collapsed_hunk_bg(theme, collapsed_hunk)
+            } else {
+                row_bg
+            };
             let mut row = div()
                 .id((row_id, visible_ix))
                 .debug_selector(move || shell_debug_selector.to_string())
@@ -2630,7 +2678,7 @@ fn collapsed_split_header_row(
                 .overflow_hidden()
                 .flex()
                 .items_center()
-                .bg(row_bg)
+                .bg(painted_row_bg)
                 .text_xs()
                 .text_color(text_color)
                 .child(
@@ -2662,7 +2710,7 @@ fn collapsed_split_header_row(
                 .on_mouse_down(MouseButton::Right, on_right_click);
 
             if selected {
-                row = row.bg(collapsed_hunk_header_selected_bg(theme));
+                row = row.bg(painted_row_bg);
             }
             if context_menu_active {
                 row = row.bg(theme.colors.active);
@@ -2671,10 +2719,10 @@ fn collapsed_split_header_row(
             div()
                 .h(collapsed_hunk_header_row_height(ui_scale_percent))
                 .min_w(min_width)
-                .bg(row_bg)
+                .bg(painted_row_bg)
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
-                    Some(row_bg),
+                    Some(painted_row_bg),
                     row.into_any_element(),
                 ))
                 .into_any_element()
@@ -2744,10 +2792,7 @@ fn patch_split_meta_row(
         .on_click(on_click);
 
     if selected {
-        row = row.bg(with_alpha(
-            theme.colors.accent,
-            if theme.is_dark { 0.10 } else { 0.07 },
-        ));
+        row = row.bg(focused_diff_line_bg(theme, line.kind));
     }
 
     row.into_any_element()
@@ -2766,6 +2811,57 @@ mod tests {
             has_removals,
             reveal_up_lines: 0,
             reveal_down_lines: 0,
+        }
+    }
+
+    #[test]
+    fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let text_selection_bg =
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 });
+            let add_focus = focused_diff_line_bg(theme, DiffLineKind::Add);
+            let remove_focus = focused_diff_line_bg(theme, DiffLineKind::Remove);
+            let neutral_focus = focused_diff_line_bg(theme, DiffLineKind::Context);
+            let (add_bg, _, _) = diff_line_colors(theme, DiffLineKind::Add);
+            let (remove_bg, _, _) = diff_line_colors(theme, DiffLineKind::Remove);
+            let (context_bg, _, _) = diff_line_colors(theme, DiffLineKind::Context);
+
+            assert_ne!(add_focus, text_selection_bg);
+            assert_ne!(remove_focus, text_selection_bg);
+            assert_ne!(neutral_focus, text_selection_bg);
+            assert_ne!(
+                neutral_focus,
+                with_alpha(theme.colors.warning, focused_diff_row_alpha(theme))
+            );
+            assert_ne!(add_focus, add_bg);
+            assert_ne!(remove_focus, remove_bg);
+            assert_ne!(neutral_focus, context_bg);
+            assert_ne!(add_focus, remove_focus);
+            assert_ne!(add_focus, neutral_focus);
+            assert_ne!(remove_focus, neutral_focus);
+
+            let collapsed_focus = focused_collapsed_hunk_bg(theme, None);
+            let expected_collapsed_focus =
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 });
+            assert_eq!(collapsed_focus, expected_collapsed_focus);
+            assert_ne!(
+                collapsed_focus,
+                with_alpha(theme.colors.accent, focused_diff_row_alpha(theme))
+            );
+            assert_ne!(collapsed_focus, text_selection_bg);
+            assert_eq!(
+                focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(false, true))),
+                collapsed_focus
+            );
+            assert_eq!(
+                focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(true, false))),
+                collapsed_focus
+            );
+            assert_eq!(
+                focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(true, true))),
+                collapsed_focus
+            );
+            assert_eq!(focused_collapsed_hunk_bg(theme, None), collapsed_focus);
         }
     }
 

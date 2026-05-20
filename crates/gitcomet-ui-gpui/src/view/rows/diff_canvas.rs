@@ -161,6 +161,10 @@ fn semantic_diff_row_bg(theme: AppTheme, bg: gpui::Rgba) -> Option<gpui::Rgba> {
     (bg != theme.colors.window_bg).then_some(bg)
 }
 
+fn focused_row_outline_color(theme: AppTheme, bg: gpui::Rgba) -> gpui::Rgba {
+    with_alpha(bg, if theme.is_dark { 0.72 } else { 0.56 })
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::view) struct DiffPaintRecord {
@@ -798,7 +802,7 @@ pub(super) fn inline_diff_line_row_canvas(
             if selected {
                 window.paint_quad(gpui::outline(
                     bounds,
-                    with_alpha(theme.colors.accent, 0.55),
+                    focused_row_outline_color(theme, bg),
                     gpui::BorderStyle::default(),
                 ));
             }
@@ -982,7 +986,7 @@ pub(super) fn split_diff_line_row_canvas(
             if selected {
                 window.paint_quad(gpui::outline(
                     bounds,
-                    with_alpha(theme.colors.accent, 0.55),
+                    focused_row_outline_color(theme, left_bg),
                     gpui::BorderStyle::default(),
                 ));
             }
@@ -1110,7 +1114,7 @@ pub(super) fn patch_split_column_row_canvas(
             if selected {
                 window.paint_quad(gpui::outline(
                     bounds,
-                    with_alpha(theme.colors.accent, 0.55),
+                    focused_row_outline_color(theme, bg),
                     gpui::BorderStyle::default(),
                 ));
             }

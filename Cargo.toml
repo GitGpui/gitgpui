@@ -28,7 +28,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.94.0"
+rust-version = "1.95.0"
 
 [workspace.dependencies]
 # Internal crates
@@ -47,13 +47,13 @@ futures = "0.3.32"
 gix = { version = "0.83.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
 # Load gpui-ce directly from GitHub at commit a95a721341989fb391f56c4e4e5521b8b5196cfa.
 gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "a95a721341989fb391f56c4e4e5521b8b5196cfa" }
-http_client = { package = "http-client-gpui-unofficial", version = "1.2.6" }
+http_client = { package = "http-client-gpui-unofficial", version = "1.2.7" }
 image = "0.25.10"
 lru = "0.18"
 memchr = "2.8.0"
 # Pin mimalloc to the requested fork commit until the updated submodule lands in a release.
-mimalloc = { git = "https://github.com/havunen/mimalloc_rust.git", rev = "843b9b2f240ce98a4d5745a72e77cc21648651dd" }
-libmimalloc-sys = { git = "https://github.com/havunen/mimalloc_rust.git", rev = "843b9b2f240ce98a4d5745a72e77cc21648651dd", features = ["extended"] }
+mimalloc = { version = "0.1.51", features = ["extended"] }
+libmimalloc-sys = { version = "0.1.48", features = ["extended"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
@@ -71,7 +71,7 @@ stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.26.8"
+tree-sitter = "0.26.9"
 tree-sitter-bash = "0.25.1"
 tree-sitter-bicep = "1.1.0"
 tree-sitter-c = "0.24.2"

@@ -651,6 +651,11 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffContentMode::from_key)
             .unwrap_or_default();
+        let diff_whitespace_mode = ui_session
+            .diff_whitespace_mode
+            .as_deref()
+            .and_then(DiffWhitespaceMode::from_key)
+            .unwrap_or_default();
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
 
@@ -784,6 +789,7 @@ impl GitCometView {
                 show_timezone,
                 diff_scroll_sync,
                 diff_content_mode,
+                diff_whitespace_mode,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -831,6 +837,7 @@ impl GitCometView {
                 show_timezone,
                 change_tracking_view,
                 diff_content_mode,
+                diff_whitespace_mode,
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 main_pane.clone(),
@@ -987,6 +994,7 @@ impl GitCometView {
             change_tracking_view,
             diff_scroll_sync,
             diff_content_mode,
+            diff_whitespace_mode,
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
@@ -1276,6 +1284,43 @@ impl GitCometView {
 
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_content_mode(next, cx));
+    }
+
+    fn apply_diff_whitespace_mode_preference(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_whitespace_mode == next {
+            return false;
+        }
+
+        self.diff_whitespace_mode = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_whitespace_mode(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_whitespace_mode_from_pane(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_whitespace_mode_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_whitespace_mode(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_whitespace_mode_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_whitespace_mode(next, cx));
     }
 
     pub(in crate::view) fn set_history_column_preferences(
@@ -1889,6 +1934,7 @@ impl GitCometView {
                 main_pane.update(cx, |pane, cx| {
                     if action(pane, window, cx) {
                         cx.notify();
+                        window.refresh();
                     }
                 });
             });

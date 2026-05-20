@@ -707,6 +707,7 @@ pub(super) fn should_hide_unified_diff_header_raw(
 
 pub(super) fn build_patch_split_visible_meta_from_src(
     line_kinds: &[gitcomet_core::domain::DiffLineKind],
+    visual_line_kinds: &[gitcomet_core::domain::DiffLineKind],
     click_kinds: &[DiffClickKind],
     hide_unified_header_for_src_ix: &[bool],
 ) -> PatchSplitVisibleMeta {
@@ -721,18 +722,18 @@ pub(super) fn build_patch_split_visible_meta_from_src(
     let mut visible_flags = Vec::with_capacity(src_len);
     let mut row_ix = 0usize;
     let mut src_ix = 0usize;
-    let mut pending_removes = 0usize;
-    let mut pending_adds = 0usize;
+    let mut pending_removes = Vec::new();
+    let mut pending_adds = Vec::new();
 
     let flush_pending = |visible_indices: &mut Vec<usize>,
                          visible_flags: &mut Vec<u8>,
                          row_ix: &mut usize,
-                         pending_removes: &mut usize,
-                         pending_adds: &mut usize| {
-        let pairs = (*pending_removes).max(*pending_adds);
+                         pending_removes: &mut Vec<bool>,
+                         pending_adds: &mut Vec<bool>| {
+        let pairs = pending_removes.len().max(pending_adds.len());
         for pair_ix in 0..pairs {
-            let has_remove = pair_ix < *pending_removes;
-            let has_add = pair_ix < *pending_adds;
+            let has_remove = pending_removes.get(pair_ix).copied().unwrap_or(false);
+            let has_add = pending_adds.get(pair_ix).copied().unwrap_or(false);
             let flag = match (has_remove, has_add) {
                 (true, true) => 3,
                 (true, false) => 2,
@@ -743,8 +744,8 @@ pub(super) fn build_patch_split_visible_meta_from_src(
             visible_flags.push(flag);
             *row_ix = row_ix.saturating_add(1);
         }
-        *pending_removes = 0;
-        *pending_adds = 0;
+        pending_removes.clear();
+        pending_adds.clear();
     };
 
     let push_raw = |visible_indices: &mut Vec<usize>,
@@ -806,8 +807,14 @@ pub(super) fn build_patch_split_visible_meta_from_src(
                         );
                         push_raw(&mut visible_indices, &mut visible_flags, &mut row_ix, hide);
                     }
-                    DK::Remove => pending_removes = pending_removes.saturating_add(1),
-                    DK::Add => pending_adds = pending_adds.saturating_add(1),
+                    DK::Remove => pending_removes.push(matches!(
+                        visual_line_kinds.get(src_ix).copied().unwrap_or(DK::Remove),
+                        DK::Remove
+                    )),
+                    DK::Add => pending_adds.push(matches!(
+                        visual_line_kinds.get(src_ix).copied().unwrap_or(DK::Add),
+                        DK::Add
+                    )),
                     DK::Header | DK::Hunk => {
                         flush_pending(
                             &mut visible_indices,
@@ -868,6 +875,7 @@ mod tests {
 
     fn split_visible_meta_for_diff(diff: &Diff) -> PatchSplitVisibleMeta {
         let line_kinds = diff.lines.iter().map(|line| line.kind).collect::<Vec<_>>();
+        let visual_line_kinds = line_kinds.clone();
         let click_kinds = diff
             .lines
             .iter()
@@ -890,6 +898,7 @@ mod tests {
             .collect::<Vec<_>>();
         build_patch_split_visible_meta_from_src(
             line_kinds.as_slice(),
+            visual_line_kinds.as_slice(),
             click_kinds.as_slice(),
             hidden.as_slice(),
         )

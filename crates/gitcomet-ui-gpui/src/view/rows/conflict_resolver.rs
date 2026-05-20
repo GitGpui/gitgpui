@@ -120,12 +120,12 @@ fn build_conflict_row_base_styled(
 fn conflict_display_text(
     text: &SharedString,
     styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
+    reveal_whitespace_chars: bool,
 ) -> SharedString {
     match styled {
-        Some(styled) if show_whitespace => whitespace_visible_text(styled.text.as_ref()),
+        Some(styled) if reveal_whitespace_chars => whitespace_visible_text(styled.text.as_ref()),
         Some(styled) => styled.text.clone(),
-        None if show_whitespace => whitespace_visible_text(text.as_ref()),
+        None if reveal_whitespace_chars => whitespace_visible_text(text.as_ref()),
         None => text.clone(),
     }
 }
@@ -332,7 +332,7 @@ impl MainPaneView {
         let _perf_scope = perf::span(ViewPerfSpan::RenderThreeWayRows);
         let theme = this.theme;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
-        let show_ws = this.show_whitespace;
+        let show_ws = this.reveal_whitespace_chars;
         let word_hl_color = Some(theme.colors.warning);
         let syntax_lang = this.conflict_row_syntax_language();
         let prepared_docs = &this.conflict_three_way_prepared_syntax_documents;
@@ -726,7 +726,7 @@ impl MainPaneView {
         let syntax_mode = DiffSyntaxMode::Auto;
         let theme = this.theme;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
-        let show_ws = this.show_whitespace;
+        let show_ws = this.reveal_whitespace_chars;
         let query_text = this.conflict_diff_query_cache_query.clone();
         let query = query_text.as_ref();
 
@@ -764,6 +764,11 @@ impl MainPaneView {
                     row,
                     conflict_ix,
                 } = visible_row;
+                let visual_kind = this.conflict_resolver.two_way_split_visual_kind_at(
+                    row_ix,
+                    &row,
+                    this.diff_whitespace_mode,
+                );
 
                 let (text_opt, line_no, document) = match side {
                     ConflictPickSide::Ours => (
@@ -780,12 +785,20 @@ impl MainPaneView {
 
                 let text = SharedString::new(text_opt.map(AsRef::as_ref).unwrap_or_default());
                 let styling_enabled = this.conflict_row_styling_enabled();
-                let word_hl_computed = if styling_enabled {
+                let word_hl_computed = if styling_enabled
+                    && !matches!(
+                        visual_kind,
+                        gitcomet_core::file_diff::FileDiffRowKind::Context
+                    ) {
                     conflict_resolver::compute_word_highlights_for_row(&row)
                 } else {
                     None
                 };
-                let word_hl_precomputed = if styling_enabled {
+                let word_hl_precomputed = if styling_enabled
+                    && !matches!(
+                        visual_kind,
+                        gitcomet_core::file_diff::FileDiffRowKind::Context
+                    ) {
                     this.conflict_resolver.two_way_split_word_highlight(row_ix)
                 } else {
                     None
@@ -818,7 +831,7 @@ impl MainPaneView {
                     (row_ix, side),
                 );
 
-                let bg = split_cell_bg(theme, row.kind, side);
+                let bg = split_cell_bg(theme, visual_kind, side);
                 let fg = if text_opt.is_some() {
                     theme.colors.text
                 } else {
@@ -1551,24 +1564,37 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
-        let show_ws = self.show_whitespace;
+        let show_ws = self.reveal_whitespace_chars;
 
         let left_text = SharedString::new(row.old.as_deref().unwrap_or_default());
         let right_text = SharedString::new(row.new.as_deref().unwrap_or_default());
         let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
         let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
+        let visual_kind = self.conflict_resolver.two_way_split_visual_kind_at(
+            row_ix,
+            &row,
+            self.diff_whitespace_mode,
+        );
 
         // Large streamed compare views should avoid retaining per-row styled
         // caches as users scroll through the whole-file projection.
         let styling_enabled = self.conflict_row_styling_enabled()
             && self.conflict_resolver.three_way_len
                 <= conflict_resolver::LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
-        let word_hl_computed = if styling_enabled {
+        let word_hl_computed = if styling_enabled
+            && !matches!(
+                visual_kind,
+                gitcomet_core::file_diff::FileDiffRowKind::Context
+            ) {
             conflict_resolver::compute_word_highlights_for_row(&row)
         } else {
             None
         };
-        let word_hl_precomputed = if styling_enabled {
+        let word_hl_precomputed = if styling_enabled
+            && !matches!(
+                visual_kind,
+                gitcomet_core::file_diff::FileDiffRowKind::Context
+            ) {
             self.conflict_resolver.two_way_split_word_highlight(row_ix)
         } else {
             None
@@ -1630,8 +1656,8 @@ impl MainPaneView {
             (row_ix, ConflictPickSide::Theirs),
         );
 
-        let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours);
-        let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
+        let left_bg = split_cell_bg(theme, visual_kind, ConflictPickSide::Ours);
+        let right_bg = split_cell_bg(theme, visual_kind, ConflictPickSide::Theirs);
 
         let [left_col_w, right_col_w] = self.conflict_diff_split_col_widths;
         let left_fg = if row.old.is_some() {
@@ -1746,10 +1772,10 @@ impl MainPaneView {
 fn conflict_diff_text_cell(
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
+    reveal_whitespace_chars: bool,
 ) -> AnyElement {
     let Some(styled) = styled else {
-        let display = if show_whitespace {
+        let display = if reveal_whitespace_chars {
             whitespace_visible_text(text.as_ref())
         } else {
             text
@@ -1763,7 +1789,7 @@ fn conflict_diff_text_cell(
     };
 
     if styled.highlights.is_empty() {
-        let display = if show_whitespace {
+        let display = if reveal_whitespace_chars {
             whitespace_visible_text(styled.text.as_ref())
         } else {
             styled.text.clone()
@@ -1776,7 +1802,7 @@ fn conflict_diff_text_cell(
             .into_any_element();
     }
 
-    if show_whitespace {
+    if reveal_whitespace_chars {
         let (display, highlights) = whitespace_visible_text_and_highlights(
             styled.text.as_ref(),
             styled.highlights.as_ref(),
