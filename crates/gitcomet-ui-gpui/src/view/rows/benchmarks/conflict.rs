@@ -1042,7 +1042,10 @@ impl ConflictSearchQueryUpdateFixture {
             if query_cache.get(&key).is_none() {
                 let styled = if let Some(base) = stable_cache.get(&key) {
                     super::diff_text::build_cached_diff_query_overlay_styled_text(
-                        theme, base, query,
+                        theme,
+                        base,
+                        query,
+                        Default::default(),
                     )
                 } else {
                     super::diff_text::build_cached_diff_styled_text_with_source_identity(

@@ -1,5 +1,6 @@
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
+use crate::view::panes::main::diff_search::DiffSearchOptions;
 use gitcomet_core::domain::{
     SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
     SubmoduleStatus,
@@ -412,6 +413,7 @@ impl MainPaneView {
     fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_search_active = false;
         self.diff_search_query = SharedString::default();
+        self.diff_search_regex_error = None;
         self.diff_search_matches.clear();
         self.diff_search_match_ix = None;
         self.diff_search_input
@@ -420,6 +422,41 @@ impl MainPaneView {
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
         window.focus(&self.diff_panel_focus_handle, cx);
+    }
+
+    fn focus_diff_search_input(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let focus = self.diff_search_input.read(cx).focus_handle();
+        window.focus(&focus, cx);
+    }
+
+    fn refresh_diff_search_after_option_change(&mut self) {
+        let query = self.diff_search_query.clone();
+        self.invalidate_diff_text_query_overlay_cache(query.as_ref(), self.diff_search_options);
+        self.clear_worktree_preview_segments_cache();
+        self.clear_conflict_diff_query_overlay_caches();
+        self.diff_search_recompute_matches_and_scroll_to_first();
+    }
+
+    fn set_diff_search_options(
+        &mut self,
+        next: DiffSearchOptions,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_search_options != next {
+            self.diff_search_options = next;
+            self.refresh_diff_search_after_option_change();
+        }
+        self.focus_diff_search_input(window, cx);
+        cx.notify();
+    }
+
+    fn insert_diff_search_line_break(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.diff_search_input.update(cx, |input, cx| {
+            input.replace_selection_utf8("\n", cx);
+        });
+        self.focus_diff_search_input(window, cx);
+        cx.notify();
     }
 
     pub(in crate::view) fn open_search_for_active_view(
@@ -449,9 +486,12 @@ impl MainPaneView {
             return None;
         }
 
-        let query = self.diff_search_query.as_ref().trim();
+        let query = self.diff_search_query.as_ref();
+        let regex_invalid = self.diff_search_regex_error.is_some();
         let match_label: SharedString = if query.is_empty() {
             "Type to search".into()
+        } else if regex_invalid {
+            "Invalid regex".into()
         } else if self.diff_search_matches.is_empty() {
             "No matches".into()
         } else {
@@ -461,13 +501,24 @@ impl MainPaneView {
                 .min(self.diff_search_matches.len().saturating_sub(1));
             format!("{}/{}", ix + 1, self.diff_search_matches.len()).into()
         };
+        let match_label_color = if regex_invalid && !query.is_empty() {
+            theme.colors.danger
+        } else {
+            theme.colors.text_muted
+        };
+        let option_selected_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.34 } else { 0.24 });
+        let options = self.diff_search_options;
+        let compact_control_height = px(20.0);
+        let compact_icon_button_width = px(22.0);
+        let compact_option_button_width = px(24.0);
 
         let panel = div()
             .flex()
             .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
+            .gap(px(2.0))
+            .px(px(4.0))
+            .py(px(2.0))
             .rounded(px(theme.radii.row))
             .border_1()
             .border_color(theme.colors.border)
@@ -475,23 +526,92 @@ impl MainPaneView {
             .shadow_sm()
             .child(
                 div()
-                    .w(px(240.0))
-                    .min_w(px(120.0))
+                    .w(px(180.0))
+                    .min_w(px(96.0))
+                    .h(compact_control_height)
+                    .max_h(compact_control_height)
+                    .overflow_hidden()
                     .debug_selector(|| "diff_search_input_slot".to_string())
                     .child(self.diff_search_input.clone()),
             )
             .child(
+                components::Button::new("diff_search_newline", "")
+                    .start_slot(svg_icon(
+                        "icons/line_break.svg",
+                        theme.colors.text,
+                        px(14.0),
+                    ))
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.insert_diff_search_line_break(window, cx);
+                    })
+                    .w(compact_icon_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Insert newline (Shift+Enter)".into())
+                    .debug_selector(|| "diff_search_newline".to_string()),
+            )
+            .child(
+                components::Button::new("diff_search_match_case", "Aa")
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .selected(options.match_case)
+                    .selected_bg(option_selected_bg)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        let mut next = this.diff_search_options;
+                        next.match_case = !next.match_case;
+                        this.set_diff_search_options(next, window, cx);
+                    })
+                    .w(compact_option_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Match case".into())
+                    .debug_selector(|| "diff_search_match_case".to_string()),
+            )
+            .child(
+                components::Button::new("diff_search_whole_word", "W")
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .selected(options.whole_word)
+                    .selected_bg(option_selected_bg)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        let mut next = this.diff_search_options;
+                        next.whole_word = !next.whole_word;
+                        this.set_diff_search_options(next, window, cx);
+                    })
+                    .w(compact_option_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Match whole word".into())
+                    .debug_selector(|| "diff_search_whole_word".to_string()),
+            )
+            .child(
+                components::Button::new("diff_search_regex", ".*")
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .selected(options.regex)
+                    .selected_bg(option_selected_bg)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        let mut next = this.diff_search_options;
+                        next.regex = !next.regex;
+                        this.set_diff_search_options(next, window, cx);
+                    })
+                    .w(compact_option_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Use regular expression".into())
+                    .debug_selector(|| "diff_search_regex".to_string()),
+            )
+            .child(
                 div()
-                    .w(px(96.0))
-                    .min_w(px(96.0))
-                    .max_w(px(96.0))
+                    .w(px(72.0))
+                    .min_w(px(72.0))
+                    .max_w(px(72.0))
+                    .h(compact_control_height)
                     .flex()
                     .items_center()
                     .justify_end()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(match_label_color)
                     .debug_selector(|| "diff_search_match_label".to_string())
                     .child(match_label),
             )
@@ -507,6 +627,8 @@ impl MainPaneView {
                         this.deactivate_diff_search(window, cx);
                         cx.notify();
                     })
+                    .w(compact_icon_button_width)
+                    .h(compact_control_height)
                     .debug_selector(|| "diff_search_close".to_string()),
             )
             .with_animation(
@@ -1529,9 +1651,7 @@ impl MainPaneView {
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         this.diff_view = DiffViewMode::Inline;
                         this.clear_diff_text_style_caches();
-                        if this.diff_search_active
-                            && !this.diff_search_query.as_ref().trim().is_empty()
-                        {
+                        if this.diff_search_has_query() {
                             this.diff_search_recompute_matches_preserving_current();
                         }
                         cx.notify();
@@ -1546,9 +1666,7 @@ impl MainPaneView {
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         this.diff_view = DiffViewMode::Split;
                         this.clear_diff_text_style_caches();
-                        if this.diff_search_active
-                            && !this.diff_search_query.as_ref().trim().is_empty()
-                        {
+                        if this.diff_search_has_query() {
                             this.diff_search_recompute_matches_preserving_current();
                         }
                         cx.notify();

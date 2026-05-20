@@ -79,6 +79,7 @@ lru = { workspace = true }
 memchr = { workspace = true }
 mimalloc = { workspace = true }
 pulldown-cmark = { workspace = true }
+regex = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
 semver = { workspace = true }

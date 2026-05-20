@@ -2793,7 +2793,7 @@ impl MainPaneView {
         if collapsed_projection_active {
             self.diff_visible_indices.clear();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
-            if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            if self.diff_search_has_query() {
                 self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
@@ -2802,7 +2802,7 @@ impl MainPaneView {
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
-            if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            if self.diff_search_has_query() {
                 self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
@@ -2857,7 +2857,7 @@ impl MainPaneView {
             .map(|flags| scrollbar_markers_from_visible_flags(flags.as_slice()))
             .unwrap_or_else(|| self.compute_diff_scrollbar_markers());
 
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+        if self.diff_search_has_query() {
             self.diff_search_recompute_matches_for_current_view_preserving_current();
         }
     }

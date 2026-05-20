@@ -3,6 +3,7 @@ use super::super::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use super::conflict_canvas::{self, ConflictChunkContext};
 use super::diff_text::*;
 use super::*;
+use crate::view::panes::main::diff_search::DiffSearchOptions;
 
 const CONFLICT_ROW_FONT_SCALE: f32 = 0.80;
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
@@ -718,8 +719,9 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
         let query = this.diff_search_query_or_empty();
-        let query = query.as_ref().trim().to_string();
-        this.sync_conflict_diff_query_overlay_caches(query.as_str());
+        let query_options = this.diff_search_options_or_default();
+        let query = query.as_ref().to_string();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
         let theme = this.theme;
@@ -802,6 +804,7 @@ impl MainPaneView {
                     text_opt,
                     word_ranges,
                     query,
+                    query_options,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(document, line_no),
@@ -1410,8 +1413,9 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let query = this.diff_search_query_or_empty();
-        let query = query.as_ref().trim().to_string();
-        this.sync_conflict_diff_query_overlay_caches(query.as_str());
+        let query_options = this.diff_search_options_or_default();
+        let query = query.as_ref().to_string();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
         let syntax_lang = this.conflict_row_syntax_language();
         // Streamed conflicts may or may not have prepared side documents; Auto
         // remains the safe fallback when a row is not backed by one.
@@ -1455,6 +1459,7 @@ impl MainPaneView {
         text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
         word_ranges: &[Range<usize>],
         query: &str,
+        query_options: DiffSearchOptions,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
         prepared_line: PreparedDiffSyntaxLine,
@@ -1470,7 +1475,6 @@ impl MainPaneView {
             return result;
         }
 
-        let query = query.trim();
         let query_active = !query.is_empty();
         let base_has_style = !word_ranges.is_empty() || syntax_lang.is_some();
 
@@ -1512,18 +1516,19 @@ impl MainPaneView {
                 Some(ConflictRowStyledTextValue::Owned(styled)) => Some(styled),
                 _ => stable_cache.get(&key),
             } {
-                build_cached_diff_query_overlay_styled_text(theme, base, query)
+                build_cached_diff_query_overlay_styled_text(theme, base, query, query_options)
             } else {
-                build_conflict_cached_diff_styled_text_with_source_identity(
+                let base = build_conflict_cached_diff_styled_text_with_source_identity(
                     theme,
                     text,
                     source_identity,
                     word_ranges,
-                    query,
+                    "",
                     syntax_lang,
                     syntax_mode,
                     None,
-                )
+                );
+                build_cached_diff_query_overlay_styled_text(theme, &base, query, query_options)
             };
             if !result.pending {
                 query_cache.insert(key, styled);
@@ -1572,6 +1577,7 @@ impl MainPaneView {
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
         let query_text = self.conflict_diff_query_cache_query.clone();
+        let query_options = self.conflict_diff_query_cache_options;
         let query = query_text.as_ref();
         let (left_styled, right_styled) = if styling_enabled {
             (
@@ -1584,6 +1590,7 @@ impl MainPaneView {
                     row.old.as_ref(),
                     old_word_ranges,
                     query,
+                    query_options,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line),
@@ -1597,6 +1604,7 @@ impl MainPaneView {
                     row.new.as_ref(),
                     new_word_ranges,
                     query,
+                    query_options,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(theirs_document, row.new_line),

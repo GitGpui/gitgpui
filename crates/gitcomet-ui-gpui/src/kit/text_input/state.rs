@@ -460,6 +460,7 @@ pub(super) struct InteractionState {
     pub(super) cursor_blink_task: Option<gpui::Task<()>>,
     pub(super) enter_pressed: bool,
     pub(super) escape_pressed: bool,
+    pub(super) submit_on_enter: bool,
 }
 
 impl InteractionState {
@@ -476,6 +477,7 @@ impl InteractionState {
             cursor_blink_task: None,
             enter_pressed: false,
             escape_pressed: false,
+            submit_on_enter: false,
         }
     }
 }

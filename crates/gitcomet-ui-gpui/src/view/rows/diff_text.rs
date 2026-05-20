@@ -2035,11 +2035,13 @@ mod tests {
             text_hash,
         };
 
-        let empty_query = build_cached_diff_query_overlay_styled_text(theme, &base, "");
+        let empty_query =
+            build_cached_diff_query_overlay_styled_text(theme, &base, "", Default::default());
         assert!(Arc::ptr_eq(&empty_query.highlights, &base.highlights));
         assert_eq!(empty_query.highlights_hash, base.highlights_hash);
 
-        let missing_query = build_cached_diff_query_overlay_styled_text(theme, &base, "xyz");
+        let missing_query =
+            build_cached_diff_query_overlay_styled_text(theme, &base, "xyz", Default::default());
         assert!(Arc::ptr_eq(&missing_query.highlights, &base.highlights));
         assert_eq!(missing_query.highlights_hash, base.highlights_hash);
     }
@@ -2062,7 +2064,8 @@ mod tests {
             text_hash,
         };
 
-        let overlaid = build_cached_diff_query_overlay_styled_text(theme, &base, "cd");
+        let overlaid =
+            build_cached_diff_query_overlay_styled_text(theme, &base, "cd", Default::default());
         assert_eq!(overlaid.highlights.len(), 3);
         assert_eq!(overlaid.highlights[1].0, 2..4);
         assert_eq!(
@@ -2071,6 +2074,68 @@ mod tests {
         );
         assert!(overlaid.highlights[1].1.background_color.is_some());
         assert_ne!(overlaid.highlights_hash, base.highlights_hash);
+    }
+
+    #[test]
+    fn query_overlay_honors_search_options() {
+        let theme = AppTheme::gitcomet_dark();
+        let base = build_cached_diff_styled_text(
+            theme,
+            "Render render cat concat cat",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+
+        let case_sensitive = build_cached_diff_query_overlay_styled_text(
+            theme,
+            &base,
+            "render",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                match_case: true,
+                ..Default::default()
+            },
+        );
+        let case_sensitive_ranges: Vec<_> = case_sensitive
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(case_sensitive_ranges, vec![7..13]);
+
+        let whole_word = build_cached_diff_query_overlay_styled_text(
+            theme,
+            &base,
+            "cat",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                whole_word: true,
+                ..Default::default()
+            },
+        );
+        let whole_word_ranges: Vec<_> = whole_word
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(whole_word_ranges, vec![14..17, 25..28]);
+
+        let regex = build_cached_diff_query_overlay_styled_text(
+            theme,
+            &base,
+            r"r.n.e.",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                regex: true,
+                ..Default::default()
+            },
+        );
+        let regex_ranges: Vec<_> = regex
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(regex_ranges, vec![0..6, 7..13]);
     }
 
     #[test]
@@ -2095,7 +2160,8 @@ mod tests {
             text_hash,
         };
 
-        let overlaid = build_cached_diff_query_overlay_styled_text(theme, &base, "cdefg");
+        let overlaid =
+            build_cached_diff_query_overlay_styled_text(theme, &base, "cdefg", Default::default());
         assert_eq!(overlaid.highlights.len(), 5);
 
         assert_eq!(overlaid.highlights[0], (1..2, left));

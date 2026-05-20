@@ -916,17 +916,19 @@ impl MainPaneView {
             });
 
         let diff_search_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Search diff".into(),
-                    multiline: false,
+                    multiline: true,
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_submit_on_enter(true);
+            input
         });
         let diff_search_subscription = cx.observe(&diff_search_input, |this, input, cx| {
             if input.update(cx, |input, _| input.take_enter_pressed()) {
@@ -940,7 +942,10 @@ impl MainPaneView {
             if this.diff_search_query != next {
                 let previous_query = this.diff_search_query.clone();
                 this.diff_search_query = next.clone();
-                this.invalidate_diff_text_query_overlay_cache(next.as_ref());
+                this.invalidate_diff_text_query_overlay_cache(
+                    next.as_ref(),
+                    this.diff_search_options,
+                );
                 this.clear_worktree_preview_segments_cache();
                 this.clear_conflict_diff_query_overlay_caches();
                 this.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
@@ -1044,6 +1049,7 @@ impl MainPaneView {
             diff_text_segments_cache: Vec::new(),
             diff_text_query_segments_cache: Vec::new(),
             diff_text_query_cache_query: SharedString::default(),
+            diff_text_query_cache_options: Default::default(),
             diff_text_query_cache_generation: 0,
             diff_selection_anchor: None,
             diff_selection_range: None,
@@ -1059,6 +1065,8 @@ impl MainPaneView {
             diff_text_layout_cache: HashMap::default(),
             diff_search_active: false,
             diff_search_query: "".into(),
+            diff_search_options: Default::default(),
+            diff_search_regex_error: None,
             diff_search_matches: Vec::new(),
             diff_search_inline_patch_trigram_index: None,
             diff_search_match_ix: None,
@@ -1153,6 +1161,7 @@ impl MainPaneView {
             conflict_diff_query_segments_cache_split:
                 conflict_resolver::ConflictSplitStyledTextCache::default(),
             conflict_diff_query_cache_query: SharedString::default(),
+            conflict_diff_query_cache_options: Default::default(),
             conflict_three_way_segments_cache: HashMap::default(),
             conflict_three_way_prepared_syntax_documents: ThreeWaySides::default(),
             conflict_three_way_syntax_inflight: ThreeWaySides::default(),
@@ -1755,20 +1764,32 @@ impl MainPaneView {
     pub(in crate::view) fn clear_diff_text_query_overlay_cache(&mut self) {
         self.diff_text_query_segments_cache.clear();
         self.diff_text_query_cache_query = SharedString::default();
+        self.diff_text_query_cache_options = Default::default();
         self.diff_text_query_cache_generation =
             self.diff_text_query_cache_generation.wrapping_add(1);
     }
 
-    pub(in crate::view) fn invalidate_diff_text_query_overlay_cache(&mut self, query: &str) {
-        if self.diff_text_query_cache_query.as_ref() != query {
+    pub(in crate::view) fn invalidate_diff_text_query_overlay_cache(
+        &mut self,
+        query: &str,
+        options: super::diff_search::DiffSearchOptions,
+    ) {
+        if self.diff_text_query_cache_query.as_ref() != query
+            || self.diff_text_query_cache_options != options
+        {
             self.diff_text_query_cache_query = query.to_string().into();
+            self.diff_text_query_cache_options = options;
             self.diff_text_query_cache_generation =
                 self.diff_text_query_cache_generation.wrapping_add(1);
         }
     }
 
-    pub(in crate::view) fn sync_diff_text_query_overlay_cache(&mut self, query: &str) {
-        self.invalidate_diff_text_query_overlay_cache(query);
+    pub(in crate::view) fn sync_diff_text_query_overlay_cache(
+        &mut self,
+        query: &str,
+        options: super::diff_search::DiffSearchOptions,
+    ) {
+        self.invalidate_diff_text_query_overlay_cache(query, options);
     }
 
     pub(in crate::view) fn clear_diff_text_style_caches(&mut self) {
@@ -1784,6 +1805,7 @@ impl MainPaneView {
     pub(in crate::view) fn clear_conflict_diff_query_overlay_caches(&mut self) {
         self.conflict_diff_query_segments_cache_split.clear();
         self.conflict_diff_query_cache_query = SharedString::default();
+        self.conflict_diff_query_cache_options = Default::default();
     }
 
     pub(in crate::view) fn clear_conflict_diff_style_caches_preserving_query(&mut self) {
@@ -1791,9 +1813,16 @@ impl MainPaneView {
         self.conflict_diff_query_segments_cache_split.clear();
     }
 
-    pub(in crate::view) fn sync_conflict_diff_query_overlay_caches(&mut self, query: &str) {
-        if self.conflict_diff_query_cache_query.as_ref() != query {
+    pub(in crate::view) fn sync_conflict_diff_query_overlay_caches(
+        &mut self,
+        query: &str,
+        options: super::diff_search::DiffSearchOptions,
+    ) {
+        if self.conflict_diff_query_cache_query.as_ref() != query
+            || self.conflict_diff_query_cache_options != options
+        {
             self.conflict_diff_query_cache_query = query.to_string().into();
+            self.conflict_diff_query_cache_options = options;
             self.conflict_diff_query_segments_cache_split.clear();
         }
     }
@@ -1801,6 +1830,7 @@ impl MainPaneView {
     pub(in crate::view) fn clear_conflict_diff_style_caches(&mut self) {
         self.clear_conflict_diff_style_caches_preserving_query();
         self.conflict_diff_query_cache_query = SharedString::default();
+        self.conflict_diff_query_cache_options = Default::default();
     }
 
     pub(super) fn conflict_resolver_invalidate_resolved_outline(&mut self) {
@@ -2620,7 +2650,7 @@ impl MainPaneView {
         if self.current_main_diff_wants_file_diff() {
             self.ensure_file_image_diff_cache(cx);
         }
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+        if self.diff_search_has_query() {
             self.diff_search_recompute_matches_preserving_current();
         }
         cx.notify();

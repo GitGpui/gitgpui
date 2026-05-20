@@ -6,6 +6,7 @@ use super::diff_text::{
 };
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
+use crate::view::panes::main::diff_search::DiffSearchOptions;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
@@ -60,6 +61,7 @@ pub(super) enum StreamedDiffTextSyntaxSource {
 pub(super) struct StreamedDiffTextPaintSpec {
     pub(super) raw_text: gitcomet_core::file_diff::FileDiffLineText,
     pub(super) query: SharedString,
+    pub(super) query_options: DiffSearchOptions,
     pub(super) word_ranges: Arc<[Range<usize>]>,
     pub(super) word_color: Option<gpui::Rgba>,
     pub(super) syntax: StreamedDiffTextSyntaxSource,
@@ -340,6 +342,7 @@ fn streamed_diff_text_text_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
 fn streamed_diff_text_highlights_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
     let mut hasher = FxHasher::default();
     spec.query.as_ref().hash(&mut hasher);
+    spec.query_options.hash(&mut hasher);
     for range in spec.word_ranges.iter() {
         hash_range(&mut hasher, range);
     }
@@ -649,8 +652,13 @@ fn build_streamed_diff_slice_styled_text(
         }
     }
 
-    if !spec.query.as_ref().trim().is_empty() {
-        base = build_cached_diff_query_overlay_styled_text(theme, &base, spec.query.as_ref());
+    if !spec.query.as_ref().is_empty() {
+        base = build_cached_diff_query_overlay_styled_text(
+            theme,
+            &base,
+            spec.query.as_ref(),
+            spec.query_options,
+        );
     }
 
     (base, pending, resolved_slice_range)

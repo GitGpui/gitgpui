@@ -87,6 +87,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Action | macOS | Windows / Linux | Scope / notes |
 | --- | --- | --- | --- |
 | Search the current diff | `Cmd-F` | `Ctrl-F` | If rendered markdown preview is open, GitComet switches back to source mode before opening search. |
+| Insert a newline in diff search | `Shift-Enter` | `Shift-Enter` | Diff search only. The search box also has Match Case, Whole Word, and Regex toggles. |
 | Previous search match | `F2` | `F2` | While diff search is open. |
 | Next search match | `F3` | `F3` | While diff search is open. |
 | Close search, clear selection, or close the current diff | `Escape` | `Escape` | Exact behavior depends on the current diff state. |

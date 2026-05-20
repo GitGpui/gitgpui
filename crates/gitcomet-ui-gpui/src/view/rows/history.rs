@@ -17,10 +17,24 @@ struct WorktreePreviewPreparedSyntaxSource {
     document: rows::PreparedDiffSyntaxDocument,
 }
 
+fn worktree_preview_apply_query_overlay(
+    theme: AppTheme,
+    styled: CachedDiffStyledText,
+    query: &str,
+    query_options: super::super::panes::main::diff_search::DiffSearchOptions,
+) -> CachedDiffStyledText {
+    if query.is_empty() {
+        return styled;
+    }
+
+    build_cached_diff_query_overlay_styled_text(theme, &styled, query, query_options)
+}
+
 fn worktree_preview_streamed_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     line_ix: usize,
     query: &SharedString,
+    query_options: super::super::panes::main::diff_search::DiffSearchOptions,
     language: Option<rows::DiffSyntaxLanguage>,
     syntax_mode: rows::DiffSyntaxMode,
     prepared_syntax_source: Option<&WorktreePreviewPreparedSyntaxSource>,
@@ -45,6 +59,7 @@ fn worktree_preview_streamed_spec(
         diff_canvas::StreamedDiffTextPaintSpec {
             raw_text,
             query: query.clone(),
+            query_options,
             word_ranges: Arc::from([]),
             word_color: None,
             syntax,
@@ -61,6 +76,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_content_width();
         let query = this.diff_search_query_or_empty();
+        let query_options = this.diff_search_options_or_default();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let theme = this.theme;
@@ -120,6 +136,7 @@ impl MainPaneView {
                     raw_text.clone(),
                     ix,
                     &query,
+                    query_options,
                     language,
                     syntax_mode,
                     prepared_syntax_source.as_ref(),
@@ -135,7 +152,7 @@ impl MainPaneView {
                                 build: DiffTextBuildRequest {
                                     text: line,
                                     word_ranges: &[],
-                                    query: query.as_ref(),
+                                    query: "",
                                     syntax: DiffSyntaxConfig {
                                         language,
                                         mode: syntax_mode,
@@ -149,6 +166,12 @@ impl MainPaneView {
                             },
                         )
                         .into_parts();
+                    let styled = worktree_preview_apply_query_overlay(
+                        theme,
+                        styled,
+                        query.as_ref(),
+                        query_options,
+                    );
                     if is_pending {
                         this.ensure_prepared_syntax_chunk_poll(cx);
                         pending_styled = Some(styled);
@@ -2170,16 +2193,18 @@ fn working_tree_summary_history_row(
 mod tests {
     use super::{
         MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewRow, MarkdownPreviewRowKind,
-        history_branch_text_highlights, history_scope_shows_graph_color_marker,
-        history_selected_branch_entry_range, history_worktree_node_color,
-        markdown_preview_alert_title_label, markdown_preview_inline_highlight,
-        markdown_preview_row_background, markdown_preview_row_horizontal_padding,
-        markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
-        markdown_preview_row_typography,
+        build_cached_diff_styled_text, history_branch_text_highlights,
+        history_scope_shows_graph_color_marker, history_selected_branch_entry_range,
+        history_worktree_node_color, markdown_preview_alert_title_label,
+        markdown_preview_inline_highlight, markdown_preview_row_background,
+        markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
+        markdown_preview_row_marker, markdown_preview_row_styled_text,
+        markdown_preview_row_typography, worktree_preview_apply_query_overlay,
     };
     use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
     use crate::view::history_graph;
     use crate::view::markdown_preview::MarkdownInlineSpan;
+    use crate::view::panes::main::diff_search::DiffSearchOptions;
     use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
     use gitcomet_core::domain::LogScope;
     use gpui::{FontWeight, SharedString};
@@ -2203,6 +2228,68 @@ mod tests {
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         }
+    }
+
+    #[test]
+    fn worktree_preview_query_overlay_honors_search_options_for_cached_rows() {
+        let theme = AppTheme::gitcomet_dark();
+        let base = build_cached_diff_styled_text(
+            theme,
+            "Render render cat concat cat",
+            &[],
+            "",
+            None,
+            super::DiffSyntaxMode::Auto,
+            None,
+        );
+
+        let case_sensitive = worktree_preview_apply_query_overlay(
+            theme,
+            base.clone(),
+            "render",
+            DiffSearchOptions {
+                match_case: true,
+                ..Default::default()
+            },
+        );
+        let case_sensitive_ranges: Vec<_> = case_sensitive
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(case_sensitive_ranges, vec![7..13]);
+
+        let whole_word = worktree_preview_apply_query_overlay(
+            theme,
+            base.clone(),
+            "cat",
+            DiffSearchOptions {
+                whole_word: true,
+                ..Default::default()
+            },
+        );
+        let whole_word_ranges: Vec<_> = whole_word
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(whole_word_ranges, vec![14..17, 25..28]);
+
+        let regex = worktree_preview_apply_query_overlay(
+            theme,
+            base,
+            r"r.n.e.",
+            DiffSearchOptions {
+                regex: true,
+                ..Default::default()
+            },
+        );
+        let regex_ranges: Vec<_> = regex
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(regex_ranges, vec![0..6, 7..13]);
     }
 
     #[test]

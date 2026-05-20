@@ -858,7 +858,7 @@ impl MainPaneView {
         if !self.diff_autoscroll_pending {
             return;
         }
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+        if self.diff_search_has_query() {
             self.diff_autoscroll_pending = false;
             return;
         }
@@ -1430,7 +1430,7 @@ impl MainPaneView {
             }
         }
 
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+        if self.diff_search_has_query() {
             self.diff_search_recompute_matches_preserving_current();
         }
     }
@@ -1535,7 +1535,7 @@ impl MainPaneView {
             self.schedule_conflict_resolved_outline_recompute(output_path, output_hash, None, cx);
         }
 
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+        if self.diff_search_has_query() {
             self.diff_search_recompute_matches_preserving_current();
         }
     }
@@ -1631,7 +1631,7 @@ impl MainPaneView {
         } else {
             self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
         }
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+        if self.diff_search_has_query() {
             self.diff_search_recompute_matches_preserving_current();
         }
         cx.notify();

@@ -2184,7 +2184,10 @@ impl PatchDiffSearchQueryUpdateFixture {
             {
                 let base = self.stable_cache.get(src_ix).and_then(Option::as_ref)?;
                 let overlay = super::diff_text::build_cached_diff_query_overlay_styled_text(
-                    self.theme, base, query,
+                    self.theme,
+                    base,
+                    query,
+                    Default::default(),
                 );
                 if let Some(slot) = self.query_cache.get_mut(src_ix) {
                     *slot = Some(PatchDiffSearchQueryCacheEntry {

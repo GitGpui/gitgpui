@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 mod actions_impl;
 mod core_impl;
 pub(in crate::view) mod diff_cache;
-mod diff_search;
+pub(in crate::view) mod diff_search;
 mod diff_text;
 mod helpers;
 mod preview;

@@ -1,6 +1,7 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
+use crate::view::panes::main::diff_search::DiffSearchOptions;
 use crate::view::panes::main::{
     CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
     DiffHorizontalScrollColumn,
@@ -315,6 +316,7 @@ fn diff_placeholder_row(
 fn streamed_diff_text_spec_with_syntax(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
@@ -323,6 +325,7 @@ fn streamed_diff_text_spec_with_syntax(
         diff_canvas::StreamedDiffTextPaintSpec {
             raw_text,
             query: query.clone(),
+            query_options,
             word_ranges: Arc::from(word_ranges),
             word_color,
             syntax,
@@ -333,6 +336,7 @@ fn streamed_diff_text_spec_with_syntax(
 fn heuristic_streamed_diff_text_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -342,13 +346,21 @@ fn heuristic_streamed_diff_text_spec(
         Some(language) => diff_canvas::StreamedDiffTextSyntaxSource::Heuristic { language, mode },
         None => diff_canvas::StreamedDiffTextSyntaxSource::None,
     };
-    streamed_diff_text_spec_with_syntax(raw_text, query, word_ranges, word_color, syntax)
+    streamed_diff_text_spec_with_syntax(
+        raw_text,
+        query,
+        query_options,
+        word_ranges,
+        word_color,
+        syntax,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn prepared_streamed_diff_text_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -371,7 +383,14 @@ fn prepared_streamed_diff_text_spec(
         },
         (None, _) => diff_canvas::StreamedDiffTextSyntaxSource::None,
     };
-    streamed_diff_text_spec_with_syntax(raw_text, query, word_ranges, word_color, syntax)
+    streamed_diff_text_spec_with_syntax(
+        raw_text,
+        query,
+        query_options,
+        word_ranges,
+        word_color,
+        syntax,
+    )
 }
 
 fn build_file_diff_cached_styled_text(
@@ -472,14 +491,14 @@ impl MainPaneView {
         &mut self,
         key: usize,
         query: &str,
+        options: DiffSearchOptions,
         syntax_epoch: u64,
     ) -> Option<&CachedDiffStyledText> {
-        let query = query.trim();
         if query.is_empty() {
             return self.diff_text_segments_cache_get(key, syntax_epoch);
         }
 
-        self.sync_diff_text_query_overlay_cache(query);
+        self.sync_diff_text_query_overlay_cache(query, options);
         let query_generation = self.diff_text_query_cache_generation;
         if self.diff_text_query_segments_cache.len() <= key {
             self.diff_text_query_segments_cache
@@ -498,7 +517,8 @@ impl MainPaneView {
             let base = self
                 .diff_text_segments_cache_get(key, syntax_epoch)?
                 .clone();
-            let overlaid = build_cached_diff_query_overlay_styled_text(self.theme, &base, query);
+            let overlaid =
+                build_cached_diff_query_overlay_styled_text(self.theme, &base, query, options);
             self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
                 syntax_epoch,
                 query_generation,
@@ -523,6 +543,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
+        let query_options = this.diff_search_options_or_default();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         if this.is_collapsed_diff_projection_active() {
@@ -653,6 +674,7 @@ impl MainPaneView {
                                 prepared_streamed_diff_text_spec(
                                     row.text.clone(),
                                     &query,
+                                    query_options,
                                     row_word_ranges.clone(),
                                     word_color,
                                     line_language,
@@ -702,6 +724,7 @@ impl MainPaneView {
                                 this.diff_text_segments_cache_get_for_query(
                                     row_ix,
                                     query.as_ref(),
+                                    query_options,
                                     cache_epoch,
                                 )
                             };
@@ -887,6 +910,7 @@ impl MainPaneView {
                         prepared_streamed_diff_text_spec(
                             row.text.clone(),
                             &query,
+                            query_options,
                             row_word_ranges.clone(),
                             word_color,
                             line_language,
@@ -940,6 +964,7 @@ impl MainPaneView {
                             this.diff_text_segments_cache_get_for_query(
                                 inline_ix,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
                             )
                         } else {
@@ -993,6 +1018,7 @@ impl MainPaneView {
                         let styled = this.diff_text_segments_cache_get_for_query(
                             inline_ix,
                             query.as_ref(),
+                            query_options,
                             cache_epoch,
                         );
                         debug_assert!(
@@ -1065,6 +1091,7 @@ impl MainPaneView {
                         heuristic_streamed_diff_text_spec(
                             crate::view::diff_utils::diff_content_line_text(&line),
                             &query,
+                            query_options,
                             word_ranges.to_vec(),
                             diff_line_word_color(line.kind, theme),
                             language,
@@ -1123,7 +1150,12 @@ impl MainPaneView {
                         active_context_menu_invoker.as_ref() == Some(&invoker)
                     });
                 let styled = if should_style && streamed_spec.is_none() {
-                    this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref(), cache_epoch)
+                    this.diff_text_segments_cache_get_for_query(
+                        src_ix,
+                        query.as_ref(),
+                        query_options,
+                        cache_epoch,
+                    )
                 } else {
                     None
                 };
@@ -1178,6 +1210,7 @@ impl MainPaneView {
                 DiffHorizontalScrollColumn::Primary
             });
         let query = this.diff_search_query_or_empty();
+        let query_options = this.diff_search_options_or_default();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let is_left = matches!(column, PatchSplitColumn::Left);
@@ -1294,6 +1327,7 @@ impl MainPaneView {
                                         prepared_streamed_diff_text_spec(
                                             raw_text,
                                             &query,
+                                            query_options,
                                             row_word_ranges.clone(),
                                             row_word_color,
                                             language,
@@ -1343,6 +1377,7 @@ impl MainPaneView {
                                     this.diff_text_segments_cache_get_for_query(
                                         key,
                                         query.as_ref(),
+                                        query_options,
                                         cache_epoch,
                                     )
                                 } else {
@@ -1406,6 +1441,7 @@ impl MainPaneView {
                             prepared_streamed_diff_text_spec(
                                 raw_text,
                                 &query,
+                                query_options,
                                 row_word_ranges.clone(),
                                 row_word_color,
                                 language,
@@ -1454,6 +1490,7 @@ impl MainPaneView {
                             this.diff_text_segments_cache_get_for_query(
                                 key,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
                             )
                         } else {
@@ -1526,6 +1563,7 @@ impl MainPaneView {
                                     heuristic_streamed_diff_text_spec(
                                         raw_text,
                                         &query,
+                                        query_options,
                                         word_ranges.clone(),
                                         word_color,
                                         language,
@@ -1567,6 +1605,7 @@ impl MainPaneView {
                                 this.diff_text_segments_cache_get_for_query(
                                     src_ix,
                                     query.as_ref(),
+                                    query_options,
                                     cache_epoch,
                                 )
                             } else {
@@ -1641,6 +1680,7 @@ impl MainPaneView {
                             this.diff_text_segments_cache_get_for_query(
                                 src_ix,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
                             )
                         } else {

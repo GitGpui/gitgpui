@@ -232,6 +232,10 @@ impl TextInput {
         self.interaction.escape_pressed = false;
     }
 
+    pub fn set_submit_on_enter(&mut self, submit_on_enter: bool) {
+        self.interaction.submit_on_enter = submit_on_enter;
+    }
+
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
         if self.read_only == read_only {
             return;
@@ -1350,7 +1354,7 @@ impl TextInput {
     }
 
     pub(super) fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only || !self.multiline {
+        if self.read_only || !self.multiline || self.interaction.submit_on_enter {
             self.interaction.enter_pressed = true;
             cx.notify();
             return;
