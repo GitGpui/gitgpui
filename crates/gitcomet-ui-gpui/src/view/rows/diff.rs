@@ -839,7 +839,7 @@ impl MainPaneView {
                             DiffSyntaxMode::Auto,
                         );
                     let mut pending_batch = false;
-                    for (row, prepared) in syntax_only_rows.iter().zip(batched_styles.into_iter()) {
+                    for (row, prepared) in syntax_only_rows.iter().zip(batched_styles) {
                         let (styled, is_pending) = prepared.into_parts();
                         pending_batch |= is_pending;
                         this.diff_text_segments_cache_set(row.inline_ix, row.cache_epoch, styled);
