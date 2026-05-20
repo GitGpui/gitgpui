@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::send_diagnostics::{SendFailureKind, send_or_log};
+use super::worker_channel::StoreWorkerSender;
 
 enum MonitorMsg {
     Event(notify::Result<notify::Event>),
@@ -294,7 +295,7 @@ impl RepoMonitorManager {
         &mut self,
         repo_id: RepoId,
         workdir: PathBuf,
-        msg_tx: mpsc::Sender<Msg>,
+        msg_tx: StoreWorkerSender,
         active_repo_id: Arc<AtomicU64>,
     ) {
         let std::collections::hash_map::Entry::Vacant(entry) = self.handles.entry(repo_id) else {
@@ -525,7 +526,7 @@ impl GitignoreRules {
 fn repo_monitor_thread(
     repo_id: RepoId,
     workdir: PathBuf,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     monitor_rx: mpsc::Receiver<MonitorMsg>,
     monitor_tx: mpsc::Sender<MonitorMsg>,
     active_repo_id: Arc<AtomicU64>,
@@ -598,10 +599,8 @@ fn repo_monitor_thread(
 
     let flush = |change: RepoExternalChange| {
         if active_repo_id.load(Ordering::Relaxed) == repo_id.0 {
-            send_or_log(
-                &msg_tx,
+            msg_tx.send_repo_monitor_or_log(
                 Msg::RepoExternallyChanged { repo_id, change },
-                SendFailureKind::RepoMonitorMessage,
                 "repo monitor flush",
             );
         }
@@ -611,10 +610,8 @@ fn repo_monitor_thread(
         if let Some(change) = pending
             && active_repo_id.load(Ordering::Relaxed) == repo_id.0
         {
-            send_or_log(
-                &msg_tx,
+            msg_tx.send_repo_monitor_or_log(
                 Msg::RepoExternallyChanged { repo_id, change },
-                SendFailureKind::RepoMonitorMessage,
                 "repo monitor flush_if_active",
             );
         }

@@ -397,6 +397,36 @@ fn open_change_tracking_settings_popover(
     });
 }
 
+fn bind_app_keys_for_test(cx: &mut gpui::VisualTestContext) {
+    cx.update(|_window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+    });
+}
+
+fn bind_app_keys_and_global_diff_fallback_for_test(cx: &mut gpui::VisualTestContext) {
+    cx.update(|_window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+    });
+}
+
+fn install_global_diff_shortcut_fallback_for_test(cx: &mut gpui::VisualTestContext) {
+    cx.update(|_window, app| {
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+    });
+}
+
+fn focus_detached_window_focus(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, app| {
+        let focus = app.focus_handle();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+}
+
 fn open_popover_for_test(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -557,6 +587,41 @@ fn two_hunk_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
             },
         ],
     }
+}
+
+fn searchable_scroll_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
+    let mut lines = vec![
+        gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Header,
+            text: "diff --git a/src/lib.rs b/src/lib.rs".into(),
+        },
+        gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Header,
+            text: "--- a/src/lib.rs".into(),
+        },
+        gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Header,
+            text: "+++ b/src/lib.rs".into(),
+        },
+        gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Hunk,
+            text: "@@ -1,160 +1,160 @@".into(),
+        },
+    ];
+
+    for ix in 0..160 {
+        let text = match ix {
+            1 => " context needle first".to_string(),
+            120 => " context needle second".to_string(),
+            _ => format!(" context filler line {ix}"),
+        };
+        lines.push(gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Context,
+            text: text.into(),
+        });
+    }
+
+    gitcomet_core::domain::Diff { target, lines }
 }
 
 fn simple_worktree_repo(
@@ -2226,6 +2291,576 @@ fn create_branch_popover_text_input_f1_navigates_previous_diff_without_closing_p
 }
 
 #[gpui::test]
+fn diff_search_secondary_f_selects_existing_query(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70540);
+    let commit_id = CommitId("1122334455667740".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_secondary_f_selects",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let query = "needle";
+
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_query = query.into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(query, cx));
+                let focus = pane.diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+
+    cx.update(|window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let input = pane.diff_search_input.read(app);
+        assert!(
+            input.focus_handle().is_focused(window),
+            "expected secondary-f to focus the diff search input"
+        );
+        assert_eq!(
+            input.selected_range(),
+            0..query.len(),
+            "expected secondary-f to select the whole existing diff search query"
+        );
+    });
+}
+
+#[gpui::test]
+fn diff_search_input_accepts_spaces_without_staging_file(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70546);
+    let commit_id = CommitId("1122334455667746".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_space",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second],
+        &first,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    cx.simulate_input("needle one");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "needle one");
+        assert_eq!(pane.diff_search_input.read(app).text(), "needle one");
+    });
+
+    cx.simulate_keystrokes("space");
+    draw_and_drain_test_window(cx);
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(first),
+        "expected Space from the diff search input to avoid staging or advancing the diff target"
+    );
+    assert!(
+        diff_search_input_is_focused(cx, &view),
+        "expected the diff search input to keep focus after Space"
+    );
+}
+
+#[gpui::test]
+fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70547);
+    let commit_id = CommitId("1122334455667747".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_close_clears",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    cx.simulate_input("needle one");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "needle one");
+        assert_eq!(pane.diff_search_input.read(app).text(), "needle one");
+    });
+
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(!pane.diff_search_active);
+        assert_eq!(pane.diff_search_query.as_ref(), "");
+        assert_eq!(pane.diff_search_input.read(app).text(), "");
+        assert!(pane.diff_search_matches.is_empty());
+        assert_eq!(pane.diff_search_match_ix, None);
+    });
+}
+
+#[gpui::test]
+fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70545);
+    let commit_id = CommitId("1122334455667745".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_overlay_layout",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
+
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                let focus = pane.diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds("diff_search_overlay").is_none(),
+        "expected diff search overlay to be absent before search opens"
+    );
+    let close_before = cx
+        .debug_bounds("diff_close")
+        .expect("expected diff close button before search opens");
+    let content_before = cx
+        .debug_bounds("diff_body_container")
+        .expect("expected diff body before search opens");
+
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+
+    let close_after = cx
+        .debug_bounds("diff_close")
+        .expect("expected diff close button after search opens");
+    let content_after = cx
+        .debug_bounds("diff_body_container")
+        .expect("expected diff body after search opens");
+    assert!(
+        cx.debug_bounds("diff_search_overlay").is_some(),
+        "expected diff search overlay after secondary-f"
+    );
+    let overlay_empty_query = cx
+        .debug_bounds("diff_search_overlay")
+        .expect("expected diff search overlay bounds after secondary-f");
+    let input_slot_empty_query = cx
+        .debug_bounds("diff_search_input_slot")
+        .expect("expected diff search input slot bounds after secondary-f");
+    let match_label_empty_query = cx
+        .debug_bounds("diff_search_match_label")
+        .expect("expected diff search match label bounds after secondary-f");
+    assert_eq!(
+        close_after, close_before,
+        "expected diff close button bounds to remain stable when search opens"
+    );
+    assert_eq!(
+        content_after.top(),
+        content_before.top(),
+        "expected diff content top to remain stable when search opens"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("new", cx));
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    let overlay_with_matches = cx
+        .debug_bounds("diff_search_overlay")
+        .expect("expected diff search overlay bounds after entering a query");
+    let input_slot_with_matches = cx
+        .debug_bounds("diff_search_input_slot")
+        .expect("expected diff search input slot bounds after entering a query");
+    let match_label_with_matches = cx
+        .debug_bounds("diff_search_match_label")
+        .expect("expected diff search match label bounds after entering a query");
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            2,
+            "expected the query to switch the search label to a match count"
+        );
+    });
+    assert_eq!(
+        overlay_with_matches.size.width, overlay_empty_query.size.width,
+        "expected diff search overlay width to stay stable when the status text changes"
+    );
+    assert_eq!(
+        input_slot_with_matches.origin.x, input_slot_empty_query.origin.x,
+        "expected diff search input slot x position to stay stable when the status text changes"
+    );
+    assert_eq!(
+        input_slot_with_matches.size.width, input_slot_empty_query.size.width,
+        "expected diff search input slot width to stay stable when the status text changes"
+    );
+    assert_eq!(
+        match_label_with_matches.size.width, match_label_empty_query.size.width,
+        "expected diff search status label width to stay stable when the status text changes"
+    );
+
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_search_overlay").is_none(),
+        "expected Escape to remove diff search overlay"
+    );
+
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    let search_close_bounds = cx
+        .debug_bounds("diff_search_close")
+        .expect("expected diff search close button after reopening search");
+    cx.simulate_click(search_close_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_search_overlay").is_none(),
+        "expected search close button to remove diff search overlay"
+    );
+}
+
+#[gpui::test]
+fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70541);
+    let commit_id = CommitId("1122334455667741".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_query_edit",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_search_input(cx, &view);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("new", cx));
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "new");
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            2,
+            "expected the edited query to find both matching diff rows"
+        );
+        assert_eq!(
+            pane.diff_search_match_ix,
+            Some(0),
+            "expected query edits to select the first match"
+        );
+        assert_eq!(
+            pane.diff_selection_anchor,
+            pane.diff_search_matches.first().copied(),
+            "expected query edits to scroll/anchor to the first match"
+        );
+    });
+}
+
+#[gpui::test]
+fn diff_search_preserve_current_scrolls_when_matches_first_appear(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70542);
+    let commit_id = CommitId("1122334455667742".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_first_matches",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                pane.diff_search_active = true;
+                pane.diff_search_query = "new".into();
+                pane.diff_search_matches.clear();
+                pane.diff_search_match_ix = None;
+                pane.diff_selection_anchor = None;
+                pane.diff_selection_range = None;
+                pane.diff_scroll.0.borrow_mut().deferred_scroll_to_item = None;
+                pane.diff_search_recompute_matches();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let first_match = pane
+            .diff_search_matches
+            .first()
+            .copied()
+            .expect("expected query to find diff search matches");
+        assert_eq!(
+            pane.diff_search_match_ix,
+            Some(0),
+            "expected first newly discovered match to become active"
+        );
+        assert_eq!(
+            pane.diff_selection_anchor,
+            Some(first_match),
+            "expected first newly discovered match to be scrolled into view"
+        );
+        assert_eq!(
+            pane.diff_selection_range,
+            Some((first_match, first_match)),
+            "expected scroll-to-match to update the diff selection range"
+        );
+    });
+}
+
+#[gpui::test]
+fn diff_search_passive_visible_refresh_preserves_scroll_and_match(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70544);
+    let commit_id = CommitId("1122334455667744".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_passive_refresh",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        searchable_scroll_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                pane.diff_search_active = true;
+                pane.diff_search_query = "needle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("needle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "diff search fixture matches",
+        |pane| pane.diff_search_matches.len() >= 2,
+        |pane| {
+            format!(
+                "matches={:?} offset={:?} deferred_scroll={:?}",
+                pane.diff_search_matches,
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().deferred_scroll_to_item,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let last_match_ix = pane.diff_search_matches.len() - 1;
+                pane.diff_search_match_ix = Some(last_match_ix);
+                set_uniform_list_offset(&pane.diff_scroll, gpui::point(px(0.0), px(-120.0)));
+                pane.diff_scroll.0.borrow_mut().deferred_scroll_to_item = None;
+                cx.notify();
+            });
+        });
+    });
+
+    let (before_offset, expected_match_ix) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.diff_scroll.0.borrow().base_handle.offset(),
+            pane.diff_search_match_ix,
+        )
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_visible_cache_len = usize::MAX;
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_match_ix, expected_match_ix,
+            "expected passive visible-index refresh to preserve the active search match"
+        );
+        assert_eq!(
+            pane.diff_scroll.0.borrow().base_handle.offset(),
+            before_offset,
+            "expected passive visible-index refresh not to move the diff scroll position"
+        );
+        assert!(
+            pane.diff_scroll
+                .0
+                .borrow()
+                .deferred_scroll_to_item
+                .is_none(),
+            "expected passive visible-index refresh not to schedule a diff scroll"
+        );
+    });
+}
+
+#[gpui::test]
 fn diff_search_text_input_file_navigation_preserves_focus_and_last_file_boundary(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -2403,7 +3038,7 @@ fn conflict_diff_search_input_change_navigation_preserves_focus(cx: &mut gpui::T
 }
 
 #[gpui::test]
-fn commit_message_text_input_ctrl_f_does_not_activate_diff_search(cx: &mut gpui::TestAppContext) {
+fn commit_message_text_input_secondary_f_activates_diff_search(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2412,7 +3047,7 @@ fn commit_message_text_input_ctrl_f_does_not_activate_diff_search(cx: &mut gpui:
     let repo_id = RepoId(7055);
     let commit_id = CommitId("1111222233334444".into());
     let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_commit_message_ctrl_f",
+        "gitcomet_ui_test_{}_commit_message_secondary_f",
         std::process::id()
     ));
     let path = std::path::PathBuf::from("src/lib.rs");
@@ -2426,17 +3061,86 @@ fn commit_message_text_input_ctrl_f_does_not_activate_diff_search(cx: &mut gpui:
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_commit_message_input(cx, &view);
+    let query = "needle";
+    cx.update(|window, app| {
+        crate::app::bind_app_keys_for_test(app);
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = query.into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(query.to_string(), cx));
+            });
+        });
+        let _ = window.draw(app);
+    });
 
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        diff_search_active(cx, &view),
+        "expected secondary-f from commit-message input to activate diff search when a diff is visible"
+    );
+    assert!(
+        diff_search_input_is_focused(cx, &view),
+        "expected secondary-f from commit-message input to focus diff search when a diff is visible"
+    );
+    assert!(
+        !commit_message_input_is_focused(cx, &view),
+        "expected secondary-f from commit-message input to move focus to diff search"
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_input.read(app).selected_range(),
+            0..query.len(),
+            "expected secondary-f to select the full existing diff search query"
+        );
+    });
+}
+
+#[gpui::test]
+fn commit_message_text_input_secondary_f_without_visible_diff_is_noop(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70551);
+    let commit_id = CommitId("1111222233334445".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_message_secondary_f_no_diff",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff_target = None;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_commit_message_input(cx, &view);
+    cx.update(|window, app| {
+        crate::app::bind_app_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("secondary-f");
     draw_and_drain_test_window(cx);
 
     assert!(
         !diff_search_active(cx, &view),
-        "expected Ctrl-F from commit-message input to avoid activating diff search"
+        "expected secondary-f to avoid activating diff search when no diff is visible"
     );
     assert!(
         commit_message_input_is_focused(cx, &view),
-        "expected commit-message input to keep focus after Ctrl-F"
+        "expected secondary-f with no visible diff to leave focus unchanged"
     );
 }
 
@@ -2466,6 +3170,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_commit_message_input(cx, &view);
+    install_global_diff_shortcut_fallback_for_test(cx);
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
@@ -2548,6 +3253,7 @@ fn commit_message_text_input_space_does_not_stage_or_advance_diff(cx: &mut gpui:
     );
     apply_state(cx, &view, app_state_with_active_repo(repo));
     focus_commit_message_input(cx, &view);
+    install_global_diff_shortcut_fallback_for_test(cx);
 
     cx.simulate_keystrokes("space");
     draw_and_drain_test_window(cx);
@@ -2562,6 +3268,400 @@ fn commit_message_text_input_space_does_not_stage_or_advance_diff(cx: &mut gpui:
     assert!(
         commit_message_input_is_focused(cx, &view),
         "expected commit-message input to keep focus after Space"
+    );
+}
+
+#[gpui::test]
+fn diff_editor_staging_context_menu_restores_diff_panel_focus_for_f4(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70560);
+    let commit_id = CommitId("abcdef0011223344".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_editor_stage_focus",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+    open_popover_for_test(
+        cx,
+        &view,
+        PopoverKind::DiffEditorMenu {
+            repo_id,
+            area: DiffArea::Unstaged,
+            path: Some(first.clone()),
+            hunk_patch: Some("diff --git a/src/first.rs b/src/first.rs\n".into()),
+            hunks_count: 1,
+            lines_patch: Some("diff --git a/src/first.rs b/src/first.rs\n".into()),
+            discard_lines_patch: None,
+            lines_count: 1,
+            copy_text: None,
+            copy_target: None,
+        },
+    );
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the diff editor context menu to open"
+    );
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected the diff editor context menu to take focus"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_activate_action(
+                    ContextMenuAction::ApplyIndexPatch {
+                        repo_id,
+                        patch: "diff --git a/src/first.rs b/src/first.rs\n".into(),
+                        reverse: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected staging from the diff editor context menu to close the menu"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected staging from the diff editor context menu to restore diff-panel focus"
+    );
+
+    cx.simulate_keystrokes("f4");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(second),
+        "expected F4 to navigate immediately after staging from the diff editor context menu"
+    );
+}
+
+#[gpui::test]
+fn non_text_context_menu_focus_f4_uses_app_level_diff_navigation(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70561);
+    let commit_id = CommitId("abcdef0011223355".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_context_menu_f4",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    open_change_tracking_settings_popover(cx, &view);
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the change-tracking context menu to remain open before F4"
+    );
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected context-menu focus to exercise the app-level shortcut fallback"
+    );
+
+    cx.simulate_keystrokes("f4");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(second),
+        "expected F4 from non-text context-menu focus to select the next diff target"
+    );
+    assert!(
+        popover_is_open(cx, &view),
+        "expected app-level F4 navigation not to dismiss an unrelated context menu"
+    );
+}
+
+#[gpui::test]
+fn non_text_context_menu_focus_f2_f3_use_diff_search_matches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70562);
+    let commit_id = CommitId("abcdef0011223366".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_context_menu_f2_f3",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_for_test(cx);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_matches = vec![3, 5];
+                pane.diff_search_match_ix = Some(0);
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    open_change_tracking_settings_popover(cx, &view);
+
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected context-menu focus to exercise the app-level search shortcut fallback"
+    );
+
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_match_ix),
+        Some(1),
+        "expected F3 from non-text context-menu focus to advance the diff search match"
+    );
+
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).main_pane.read(app).diff_search_match_ix),
+        Some(0),
+        "expected F2 from non-text context-menu focus to move to the previous diff search match"
+    );
+    assert!(
+        popover_is_open(cx, &view),
+        "expected app-level F2/F3 navigation not to dismiss an unrelated context menu"
+    );
+}
+
+#[gpui::test]
+fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70563);
+    let commit_id = CommitId("abcdef0011223377".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_detached_focus_global_shortcuts",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_detached_window_focus(cx);
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected detached focus to avoid the rendered diff-panel key path"
+    );
+
+    cx.simulate_keystrokes("secondary-f");
+    draw_and_drain_test_window(cx);
+    assert!(
+        diff_search_active(cx, &view),
+        "expected secondary-f from detached focus to activate diff search"
+    );
+    assert!(
+        diff_search_input_is_focused(cx, &view),
+        "expected secondary-f from detached focus to focus diff search"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.show_whitespace = false;
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("alt-i");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_view_mode(cx, &view),
+        DiffViewMode::Inline,
+        "expected Alt-I from detached focus to switch to inline diff view"
+    );
+
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("alt-s");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_view_mode(cx, &view),
+        DiffViewMode::Split,
+        "expected Alt-S from detached focus to switch to split diff view"
+    );
+
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("alt-w");
+    draw_and_drain_test_window(cx);
+    assert!(
+        show_whitespace(cx, &view),
+        "expected Alt-W from detached focus to toggle whitespace visibility"
+    );
+
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("f4");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(second),
+        "expected F4 from detached focus to select the next diff target"
+    );
+}
+
+#[gpui::test]
+fn detached_window_focus_space_stages_and_advances_diff(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70564);
+    let commit_id = CommitId("abcdef0011223388".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_detached_focus_space",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_detached_window_focus(cx);
+
+    cx.simulate_keystrokes("space");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(second),
+        "expected Space from detached focus to stage the active file and advance the diff target"
+    );
+}
+
+#[gpui::test]
+fn detached_window_focus_conflict_quick_pick_uses_global_diff_shortcut_fallback(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70565);
+    let commit_id = CommitId("abcdef0011223399".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_detached_focus_conflict_pick",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/conflicted.rs");
+    let repo = simple_conflict_repo(repo_id, &workdir, &commit_id, path.as_path());
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict resolver state for detached-focus quick pick",
+        |pane| {
+            pane.conflict_resolver.path.as_deref() == Some(path.as_path())
+                && pane
+                    .conflict_resolver
+                    .resolved_outline
+                    .markers
+                    .iter()
+                    .flatten()
+                    .map(|marker| marker.conflict_ix)
+                    .max()
+                    .is_some_and(|ix| ix >= 1)
+        },
+        |pane| {
+            format!(
+                "path={:?} markers={} active_conflict={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.resolved_outline.markers.len(),
+                pane.conflict_resolver.active_conflict,
+            )
+        },
+    );
+
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("b");
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        active_conflict_ix(cx, &view),
+        1,
+        "expected conflict quick-pick key from detached focus to pick the first conflict and advance"
     );
 }
 

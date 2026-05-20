@@ -13,10 +13,11 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, RwLock};
 
 use super::RepoId;
 use super::executor::TaskExecutor;
+use super::worker_channel::StoreWorkerSender;
 
 fn selected_diff_target(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
@@ -88,7 +89,7 @@ fn git_unavailable_error(runtime: &GitRuntimeState) -> Error {
 
 fn send_unavailable_git_effect_result(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
-    msg_tx: &mpsc::Sender<Msg>,
+    msg_tx: &StoreWorkerSender,
     effect: Effect,
     runtime: &GitRuntimeState,
 ) {
@@ -901,7 +902,7 @@ pub(super) fn schedule_effect(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     backend: &Arc<dyn GitBackend>,
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     effect: Effect,
 ) {
     if effect_requires_available_git(&effect) {

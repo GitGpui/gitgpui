@@ -5,22 +5,22 @@ use gitcomet_core::auth::{
 use gitcomet_core::error::Error;
 use gitcomet_core::services::GitRepository;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
-use super::super::{RepoId, executor::TaskExecutor};
+use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{RepoMap, send_or_log, spawn_with_repo};
 
 fn schedule_repo_action_with_hook<F, H, M>(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     run: F,
     hook: H,
     finish: M,
 ) where
     F: FnOnce(Arc<dyn GitRepository>) -> Result<(), Error> + Send + 'static,
-    H: FnOnce(&mpsc::Sender<Msg>, RepoId, &Result<(), Error>) + Send + 'static,
+    H: FnOnce(&StoreWorkerSender, RepoId, &Result<(), Error>) + Send + 'static,
     M: FnOnce(RepoId, Result<(), Error>) -> Msg + Send + 'static,
 {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
@@ -33,7 +33,7 @@ fn schedule_repo_action_with_hook<F, H, M>(
 fn schedule_repo_action<F>(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     run: F,
 ) where
@@ -53,7 +53,7 @@ fn schedule_repo_action<F>(
 }
 
 fn send_refresh_branches_on_success(
-    msg_tx: &mpsc::Sender<Msg>,
+    msg_tx: &StoreWorkerSender,
     repo_id: RepoId,
     result: &Result<(), Error>,
 ) {
@@ -63,7 +63,7 @@ fn send_refresh_branches_on_success(
 }
 
 fn send_load_worktrees_on_success(
-    msg_tx: &mpsc::Sender<Msg>,
+    msg_tx: &StoreWorkerSender,
     repo_id: RepoId,
     result: &Result<(), Error>,
 ) {
@@ -73,7 +73,7 @@ fn send_load_worktrees_on_success(
 }
 
 fn send_refresh_branches_and_load_worktrees_on_success(
-    msg_tx: &mpsc::Sender<Msg>,
+    msg_tx: &StoreWorkerSender,
     repo_id: RepoId,
     result: &Result<(), Error>,
 ) {
@@ -104,7 +104,7 @@ fn run_with_git_auth<R>(
 pub(super) fn schedule_checkout_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
@@ -124,7 +124,7 @@ pub(super) fn schedule_checkout_branch(
 pub(super) fn schedule_checkout_remote_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
     branch: String,
@@ -146,7 +146,7 @@ pub(super) fn schedule_checkout_remote_branch(
 pub(super) fn schedule_checkout_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
@@ -166,7 +166,7 @@ pub(super) fn schedule_checkout_commit(
 pub(super) fn schedule_cherry_pick_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
@@ -178,7 +178,7 @@ pub(super) fn schedule_cherry_pick_commit(
 pub(super) fn schedule_revert_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
@@ -190,7 +190,7 @@ pub(super) fn schedule_revert_commit(
 pub(super) fn schedule_create_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
     target: String,
@@ -214,7 +214,7 @@ pub(super) fn schedule_create_branch(
 pub(super) fn schedule_create_branch_and_checkout(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
     target: String,
@@ -240,7 +240,7 @@ pub(super) fn schedule_create_branch_and_checkout(
 pub(super) fn schedule_delete_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
@@ -260,7 +260,7 @@ pub(super) fn schedule_delete_branch(
 pub(super) fn schedule_force_delete_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
@@ -280,7 +280,7 @@ pub(super) fn schedule_force_delete_branch(
 pub(super) fn schedule_stage_path(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
@@ -293,7 +293,7 @@ pub(super) fn schedule_stage_path(
 pub(super) fn schedule_stage_paths(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: RepoPathList,
 ) {
@@ -307,7 +307,7 @@ pub(super) fn schedule_stage_paths(
 pub(super) fn schedule_unstage_path(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
@@ -320,7 +320,7 @@ pub(super) fn schedule_unstage_path(
 pub(super) fn schedule_unstage_paths(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: RepoPathList,
 ) {
@@ -334,7 +334,7 @@ pub(super) fn schedule_unstage_paths(
 pub(super) fn schedule_discard_worktree_changes_path(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
@@ -347,7 +347,7 @@ pub(super) fn schedule_discard_worktree_changes_path(
 pub(super) fn schedule_discard_worktree_changes_paths(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: Vec<PathBuf>,
 ) {
@@ -361,7 +361,7 @@ pub(super) fn schedule_discard_worktree_changes_paths(
 pub(super) fn schedule_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
     auth: Option<StagedGitAuth>,
@@ -382,7 +382,7 @@ pub(super) fn schedule_commit(
 pub(super) fn schedule_commit_amend(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
     auth: Option<StagedGitAuth>,
@@ -403,7 +403,7 @@ pub(super) fn schedule_commit_amend(
 pub(super) fn schedule_stash(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
     include_untracked: bool,
@@ -428,7 +428,7 @@ pub(super) fn schedule_stash(
 pub(super) fn schedule_apply_stash(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
 ) {
@@ -440,7 +440,7 @@ pub(super) fn schedule_apply_stash(
 pub(super) fn schedule_pop_stash(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
 ) {
@@ -474,7 +474,7 @@ pub(super) fn schedule_pop_stash(
 pub(super) fn schedule_drop_stash(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
 ) {

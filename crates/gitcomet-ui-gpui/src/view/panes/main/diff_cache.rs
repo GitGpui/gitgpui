@@ -2794,7 +2794,7 @@ impl MainPaneView {
             self.diff_visible_indices.clear();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
             if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
-                self.diff_search_recompute_matches_for_current_view();
+                self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
         }
@@ -2803,7 +2803,7 @@ impl MainPaneView {
             self.diff_visible_indices = (0..current_len).collect();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
             if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
-                self.diff_search_recompute_matches_for_current_view();
+                self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
         }
@@ -2858,7 +2858,7 @@ impl MainPaneView {
             .unwrap_or_else(|| self.compute_diff_scrollbar_markers());
 
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
-            self.diff_search_recompute_matches_for_current_view();
+            self.diff_search_recompute_matches_for_current_view_preserving_current();
         }
     }
 }

@@ -3271,6 +3271,264 @@ fn push_raw_patch_diff_state(
     push_raw_patch_diff_state_with_rev(cx, view, repo_id, fixture_name, unified, 1, true)
 }
 
+#[gpui::test]
+fn diff_search_f3_continues_from_previous_location_after_patch_refresh(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(9138);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_search_refresh_position",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let path = std::path::PathBuf::from("src/search_refresh.rs");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let push_patch = |cx: &mut gpui::VisualTestContext, diff_rev: u64, unified: &str| {
+        let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), unified);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &workdir);
+                set_test_file_status(
+                    &mut repo,
+                    path.clone(),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                    gitcomet_core::domain::DiffArea::Unstaged,
+                );
+                repo.diff_state.diff_target = Some(target.clone());
+                repo.diff_state.diff_state_rev = diff_rev;
+                repo.diff_state.diff_rev = diff_rev;
+                repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(diff));
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+    };
+
+    let initial_unified = "\
+diff --git a/src/search_refresh.rs b/src/search_refresh.rs
+index 1111111..2222222 100644
+--- a/src/search_refresh.rs
++++ b/src/search_refresh.rs
+@@ -1,9 +1,9 @@
+ context 0
+-old first
++needle first
+ context 1
+-old second
++needle second
+ context 2
+-old current
++needle current
+ context 3
+-old next
++needle next
+ context 4
+";
+    push_patch(cx, 1, initial_unified);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "initial patch diff for search refresh regression",
+        |pane| pane.diff_cache_rev == 1 && pane.patch_diff_row_len() > 0,
+        |pane| (pane.diff_cache_rev, pane.patch_diff_row_len()),
+    );
+
+    let previous_visible_ix = cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            pane.diff_view = DiffViewMode::Inline;
+            pane.diff_search_active = true;
+            pane.diff_search_query = "needle".into();
+            pane.diff_search_recompute_matches();
+            assert_eq!(
+                pane.diff_search_matches.len(),
+                4,
+                "initial fixture should expose four search matches"
+            );
+            pane.diff_search_match_ix = Some(2);
+            pane.diff_search_matches[2]
+        })
+    });
+
+    let refreshed_unified = "\
+diff --git a/src/search_refresh.rs b/src/search_refresh.rs
+index 1111111..3333333 100644
+--- a/src/search_refresh.rs
++++ b/src/search_refresh.rs
+@@ -1,8 +1,8 @@
+ context 0
+-old first
++needle first
+ context 1
+-old second
++needle second
+ context 2
+ context 3
+-old next
++needle next
+ context 4
+";
+    push_patch(cx, 2, refreshed_unified);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            pane.ensure_diff_visible_indices();
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "refreshed patch diff preserves search cursor before F3",
+        |pane| pane.diff_cache_rev == 2 && pane.diff_search_matches.len() == 3,
+        |pane| {
+            (
+                pane.diff_cache_rev,
+                pane.diff_visible_len(),
+                pane.diff_search_matches.clone(),
+                pane.diff_search_match_ix,
+            )
+        },
+    );
+
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let match_ix = pane
+            .diff_search_match_ix
+            .expect("F3 should leave an active search match");
+        let active_visible_ix = pane.diff_search_matches[match_ix];
+        let active_text = pane
+            .diff_text_line_for_region(active_visible_ix, DiffTextRegion::Inline)
+            .to_string();
+
+        assert!(
+            active_visible_ix > previous_visible_ix,
+            "F3 should continue after the pre-refresh match row, got previous={previous_visible_ix}, active={active_visible_ix}, matches={:?}",
+            pane.diff_search_matches
+        );
+        assert!(
+            active_text.contains("needle next"),
+            "F3 should land on the next later remaining match, got {active_text:?}"
+        );
+    });
+}
+
+#[gpui::test]
+fn diff_search_refresh_scrolls_to_first_match_after_previous_zero_match_query(
+    cx: &mut gpui::TestAppContext,
+) {
+    fn unified_with_replacement(replacement: &str) -> String {
+        let mut unified = "\
+diff --git a/src/search_refresh_scroll.rs b/src/search_refresh_scroll.rs
+index 1111111..2222222 100644
+--- a/src/search_refresh_scroll.rs
++++ b/src/search_refresh_scroll.rs
+@@ -1,72 +1,72 @@
+"
+        .to_string();
+
+        for ix in 0..72 {
+            if ix == 60 {
+                unified.push_str("-old focus line\n");
+                unified.push('+');
+                unified.push_str(replacement);
+                unified.push('\n');
+            } else {
+                unified.push_str(&format!(" context {ix}\n"));
+            }
+        }
+
+        unified
+    }
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(9139);
+
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    push_raw_patch_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        "search_refresh_zero_previous_match",
+        unified_with_replacement("fresh focus line"),
+        1,
+        true,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "initial no-match patch diff for search refresh regression",
+        |pane| pane.diff_cache_rev == 1 && pane.patch_diff_row_len() > 0,
+        |pane| (pane.diff_cache_rev, pane.patch_diff_row_len()),
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            pane.diff_view = DiffViewMode::Inline;
+            pane.diff_search_active = true;
+            pane.diff_search_query = "needle".into();
+            pane.diff_search_recompute_matches();
+            assert!(
+                pane.diff_search_matches.is_empty(),
+                "initial fixture should have no matches for the active query"
+            );
+            assert_eq!(pane.diff_search_match_ix, None);
+        });
+    });
+
+    push_raw_patch_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        "search_refresh_zero_previous_match",
+        unified_with_replacement("needle focus line"),
+        2,
+        true,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "refreshed patch diff scrolls to first new search match",
+        |pane| {
+            let first_match = pane.diff_search_matches.first().copied();
+            pane.diff_cache_rev == 2
+                && pane.diff_search_matches.len() == 1
+                && pane.diff_search_match_ix == Some(0)
+                && pane.diff_selection_anchor == first_match
+                && pane.diff_selection_range == first_match.map(|ix| (ix, ix))
+                && pane.diff_scroll.0.borrow().base_handle.max_offset().y > px(0.0)
+                && pane.diff_scroll.0.borrow().base_handle.offset().y < px(-1.0)
+        },
+        |pane| {
+            (
+                pane.diff_cache_rev,
+                pane.diff_visible_len(),
+                pane.diff_search_matches.clone(),
+                pane.diff_search_match_ix,
+                pane.diff_selection_anchor,
+                pane.diff_selection_range,
+                pane.diff_scroll.0.borrow().base_handle.offset(),
+                pane.diff_scroll.0.borrow().base_handle.max_offset(),
+            )
+        },
+    );
+}
+
 fn push_raw_patch_diff_state_with_rev(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,

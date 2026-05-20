@@ -41,6 +41,10 @@ use std::time::{Duration, Instant};
 actions!(
     text_input_diff_navigation,
     [
+        DiffPrevFile,
+        DiffNextFile,
+        DiffPrevSearchMatchOrChange,
+        DiffNextSearchMatchOrChange,
         TextInputCommitSubmit,
         TextInputDiffPrevFile,
         TextInputDiffNextFile,
@@ -48,11 +52,33 @@ actions!(
         TextInputDiffNextSearchMatchOrChange,
         TextInputDiffPrevChange,
         TextInputDiffNextChange,
+        OpenActiveViewSearch,
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
     ]
 );
+
+pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
+    let key = keystroke.key.as_str();
+    let mods = keystroke.modifiers;
+    let no_command_modifiers = !mods.control && !mods.alt && !mods.platform && !mods.function;
+
+    (key == "escape" && no_command_modifiers)
+        || (mods.secondary() && mods.number_of_modifiers() == 1 && key == "f")
+        || (matches!(key, "f1" | "f2" | "f3" | "f4" | "f7") && no_command_modifiers)
+        || (key == "space" && no_command_modifiers)
+        || (mods.alt
+            && !mods.control
+            && !mods.platform
+            && !mods.function
+            && matches!(key, "i" | "s" | "w" | "up" | "down"))
+        || ((mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && matches!(key, "a" | "c"))
+        || (matches!(key, "a" | "b" | "c" | "d") && no_command_modifiers)
+}
 
 mod app_model;
 mod branch_sidebar;
@@ -142,7 +168,8 @@ pub use mod_helpers::{
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
 use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
-use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
+pub(crate) use panes::MainPaneView;
+use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView};
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
 use tooltip::GitCometTooltipExt;
@@ -1007,6 +1034,7 @@ impl GitCometView {
             cx,
             view.window_handle,
             cx.weak_entity(),
+            view.main_pane.downgrade(),
             view.view_mode,
             view.state
                 .repos
@@ -1880,6 +1908,15 @@ impl GitCometView {
         });
     }
 
+    fn defer_adjacent_diff_file_navigation(&self, direction: i8, cx: &mut gpui::Context<Self>) {
+        self.defer_text_input_main_pane_action(cx, move |pane, window, cx| {
+            let Some(repo_id) = pane.active_repo_id() else {
+                return false;
+            };
+            pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
+        });
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
@@ -2383,6 +2420,14 @@ impl Render for GitCometView {
         root = root.relative();
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
+            .on_action(cx.listener(|this, _: &OpenActiveViewSearch, window, cx| {
+                let handled = this
+                    .main_pane
+                    .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
+                if handled {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &TextInputCommitSubmit, window, cx| {
                 let handled = this.details_pane.update(cx, |pane, cx| {
                     pane.handle_commit_submit_shortcut(window, cx)
@@ -2415,6 +2460,30 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                 },
             ))
+            .on_action(cx.listener(|this, _: &DiffPrevFile, _window, cx| {
+                this.defer_adjacent_diff_file_navigation(-1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
+                this.defer_adjacent_diff_file_navigation(1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(
+                cx.listener(|this, _: &DiffPrevSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_prev_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &DiffNextSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_next_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &TextInputDiffPrevChange, _window, cx| {
                     this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {

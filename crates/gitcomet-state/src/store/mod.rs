@@ -16,6 +16,7 @@ mod reducer;
 mod reducer_diagnostics;
 mod repo_monitor;
 mod send_diagnostics;
+mod worker_channel;
 
 use effects::schedule_effect;
 use executor::{TaskExecutor, default_worker_threads};
@@ -26,7 +27,8 @@ use reducer::{
     set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
-use send_diagnostics::{SendFailureKind, send_or_log, try_send_state_changed_or_log};
+use send_diagnostics::try_send_state_changed_or_log;
+use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
@@ -52,7 +54,7 @@ struct ReducerEffectsContext<'a> {
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
     repos: &'a HashMap<RepoId, Arc<dyn GitRepository>>,
-    thread_msg_tx: &'a mpsc::Sender<Msg>,
+    thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
@@ -71,7 +73,12 @@ where
         .unwrap_or(0);
     ctx.active_repo_id.store(active_value, Ordering::Relaxed);
 
-    try_send_state_changed_or_log(ctx.event_tx, "store worker loop state notification");
+    try_send_state_changed_or_log(
+        ctx.event_tx,
+        "store worker loop state notification",
+        ctx.thread_msg_tx.store_id(),
+        ctx.thread_msg_tx.is_alive(),
+    );
 
     // Keep filesystem monitoring scoped to the active repository only, to minimize
     // OS watcher load in large multi-repo sessions.
@@ -121,7 +128,24 @@ where
 
 pub struct AppStore {
     state: Arc<RwLock<Arc<AppState>>>,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
+    public_lifetime: Arc<StorePublicLifetime>,
+}
+
+struct StorePublicLifetime {
+    msg_tx: StoreWorkerSender,
+}
+
+impl StorePublicLifetime {
+    fn new(msg_tx: StoreWorkerSender) -> Self {
+        Self { msg_tx }
+    }
+}
+
+impl Drop for StorePublicLifetime {
+    fn drop(&mut self) {
+        self.msg_tx.shutdown();
+    }
 }
 
 impl Clone for AppStore {
@@ -129,6 +153,7 @@ impl Clone for AppStore {
         Self {
             state: Arc::clone(&self.state),
             msg_tx: self.msg_tx.clone(),
+            public_lifetime: Arc::clone(&self.public_lifetime),
         }
     }
 }
@@ -140,7 +165,10 @@ impl AppStore {
 
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let state = Arc::new(RwLock::new(Arc::new(AppState::default())));
-        let (msg_tx, msg_rx) = mpsc::channel::<Msg>();
+        let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
+        let store_id = StoreInstanceId::next();
+        let store_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let msg_tx = StoreWorkerSender::new(command_tx, Arc::clone(&store_alive), store_id);
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
 
@@ -155,7 +183,21 @@ impl AppStore {
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));
 
-            while let Ok(msg) = msg_rx.recv() {
+            while let Ok(command) = command_rx.recv() {
+                let msg = match command {
+                    StoreWorkerCommand::Msg(msg) => *msg,
+                    StoreWorkerCommand::Shutdown => break,
+                    #[cfg(any(test, feature = "test-support"))]
+                    StoreWorkerCommand::InsertRepoForTest { repo_id, repo } => {
+                        repos.insert(repo_id, repo);
+                        continue;
+                    }
+                };
+
+                if !thread_msg_tx.is_alive() {
+                    continue;
+                }
+
                 match &msg {
                     Msg::RestoreSession { .. } => repo_monitors.stop_all(),
                     Msg::CloseRepo { repo_id } => repo_monitors.stop(*repo_id),
@@ -439,18 +481,22 @@ impl AppStore {
                     }
                 }
             }
+
+            repo_monitors.stop_all();
         });
 
-        (Self { state, msg_tx }, event_rx)
+        (
+            Self {
+                state,
+                msg_tx: msg_tx.clone(),
+                public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
+            },
+            event_rx,
+        )
     }
 
     pub fn dispatch(&self, msg: Msg) {
-        send_or_log(
-            &self.msg_tx,
-            msg,
-            SendFailureKind::StoreDispatch,
-            "AppStore::dispatch",
-        );
+        self.msg_tx.dispatch(msg);
     }
 
     pub fn snapshot(&self) -> Arc<AppState> {
@@ -463,6 +509,12 @@ impl AppStore {
     pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {
         let mut current = self.state.write().unwrap_or_else(|e| e.into_inner());
         *current = state;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn insert_repo_for_test(&self, repo_id: RepoId, repo: Arc<dyn GitRepository>) {
+        self.msg_tx.insert_repo_for_test(repo_id, repo);
     }
 }
 
