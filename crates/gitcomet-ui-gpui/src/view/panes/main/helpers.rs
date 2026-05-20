@@ -2293,7 +2293,7 @@ impl DiffHorizontalScrollState {
     }
 }
 
-pub(in crate::view) struct MainPaneView {
+pub(crate) struct MainPaneView {
     pub(in crate::view) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
     pub(in crate::view) view_mode: GitCometViewMode,

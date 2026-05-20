@@ -16,7 +16,7 @@ mod preview;
 pub(in crate::view) use diff_search::{
     AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, diff_search_query_reuse,
 };
-pub(in crate::view) use helpers::*;
+pub(crate) use helpers::*;
 
 #[cfg(not(test))]
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;

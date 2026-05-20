@@ -4,11 +4,11 @@ use crate::ui_scale;
 use crate::view::{
     DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, OpenActiveViewSearch, PopoverPromptDismiss,
-    PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView, StartupCrashReport,
-    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
+    GitCometViewMode, InitialRepositoryLaunchMode, MainPaneView, OpenActiveViewSearch,
+    PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView,
+    StartupCrashReport, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
     TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange,
+    TextInputDiffPrevSearchMatchOrChange, is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -495,6 +495,8 @@ pub(crate) fn set_app_ui_scale_percent(cx: &mut App, percent: u32) {
 }
 
 fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
+    install_global_diff_shortcut_fallback(cx);
+
     let new_window_backend = Arc::clone(&backend);
     cx.on_action(move |_: &NewWindow, cx| {
         let backend = Arc::clone(&new_window_backend);
@@ -608,6 +610,43 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
     cx.on_action(|_: &Quit, cx| cx.defer(|cx| cx.quit()));
+}
+
+fn install_global_diff_shortcut_fallback(cx: &mut App) {
+    cx.observe_keystrokes(|event, window, cx| {
+        if event.action.is_some()
+            || !is_diff_shortcut_candidate(&event.keystroke)
+            || event
+                .context_stack
+                .iter()
+                .any(|context| context.contains("TextInput"))
+        {
+            return;
+        }
+
+        let window_id = window.window_handle().window_id();
+        let Some(entry) = gitcomet_window_entries(cx).into_iter().find(|entry| {
+            entry.handle.window_id() == window_id && entry.view_mode == GitCometViewMode::Normal
+        }) else {
+            return;
+        };
+
+        let handled = entry
+            .main_pane
+            .update(cx, |pane, cx| {
+                pane.handle_diff_shortcut(&event.keystroke, window, cx)
+            })
+            .unwrap_or(false);
+        if handled {
+            cx.stop_propagation();
+        }
+    })
+    .detach();
+}
+
+#[cfg(test)]
+pub(crate) fn install_global_diff_shortcut_fallback_for_test(cx: &mut App) {
+    install_global_diff_shortcut_fallback(cx);
 }
 
 #[cfg(target_os = "macos")]
@@ -813,6 +852,7 @@ pub(crate) fn recent_repository_label(path: &Path) -> String {
 struct GitCometWindowEntry {
     handle: gpui::AnyWindowHandle,
     view: gpui::WeakEntity<GitCometView>,
+    main_pane: gpui::WeakEntity<MainPaneView>,
     view_mode: GitCometViewMode,
     repo_paths: Vec<PathBuf>,
 }
@@ -828,6 +868,7 @@ pub(crate) fn sync_gitcomet_window_state<C>(
     cx: &mut C,
     handle: gpui::AnyWindowHandle,
     view: gpui::WeakEntity<GitCometView>,
+    main_pane: gpui::WeakEntity<MainPaneView>,
     view_mode: GitCometViewMode,
     repo_paths: Vec<PathBuf>,
 ) where
@@ -839,6 +880,7 @@ pub(crate) fn sync_gitcomet_window_state<C>(
             GitCometWindowEntry {
                 handle,
                 view,
+                main_pane,
                 view_mode,
                 repo_paths,
             },

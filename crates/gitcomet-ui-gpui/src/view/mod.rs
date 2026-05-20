@@ -59,6 +59,27 @@ actions!(
     ]
 );
 
+pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
+    let key = keystroke.key.as_str();
+    let mods = keystroke.modifiers;
+    let no_command_modifiers = !mods.control && !mods.alt && !mods.platform && !mods.function;
+
+    (key == "escape" && no_command_modifiers)
+        || (mods.secondary() && mods.number_of_modifiers() == 1 && key == "f")
+        || (matches!(key, "f1" | "f2" | "f3" | "f4" | "f7") && no_command_modifiers)
+        || (key == "space" && no_command_modifiers)
+        || (mods.alt
+            && !mods.control
+            && !mods.platform
+            && !mods.function
+            && matches!(key, "i" | "s" | "w" | "up" | "down"))
+        || ((mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && matches!(key, "a" | "c"))
+        || (matches!(key, "a" | "b" | "c" | "d") && no_command_modifiers)
+}
+
 mod app_model;
 mod branch_sidebar;
 mod caches;
@@ -147,7 +168,8 @@ pub use mod_helpers::{
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
 use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
-use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
+pub(crate) use panes::MainPaneView;
+use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView};
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
 use tooltip::GitCometTooltipExt;
@@ -1012,6 +1034,7 @@ impl GitCometView {
             cx,
             view.window_handle,
             cx.weak_entity(),
+            view.main_pane.downgrade(),
             view.view_mode,
             view.state
                 .repos

@@ -23,7 +23,7 @@ impl StoreInstanceId {
 }
 
 pub(super) enum StoreWorkerCommand {
-    Msg(Msg),
+    Msg(Box<Msg>),
     Shutdown,
     #[cfg(any(test, feature = "test-support"))]
     InsertRepoForTest {
@@ -105,9 +105,12 @@ impl StoreWorkerSender {
         }
 
         match &self.inner {
-            StoreWorkerSenderInner::Command(tx) => {
-                send_diagnostics::send_or_log(tx, StoreWorkerCommand::Msg(msg), kind, context)
-            }
+            StoreWorkerSenderInner::Command(tx) => send_diagnostics::send_or_log(
+                tx,
+                StoreWorkerCommand::Msg(Box::new(msg)),
+                kind,
+                context,
+            ),
             #[cfg(test)]
             StoreWorkerSenderInner::MsgForTest(tx) => {
                 send_diagnostics::send_or_log(tx, msg, kind, context)

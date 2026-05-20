@@ -185,7 +185,7 @@ impl AppStore {
 
             while let Ok(command) = command_rx.recv() {
                 let msg = match command {
-                    StoreWorkerCommand::Msg(msg) => msg,
+                    StoreWorkerCommand::Msg(msg) => *msg,
                     StoreWorkerCommand::Shutdown => break,
                     #[cfg(any(test, feature = "test-support"))]
                     StoreWorkerCommand::InsertRepoForTest { repo_id, repo } => {

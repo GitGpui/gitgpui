@@ -80,6 +80,294 @@ fn inline_submodule_entries(summary: &SubmoduleDiffSummary) -> Vec<InlineSubmodu
 }
 
 impl MainPaneView {
+    pub(crate) fn handle_diff_shortcut(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let key = keystroke.key.as_str();
+        let mods = keystroke.modifiers;
+
+        let mut handled = false;
+
+        if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
+            if self.diff_search_active {
+                self.deactivate_diff_search(window, cx);
+                handled = true;
+            }
+            if !handled
+                && self.is_inline_submodule_diff_active()
+                && let Some(repo_id) = self.active_repo_id()
+            {
+                self.store
+                    .dispatch(Msg::CloseInlineSubmoduleDiff { repo_id });
+                handled = true;
+            }
+            if !handled && let Some(repo_id) = self.active_repo_id() {
+                self.clear_status_multi_selection(repo_id, cx);
+                self.clear_diff_selection_or_exit(repo_id, cx);
+                handled = true;
+            }
+        }
+
+        if !handled && mods.secondary() && mods.number_of_modifiers() == 1 && key == "f" {
+            handled = self.open_search_for_active_view(window, cx);
+        }
+
+        if !handled
+            && self.diff_search_active
+            && matches!(key, "f2" | "f3")
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+        {
+            if key == "f2" {
+                self.diff_search_prev_match();
+            } else {
+                self.diff_search_next_match();
+            }
+            handled = true;
+        }
+
+        if !handled
+            && key == "space"
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && !self.is_inline_submodule_diff_active()
+            && !self
+                .diff_raw_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && !self
+                .diff_search_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && let Some(repo_id) = self.active_repo_id()
+            && let Some(repo) = self.active_repo()
+            && let Some(diff_target) = repo.diff_state.diff_target.clone()
+            && let DiffTarget::WorkingTree { path, area } = &diff_target
+        {
+            let path = path.clone();
+            let area = *area;
+            let change_tracking_view = self.active_change_tracking_view(cx);
+            let next_path_in_section = status_nav::status_navigation_context_for_repo(
+                repo,
+                &diff_target,
+                change_tracking_view,
+            )
+            .and_then(|navigation| navigation.next_or_prev_path());
+            let status_ready = repo.status_entries_for_area(area).is_some();
+
+            match (status_ready, area) {
+                (true, DiffArea::Unstaged) => {
+                    self.store.dispatch(Msg::StagePath {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                    if let Some(next_path) = next_path_in_section {
+                        self.store.dispatch(Msg::SelectDiff {
+                            repo_id,
+                            target: DiffTarget::WorkingTree {
+                                path: next_path,
+                                area: DiffArea::Unstaged,
+                            },
+                        });
+                    } else {
+                        self.clear_diff_selection_or_exit(repo_id, cx);
+                    }
+                }
+                (true, DiffArea::Staged) => {
+                    self.store.dispatch(Msg::UnstagePath {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                    if let Some(next_path) = next_path_in_section {
+                        self.store.dispatch(Msg::SelectDiff {
+                            repo_id,
+                            target: DiffTarget::WorkingTree {
+                                path: next_path,
+                                area: DiffArea::Staged,
+                            },
+                        });
+                    } else {
+                        self.clear_diff_selection_or_exit(repo_id, cx);
+                    }
+                }
+                (false, DiffArea::Unstaged) => {
+                    self.store.dispatch(Msg::StagePath {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                }
+                (false, DiffArea::Staged) => {
+                    self.store.dispatch(Msg::UnstagePath {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                }
+            }
+            self.rebuild_diff_cache(cx);
+            handled = true;
+        }
+
+        if !handled
+            && (key == "f1" || key == "f4")
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && let Some(repo_id) = self.active_repo_id()
+        {
+            let direction = if key == "f1" { -1 } else { 1 };
+            handled = self.try_select_adjacent_diff_file(repo_id, direction, window, cx);
+        }
+
+        let copy_target_is_focused = self
+            .diff_raw_input
+            .read(cx)
+            .focus_handle()
+            .is_focused(window);
+        let is_file_preview = self.is_file_preview_active();
+        if is_file_preview {
+            if !handled
+                && !copy_target_is_focused
+                && (mods.control || mods.platform)
+                && !mods.alt
+                && !mods.function
+                && key == "c"
+                && self.diff_text_has_selection()
+            {
+                self.copy_selected_diff_text_to_clipboard(cx);
+                handled = true;
+            }
+
+            if !handled
+                && !copy_target_is_focused
+                && (mods.control || mods.platform)
+                && !mods.alt
+                && !mods.function
+                && key == "a"
+            {
+                self.select_all_diff_text();
+                handled = true;
+            }
+
+            return handled;
+        }
+
+        let conflict_resolver_active = self.is_conflict_resolver_active();
+        let markdown_preview_active = self.is_markdown_preview_active();
+        let conflict_preview_active = self.is_conflict_rendered_preview_active();
+
+        if mods.alt && !mods.control && !mods.platform && !mods.function {
+            match key {
+                "i" | "s" => {
+                    if conflict_resolver_active {
+                        handled = false;
+                    } else if self.active_conflict_target().is_some() {
+                        self.diff_view = DiffViewMode::Split;
+                        self.clear_diff_text_style_caches();
+                        handled = true;
+                    } else if !markdown_preview_active && !self.is_file_preview_active() {
+                        self.diff_view = if key == "i" {
+                            DiffViewMode::Inline
+                        } else {
+                            DiffViewMode::Split
+                        };
+                        self.clear_diff_text_style_caches();
+                        handled = true;
+                    }
+                }
+                "w" if !markdown_preview_active && !conflict_preview_active => {
+                    self.toggle_show_whitespace();
+                    handled = true;
+                }
+                "up" => {
+                    handled = self.navigate_prev_diff_change(cx);
+                }
+                "down" => {
+                    handled = self.navigate_next_diff_change(cx);
+                }
+                _ => {}
+            }
+        }
+
+        if !handled
+            && matches!(key, "f2" | "f3" | "f7")
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+        {
+            match key {
+                "f2" => {
+                    let _ = self.navigate_prev_search_match_or_diff_change(cx);
+                }
+                "f3" => {
+                    let _ = self.navigate_next_search_match_or_diff_change(cx);
+                }
+                "f7" if mods.shift => {
+                    let _ = self.navigate_prev_diff_change(cx);
+                }
+                "f7" => {
+                    let _ = self.navigate_next_diff_change(cx);
+                }
+                _ => {}
+            }
+            handled = true;
+        }
+
+        if !handled
+            && conflict_resolver_active
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && !copy_target_is_focused
+            && !self
+                .conflict_resolver_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && self.conflict_resolver_conflict_count() > 0
+            && let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key)
+        {
+            self.conflict_resolver_pick_active_conflict(choice, cx);
+            handled = true;
+        }
+
+        if !handled
+            && !copy_target_is_focused
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && key == "c"
+            && self.diff_text_has_selection()
+        {
+            self.copy_selected_diff_text_to_clipboard(cx);
+            handled = true;
+        }
+
+        if !handled
+            && !copy_target_is_focused
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && key == "a"
+        {
+            self.select_all_diff_text();
+            handled = true;
+        }
+
+        handled
+    }
+
     fn toggle_show_whitespace(&mut self) {
         self.show_whitespace = !self.show_whitespace;
         // Clear styled text caches so they rebuild with new whitespace setting.
@@ -123,8 +411,11 @@ impl MainPaneView {
 
     fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.diff_search_active = false;
+        self.diff_search_query = SharedString::default();
         self.diff_search_matches.clear();
         self.diff_search_match_ix = None;
+        self.diff_search_input
+            .update(cx, |input, cx| input.set_text("", cx));
         self.clear_diff_text_query_overlay_cache();
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
@@ -3707,287 +3998,7 @@ impl MainPaneView {
                 }),
             )
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
-                let key = e.keystroke.key.as_str();
-                let mods = e.keystroke.modifiers;
-
-                let mut handled = false;
-
-                if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function
-                {
-                    if this.diff_search_active {
-                        this.deactivate_diff_search(window, cx);
-                        handled = true;
-                    }
-                    if !handled
-                        && this.is_inline_submodule_diff_active()
-                        && let Some(repo_id) = this.active_repo_id()
-                    {
-                        this.store
-                            .dispatch(Msg::CloseInlineSubmoduleDiff { repo_id });
-                        handled = true;
-                    }
-                    if !handled && let Some(repo_id) = this.active_repo_id() {
-                        this.clear_status_multi_selection(repo_id, cx);
-                        this.clear_diff_selection_or_exit(repo_id, cx);
-                        handled = true;
-                    }
-                }
-
-                if !handled && mods.secondary() && mods.number_of_modifiers() == 1 && key == "f" {
-                    handled = this.open_search_for_active_view(window, cx);
-                }
-
-                if !handled
-                    && this.diff_search_active
-                    && matches!(key, "f2" | "f3")
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                {
-                    if key == "f2" {
-                        this.diff_search_prev_match();
-                    } else {
-                        this.diff_search_next_match();
-                    }
-                    handled = true;
-                }
-
-                if !handled
-                    && key == "space"
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                    && !this.is_inline_submodule_diff_active()
-                    && !this
-                        .diff_raw_input
-                        .read(cx)
-                        .focus_handle()
-                        .is_focused(window)
-                    && let Some(repo_id) = this.active_repo_id()
-                    && let Some(repo) = this.active_repo()
-                    && let Some(diff_target) = repo.diff_state.diff_target.clone()
-                    && let DiffTarget::WorkingTree { path, area } = &diff_target
-                {
-                    let path = path.clone();
-                    let area = *area;
-                    let change_tracking_view = this.active_change_tracking_view(cx);
-                    let next_path_in_section = status_nav::status_navigation_context_for_repo(
-                        repo,
-                        &diff_target,
-                        change_tracking_view,
-                    )
-                    .and_then(|navigation| navigation.next_or_prev_path());
-                    let status_ready = repo.status_entries_for_area(area).is_some();
-
-                    match (status_ready, area) {
-                        (true, DiffArea::Unstaged) => {
-                            this.store.dispatch(Msg::StagePath {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                            if let Some(next_path) = next_path_in_section {
-                                this.store.dispatch(Msg::SelectDiff {
-                                    repo_id,
-                                    target: DiffTarget::WorkingTree {
-                                        path: next_path,
-                                        area: DiffArea::Unstaged,
-                                    },
-                                });
-                            } else {
-                                this.clear_diff_selection_or_exit(repo_id, cx);
-                            }
-                        }
-                        (true, DiffArea::Staged) => {
-                            this.store.dispatch(Msg::UnstagePath {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                            if let Some(next_path) = next_path_in_section {
-                                this.store.dispatch(Msg::SelectDiff {
-                                    repo_id,
-                                    target: DiffTarget::WorkingTree {
-                                        path: next_path,
-                                        area: DiffArea::Staged,
-                                    },
-                                });
-                            } else {
-                                this.clear_diff_selection_or_exit(repo_id, cx);
-                            }
-                        }
-                        (false, DiffArea::Unstaged) => {
-                            this.store.dispatch(Msg::StagePath {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                        }
-                        (false, DiffArea::Staged) => {
-                            this.store.dispatch(Msg::UnstagePath {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                        }
-                    }
-                    this.rebuild_diff_cache(cx);
-                    handled = true;
-                }
-
-                if !handled
-                    && (key == "f1" || key == "f4")
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                    && let Some(repo_id) = this.active_repo_id()
-                {
-                    let direction = if key == "f1" { -1 } else { 1 };
-                    handled = this.try_select_adjacent_diff_file(repo_id, direction, window, cx);
-                }
-
-                let copy_target_is_focused = this
-                    .diff_raw_input
-                    .read(cx)
-                    .focus_handle()
-                    .is_focused(window);
-                let is_file_preview = this.is_file_preview_active();
-                if is_file_preview {
-                    if !handled
-                        && !copy_target_is_focused
-                        && (mods.control || mods.platform)
-                        && !mods.alt
-                        && !mods.function
-                        && key == "c"
-                        && this.diff_text_has_selection()
-                    {
-                        this.copy_selected_diff_text_to_clipboard(cx);
-                        handled = true;
-                    }
-
-                    if !handled
-                        && !copy_target_is_focused
-                        && (mods.control || mods.platform)
-                        && !mods.alt
-                        && !mods.function
-                        && key == "a"
-                    {
-                        this.select_all_diff_text();
-                        handled = true;
-                    }
-
-                    if handled {
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                    return;
-                }
-
-                let conflict_resolver_active = this.is_conflict_resolver_active();
-                let markdown_preview_active = this.is_markdown_preview_active();
-                let conflict_preview_active = this.is_conflict_rendered_preview_active();
-
-                if mods.alt && !mods.control && !mods.platform && !mods.function {
-                    match key {
-                        "i" | "s" => {
-                            if conflict_resolver_active {
-                                handled = false;
-                            } else if this.active_conflict_target().is_some() {
-                                this.diff_view = DiffViewMode::Split;
-                                this.clear_diff_text_style_caches();
-                                handled = true;
-                            } else if !markdown_preview_active && !this.is_file_preview_active() {
-                                this.diff_view = if key == "i" {
-                                    DiffViewMode::Inline
-                                } else {
-                                    DiffViewMode::Split
-                                };
-                                this.clear_diff_text_style_caches();
-                                handled = true;
-                            }
-                        }
-                        "w" if !markdown_preview_active && !conflict_preview_active => {
-                            this.toggle_show_whitespace();
-                            handled = true;
-                        }
-                        "up" => {
-                            handled = this.navigate_prev_diff_change(cx);
-                        }
-                        "down" => {
-                            handled = this.navigate_next_diff_change(cx);
-                        }
-                        _ => {}
-                    }
-                }
-
-                if !handled
-                    && matches!(key, "f2" | "f3" | "f7")
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                {
-                    match key {
-                        "f2" => {
-                            let _ = this.navigate_prev_search_match_or_diff_change(cx);
-                        }
-                        "f3" => {
-                            let _ = this.navigate_next_search_match_or_diff_change(cx);
-                        }
-                        "f7" if mods.shift => {
-                            let _ = this.navigate_prev_diff_change(cx);
-                        }
-                        "f7" => {
-                            let _ = this.navigate_next_diff_change(cx);
-                        }
-                        _ => {}
-                    }
-                    handled = true;
-                }
-
-                // A/B/C/D quick-pick for conflict resolver.
-                if !handled
-                    && conflict_resolver_active
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                    && !copy_target_is_focused
-                    && !this
-                        .conflict_resolver_input
-                        .read(cx)
-                        .focus_handle()
-                        .is_focused(window)
-                    && this.conflict_resolver_conflict_count() > 0
-                    && let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key)
-                {
-                    this.conflict_resolver_pick_active_conflict(choice, cx);
-                    handled = true;
-                }
-
-                if !handled
-                    && !copy_target_is_focused
-                    && (mods.control || mods.platform)
-                    && !mods.alt
-                    && !mods.function
-                    && key == "c"
-                    && this.diff_text_has_selection()
-                {
-                    this.copy_selected_diff_text_to_clipboard(cx);
-                    handled = true;
-                }
-
-                if !handled
-                    && !copy_target_is_focused
-                    && (mods.control || mods.platform)
-                    && !mods.alt
-                    && !mods.function
-                    && key == "a"
-                {
-                    this.select_all_diff_text();
-                    handled = true;
-                }
-
-                if handled {
+                if this.handle_diff_shortcut(&e.keystroke, window, cx) {
                     cx.stop_propagation();
                     cx.notify();
                 }
