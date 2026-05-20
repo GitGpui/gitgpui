@@ -75,3 +75,7 @@ pub(in crate::view) fn diff_scroll_sync(view: &GitCometView) -> DiffScrollSync {
 pub(in crate::view) fn diff_content_mode(view: &GitCometView) -> DiffContentMode {
     view.diff_content_mode
 }
+
+pub(in crate::view) fn diff_whitespace_mode(view: &GitCometView) -> DiffWhitespaceMode {
+    view.diff_whitespace_mode
+}

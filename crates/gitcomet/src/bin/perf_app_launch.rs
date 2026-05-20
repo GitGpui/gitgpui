@@ -959,10 +959,8 @@ fn local_x11_display_number(display: &str) -> Option<&str> {
         rest
     } else if let Some(rest) = display.strip_prefix("unix/:") {
         rest
-    } else if let Some(rest) = display.strip_prefix("unix:") {
-        rest
     } else {
-        return None;
+        display.strip_prefix("unix:")?
     };
 
     let display_number = local.split('.').next()?.trim();

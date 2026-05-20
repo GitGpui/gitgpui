@@ -170,11 +170,7 @@ pub(super) fn repo_monitor_ignore_lookup_stats() -> RepoMonitorIgnoreLookupStats
     let fallback_count = REPO_MONITOR_IGNORE_LOOKUP_FALLBACKS.load(Ordering::Relaxed);
     let total_lookup_nanos = REPO_MONITOR_IGNORE_LOOKUP_TOTAL_NANOS.load(Ordering::Relaxed);
     let max_lookup_nanos = REPO_MONITOR_IGNORE_LOOKUP_MAX_NANOS.load(Ordering::Relaxed);
-    let average_lookup_nanos = if cache_misses == 0 {
-        0
-    } else {
-        total_lookup_nanos / cache_misses
-    };
+    let average_lookup_nanos = total_lookup_nanos.checked_div(cache_misses).unwrap_or(0);
 
     RepoMonitorIgnoreLookupStats {
         request_count,

@@ -1193,6 +1193,9 @@ pub(super) struct ConflictResolverUiState {
     /// Current choice for each conflict block, cached to avoid rebuilding it
     /// from `marker_segments` on every render.
     pub(super) conflict_choices: Vec<conflict_resolver::ConflictChoice>,
+    /// Ignore-whitespace visual row kinds by two-way split source row.
+    pub(super) two_way_split_visual_kind_cache:
+        HashMap<usize, gitcomet_core::file_diff::FileDiffRowKind>,
     /// Visible-row indices used to measure horizontal width for the two-way split inputs.
     pub(super) two_way_horizontal_measure_rows: [usize; 2],
     pub(super) three_way_word_highlights: ThreeWaySides<conflict_resolver::WordHighlights>,
@@ -1250,6 +1253,7 @@ impl Default for ConflictResolverUiState {
             three_way_horizontal_measure_rows: [0; 3],
             conflict_has_base: Vec::new(),
             conflict_choices: Vec::new(),
+            two_way_split_visual_kind_cache: HashMap::default(),
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights: ThreeWaySides::default(),
             nav_anchor: None,
@@ -1288,6 +1292,36 @@ fn indexed_line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -
         end = end.saturating_sub(1);
     }
     Some(text.get(start..end).unwrap_or(""))
+}
+
+fn append_conflict_row_without_whitespace(
+    row: &gitcomet_core::file_diff::FileDiffRow,
+    old_out: &mut String,
+    new_out: &mut String,
+) {
+    use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+    match row.kind {
+        RK::Context => {}
+        RK::Remove => {
+            if let Some(text) = row.old.as_ref() {
+                old_out.extend(text.as_ref().chars().filter(|ch| !ch.is_whitespace()));
+            }
+        }
+        RK::Add => {
+            if let Some(text) = row.new.as_ref() {
+                new_out.extend(text.as_ref().chars().filter(|ch| !ch.is_whitespace()));
+            }
+        }
+        RK::Modify => {
+            if let Some(text) = row.old.as_ref() {
+                old_out.extend(text.as_ref().chars().filter(|ch| !ch.is_whitespace()));
+            }
+            if let Some(text) = row.new.as_ref() {
+                new_out.extend(text.as_ref().chars().filter(|ch| !ch.is_whitespace()));
+            }
+        }
+    }
 }
 
 impl ConflictResolverUiState {
@@ -1492,6 +1526,72 @@ impl ConflictResolverUiState {
         match &self.mode_state {
             ConflictModeState::Streamed(s) => {
                 s.split_row_index.row_at(&self.marker_segments, row_ix)
+            }
+        }
+    }
+
+    pub(super) fn two_way_split_visual_kind_at(
+        &mut self,
+        row_ix: usize,
+        row: &gitcomet_core::file_diff::FileDiffRow,
+        whitespace_mode: DiffWhitespaceMode,
+    ) -> gitcomet_core::file_diff::FileDiffRowKind {
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        if whitespace_mode == DiffWhitespaceMode::Show || matches!(row.kind, RK::Context) {
+            return row.kind;
+        }
+
+        if let Some(kind) = self.two_way_split_visual_kind_cache.get(&row_ix).copied() {
+            return kind;
+        }
+
+        self.cache_two_way_split_visual_kind_run(row_ix);
+        self.two_way_split_visual_kind_cache
+            .get(&row_ix)
+            .copied()
+            .unwrap_or(row.kind)
+    }
+
+    fn cache_two_way_split_visual_kind_run(&mut self, row_ix: usize) {
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        let mut start = row_ix;
+        while start > 0 {
+            let Some(prev) = self.two_way_split_row_by_source(start - 1) else {
+                break;
+            };
+            if matches!(prev.kind, RK::Context) {
+                break;
+            }
+            start -= 1;
+        }
+
+        let mut old_stripped = String::new();
+        let mut new_stripped = String::new();
+        let mut end = start;
+        while let Some(next) = self.two_way_split_row_by_source(end) {
+            if matches!(next.kind, RK::Context) {
+                break;
+            }
+            append_conflict_row_without_whitespace(&next, &mut old_stripped, &mut new_stripped);
+            end += 1;
+        }
+
+        if start == end {
+            return;
+        }
+
+        if old_stripped == new_stripped {
+            for ix in start..end {
+                self.two_way_split_visual_kind_cache.insert(ix, RK::Context);
+            }
+            return;
+        }
+
+        for ix in start..end {
+            if let Some(row) = self.two_way_split_row_by_source(ix) {
+                self.two_way_split_visual_kind_cache.insert(ix, row.kind);
             }
         }
     }
@@ -1746,6 +1846,7 @@ impl ConflictResolverUiState {
     /// Rebuild two-way visible state from current marker segments.
     /// Rebuilds the streamed split row index and projection.
     pub(super) fn rebuild_two_way_visible_state(&mut self) {
+        self.two_way_split_visual_kind_cache.clear();
         let ConflictModeState::Streamed(s) = &mut self.mode_state;
         s.split_row_index = conflict_resolver::ConflictSplitRowIndex::new(
             &self.marker_segments,
@@ -1816,7 +1917,8 @@ impl ConflictResolverUiState {
 #[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
 mod conflict_resolver_ui_state_tests {
     use super::{
-        ConflictResolverUiState, DeferredLineStarts, Loadable, ThreeWayColumn, ThreeWaySides,
+        ConflictResolverUiState, DeferredLineStarts, DiffWhitespaceMode, Loadable, ThreeWayColumn,
+        ThreeWaySides,
     };
     use crate::view::conflict_resolver::{
         self, ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
@@ -1994,6 +2096,33 @@ mod conflict_resolver_ui_state_tests {
         assert_eq!(
             state.conflict_choices,
             vec![ConflictChoice::Ours, ConflictChoice::Both]
+        );
+    }
+
+    #[test]
+    fn ignored_whitespace_visual_kind_caches_entire_change_run() {
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "let x = 1\nabc  \n".into(),
+            theirs: "let x=1\nabc\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        state.rebuild_two_way_visible_state();
+
+        let first_row = state.two_way_split_row_by_source(0).unwrap();
+        assert_eq!(
+            state.two_way_split_visual_kind_at(0, &first_row, DiffWhitespaceMode::Ignore),
+            RK::Context
+        );
+
+        assert_eq!(state.two_way_split_visual_kind_cache.len(), 2);
+        assert_eq!(
+            state.two_way_split_visual_kind_cache.get(&1).copied(),
+            Some(RK::Context)
         );
     }
 
@@ -2332,6 +2461,7 @@ pub(super) enum PopoverKind {
     PullPicker,
     PushPicker,
     AppMenu,
+    DiffActionMenu,
     DiffHunkMenu {
         repo_id: RepoId,
         src_ix: usize,
@@ -3016,6 +3146,37 @@ impl DiffContentMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum DiffWhitespaceMode {
+    #[default]
+    Show,
+    Ignore,
+}
+
+impl DiffWhitespaceMode {
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Show => "show",
+            Self::Ignore => "ignore",
+        }
+    }
+
+    pub(crate) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "show" => Some(Self::Show),
+            "ignore" => Some(Self::Ignore),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn toggled(self) -> Self {
+        match self {
+            Self::Show => Self::Ignore,
+            Self::Ignore => Self::Show,
+        }
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -3054,6 +3215,7 @@ pub struct GitCometView {
     pub(super) change_tracking_view: ChangeTrackingView,
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
+    pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,

@@ -57,6 +57,81 @@ fn patch_diff_content_signature(diff: &gitcomet_core::domain::Diff) -> u64 {
     hasher.finish()
 }
 
+fn append_non_whitespace(text: &str, out: &mut String) {
+    out.extend(text.chars().filter(|ch| !ch.is_whitespace()));
+}
+
+fn diff_line_content_text(line: &gitcomet_core::domain::DiffLine) -> &str {
+    match line.kind {
+        gitcomet_core::domain::DiffLineKind::Add => {
+            line.text.strip_prefix('+').unwrap_or(&line.text)
+        }
+        gitcomet_core::domain::DiffLineKind::Remove => {
+            line.text.strip_prefix('-').unwrap_or(&line.text)
+        }
+        gitcomet_core::domain::DiffLineKind::Context => {
+            line.text.strip_prefix(' ').unwrap_or(&line.text)
+        }
+        gitcomet_core::domain::DiffLineKind::Header | gitcomet_core::domain::DiffLineKind::Hunk => {
+            &line.text
+        }
+    }
+}
+
+fn is_unified_no_newline_marker(text: &str) -> bool {
+    text.starts_with("\\ No newline")
+}
+
+fn is_patch_diff_whitespace_group_line(line: &gitcomet_core::domain::DiffLine) -> bool {
+    matches!(
+        line.kind,
+        gitcomet_core::domain::DiffLineKind::Remove | gitcomet_core::domain::DiffLineKind::Add
+    ) || is_unified_no_newline_marker(&line.text)
+}
+
+fn visual_line_kinds_for_patch_diff(
+    diff: &gitcomet_core::domain::Diff,
+    mode: DiffWhitespaceMode,
+) -> Vec<gitcomet_core::domain::DiffLineKind> {
+    use gitcomet_core::domain::DiffLineKind as DK;
+
+    let mut visual = diff.lines.iter().map(|line| line.kind).collect::<Vec<_>>();
+    if mode == DiffWhitespaceMode::Show {
+        return visual;
+    }
+
+    let mut ix = 0usize;
+    while ix < diff.lines.len() {
+        if !matches!(diff.lines[ix].kind, DK::Remove | DK::Add) {
+            ix += 1;
+            continue;
+        }
+
+        let group_start = ix;
+        let mut old_stripped = String::new();
+        let mut new_stripped = String::new();
+        while ix < diff.lines.len() && is_patch_diff_whitespace_group_line(&diff.lines[ix]) {
+            let line = &diff.lines[ix];
+            match line.kind {
+                DK::Remove => {
+                    append_non_whitespace(diff_line_content_text(line), &mut old_stripped)
+                }
+                DK::Add => append_non_whitespace(diff_line_content_text(line), &mut new_stripped),
+                DK::Context | DK::Header | DK::Hunk => {}
+            }
+            ix += 1;
+        }
+
+        if old_stripped == new_stripped {
+            for kind in &mut visual[group_start..ix] {
+                *kind = DK::Context;
+            }
+        }
+    }
+
+    visual
+}
+
 fn file_diff_text_is_source_backed(file: &gitcomet_core::domain::FileDiffText) -> bool {
     file.old_source.is_some() || file.new_source.is_some()
 }
@@ -205,6 +280,17 @@ impl MainPaneView {
         }
     }
 
+    pub(in crate::view) fn file_diff_split_visual_kind(
+        &self,
+        row_ix: usize,
+    ) -> gitcomet_core::file_diff::FileDiffRowKind {
+        self.file_diff_row_provider
+            .as_ref()
+            .and_then(|provider| provider.visual_kind(row_ix))
+            .or_else(|| self.file_diff_cache_rows.get(row_ix).map(|row| row.kind))
+            .unwrap_or(gitcomet_core::file_diff::FileDiffRowKind::Context)
+    }
+
     pub(in crate::view) fn file_diff_inline_row_len(&self) -> usize {
         self.file_diff_inline_row_provider
             .as_ref()
@@ -238,6 +324,21 @@ impl MainPaneView {
                 text: crate::view::diff_utils::diff_content_line_text(&line),
             })
         }
+    }
+
+    pub(in crate::view) fn file_diff_inline_visual_kind(
+        &self,
+        inline_ix: usize,
+    ) -> gitcomet_core::domain::DiffLineKind {
+        self.file_diff_inline_row_provider
+            .as_ref()
+            .and_then(|provider| provider.visual_kind(inline_ix))
+            .or_else(|| {
+                self.file_diff_inline_cache
+                    .get(inline_ix)
+                    .map(|row| row.kind)
+            })
+            .unwrap_or(gitcomet_core::domain::DiffLineKind::Context)
     }
 
     pub(in crate::view) fn file_diff_split_modify_pair_texts(
@@ -291,6 +392,73 @@ impl MainPaneView {
         }
     }
 
+    pub(in crate::view) fn patch_visual_line_kind(
+        &self,
+        src_ix: usize,
+    ) -> gitcomet_core::domain::DiffLineKind {
+        self.diff_visual_line_kind_for_src_ix
+            .get(src_ix)
+            .copied()
+            .or_else(|| self.diff_line_kind_for_src_ix.get(src_ix).copied())
+            .or_else(|| self.patch_diff_row(src_ix).map(|line| line.kind))
+            .unwrap_or(gitcomet_core::domain::DiffLineKind::Context)
+    }
+
+    pub(in crate::view) fn patch_split_visual_row_kind(
+        &self,
+        row: &PatchSplitRow,
+    ) -> gitcomet_core::file_diff::FileDiffRowKind {
+        use gitcomet_core::domain::DiffLineKind as DK;
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        let PatchSplitRow::Aligned {
+            row,
+            old_src_ix,
+            new_src_ix,
+        } = row
+        else {
+            return RK::Context;
+        };
+
+        let old_changed = old_src_ix
+            .is_some_and(|src_ix| matches!(self.patch_visual_line_kind(src_ix), DK::Remove));
+        let new_changed =
+            new_src_ix.is_some_and(|src_ix| matches!(self.patch_visual_line_kind(src_ix), DK::Add));
+
+        match (old_changed, new_changed) {
+            (true, true) => RK::Modify,
+            (true, false) => RK::Remove,
+            (false, true) => RK::Add,
+            (false, false) => {
+                if matches!(row.kind, RK::Add | RK::Remove | RK::Modify) {
+                    RK::Context
+                } else {
+                    row.kind
+                }
+            }
+        }
+    }
+
+    fn rebuild_patch_visual_line_kinds_from_ready_diff(
+        &mut self,
+        diff: &gitcomet_core::domain::Diff,
+    ) {
+        self.diff_visual_line_kind_for_src_ix =
+            visual_line_kinds_for_patch_diff(diff, self.diff_whitespace_mode);
+    }
+
+    pub(in crate::view) fn rebuild_patch_visual_line_kinds_from_current_diff(&mut self) {
+        let ready_diff = match self.rendered_patch_diff_loadable() {
+            Some(Loadable::Ready(diff)) => Some(Arc::clone(diff)),
+            _ => None,
+        };
+        if let Some(diff) = ready_diff {
+            self.rebuild_patch_visual_line_kinds_from_ready_diff(diff.as_ref());
+        } else {
+            self.diff_visual_line_kind_for_src_ix = self.diff_line_kind_for_src_ix.clone();
+        }
+    }
+
     pub(in crate::view) fn patch_diff_rows_slice(
         &self,
         start: usize,
@@ -326,6 +494,7 @@ impl MainPaneView {
     fn patch_split_visible_meta_from_source(&self) -> PatchSplitVisibleMeta {
         build_patch_split_visible_meta_from_src(
             self.diff_line_kind_for_src_ix.as_slice(),
+            self.diff_visual_line_kind_for_src_ix.as_slice(),
             self.diff_click_kinds.as_slice(),
             self.diff_hide_unified_header_for_src_ix.as_slice(),
         )
@@ -350,10 +519,10 @@ impl MainPaneView {
             return;
         }
 
-        let Some(line) = self.patch_diff_row(src_ix) else {
+        if self.patch_diff_row(src_ix).is_none() {
             return;
-        };
-        if !matches!(line.kind, DK::Add | DK::Remove) {
+        }
+        if !matches!(self.patch_visual_line_kind(src_ix), DK::Add | DK::Remove) {
             return;
         }
 
@@ -400,17 +569,18 @@ impl MainPaneView {
             let (new_ix, new_line) = &added[i];
             let (old_ranges, new_ranges) =
                 capped_word_diff_ranges(diff_content_text(old_line), diff_content_text(new_line));
-            if !old_ranges.is_empty() {
+            if matches!(self.patch_visual_line_kind(*old_ix), DK::Remove) && !old_ranges.is_empty()
+            {
                 self.diff_word_highlights[*old_ix] = Some(old_ranges);
             }
-            if !new_ranges.is_empty() {
+            if matches!(self.patch_visual_line_kind(*new_ix), DK::Add) && !new_ranges.is_empty() {
                 self.diff_word_highlights[*new_ix] = Some(new_ranges);
             }
         }
 
         for (old_ix, old_line) in removed.into_iter().skip(pairs) {
             let text = diff_content_text(&old_line);
-            if !text.is_empty() {
+            if matches!(self.patch_visual_line_kind(old_ix), DK::Remove) && !text.is_empty() {
                 self.diff_word_highlights[old_ix] = Some(vec![Range {
                     start: 0,
                     end: text.len(),
@@ -419,7 +589,7 @@ impl MainPaneView {
         }
         for (new_ix, new_line) in added.into_iter().skip(pairs) {
             let text = diff_content_text(&new_line);
-            if !text.is_empty() {
+            if matches!(self.patch_visual_line_kind(new_ix), DK::Add) && !text.is_empty() {
                 self.diff_word_highlights[new_ix] = Some(vec![Range {
                     start: 0,
                     end: text.len(),
@@ -501,7 +671,7 @@ impl MainPaneView {
         (start < end).then_some((start, end))
     }
 
-    fn collapsed_hunk_change_summary(&self, src_ix: usize) -> (bool, bool) {
+    pub(in crate::view) fn collapsed_hunk_change_summary(&self, src_ix: usize) -> (bool, bool) {
         let mut has_additions = false;
         let mut has_removals = false;
 
@@ -515,10 +685,7 @@ impl MainPaneView {
                 break;
             }
 
-            let Some(line) = self.patch_diff_row(candidate_ix) else {
-                continue;
-            };
-            match line.kind {
+            match self.patch_visual_line_kind(candidate_ix) {
                 gitcomet_core::domain::DiffLineKind::Add => has_additions = true,
                 gitcomet_core::domain::DiffLineKind::Remove => has_removals = true,
                 gitcomet_core::domain::DiffLineKind::Context
@@ -1929,7 +2096,7 @@ impl MainPaneView {
 
     /// Resets file-diff data fields (syntax, rows, text, highlights) without
     /// touching the identity fields (repo_id, target, rev).
-    fn reset_file_diff_cache_data(&mut self) {
+    pub(in crate::view) fn reset_file_diff_cache_data(&mut self) {
         self.reset_collapsed_diff_projection(false);
         self.file_diff_cache_content_signature = None;
         self.file_diff_cache_inflight = None;
@@ -2007,10 +2174,12 @@ impl MainPaneView {
             if let Some(patch_diff) = patch_diff.as_ref() {
                 signature ^= patch_diff_content_signature(patch_diff.as_ref()).rotate_left(1);
             }
+            signature ^= (self.diff_whitespace_mode.key().len() as u64).rotate_left(7);
             signature
         });
         let same_repo_and_target = self.file_diff_cache_repo_id == Some(repo_id)
             && self.file_diff_cache_target == Some(diff_target.clone())
+            && self.file_diff_cache_whitespace_mode == self.diff_whitespace_mode
             && self.file_diff_cache_path.as_ref() == Some(&expected_abs_path);
         let previous_split_left_reparse_seed = same_repo_and_target
             .then(|| self.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft))
@@ -2034,6 +2203,7 @@ impl MainPaneView {
             } else {
                 self.file_diff_cache_repo_id = Some(repo_id);
                 self.file_diff_cache_rev = diff_file_rev;
+                self.file_diff_cache_whitespace_mode = self.diff_whitespace_mode;
                 self.file_diff_cache_target = Some(diff_target);
                 self.reset_file_diff_cache_data();
                 self.clear_diff_text_style_caches();
@@ -2080,6 +2250,7 @@ impl MainPaneView {
 
         self.file_diff_cache_repo_id = Some(repo_id);
         self.file_diff_cache_rev = diff_file_rev;
+        self.file_diff_cache_whitespace_mode = self.diff_whitespace_mode;
         self.file_diff_cache_target = Some(diff_target);
         self.reset_file_diff_cache_data();
 
@@ -2096,6 +2267,7 @@ impl MainPaneView {
         let seq = self.file_diff_cache_seq;
         self.file_diff_cache_inflight = Some(seq);
         self.file_diff_syntax_generation = seq;
+        let whitespace_mode = self.diff_whitespace_mode;
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
@@ -2104,6 +2276,7 @@ impl MainPaneView {
                         file.as_ref(),
                         &workdir,
                         patch_diff.as_deref(),
+                        whitespace_mode,
                     )
                 };
                 let rebuild_result = if crate::ui_runtime::current().uses_background_compute() {
@@ -2118,6 +2291,7 @@ impl MainPaneView {
                     }
                     if this.file_diff_cache_repo_id != Some(repo_id)
                         || this.file_diff_cache_rev != diff_file_rev
+                        || this.file_diff_cache_whitespace_mode != whitespace_mode
                         || this.file_diff_cache_target != Some(diff_target_for_task.clone())
                     {
                         return;
@@ -2130,6 +2304,7 @@ impl MainPaneView {
                             this.reset_file_diff_cache_data();
                             this.file_diff_cache_repo_id = Some(repo_id);
                             this.file_diff_cache_rev = diff_file_rev;
+                            this.file_diff_cache_whitespace_mode = whitespace_mode;
                             this.file_diff_cache_target = Some(diff_target_for_task.clone());
                             this.file_diff_cache_path = Some(expected_abs_path.clone());
                             this.file_diff_cache_content_signature = Some(content_signature);
@@ -2413,6 +2588,7 @@ impl MainPaneView {
         self.diff_yaml_block_scalar_for_src_ix.clear();
         self.diff_click_kinds.clear();
         self.diff_line_kind_for_src_ix.clear();
+        self.diff_visual_line_kind_for_src_ix.clear();
         self.diff_hide_unified_header_for_src_ix.clear();
         self.diff_header_display_cache.clear();
         self.diff_split_cache.clear();
@@ -2474,6 +2650,7 @@ impl MainPaneView {
                 line.kind
             })
             .collect();
+        self.rebuild_patch_visual_line_kinds_from_ready_diff(diff.as_ref());
         split_row_count += pending_split_removes.max(pending_split_adds);
         self.diff_split_row_provider = Some(Arc::new(PagedPatchSplitRows::new_with_len_hint(
             Arc::clone(self.diff_row_provider.as_ref().expect("set just above")),
@@ -2601,10 +2778,7 @@ impl MainPaneView {
                     let Some(src_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return 0;
                     };
-                    let Some(line) = self.patch_diff_row(src_ix) else {
-                        return 0;
-                    };
-                    match line.kind {
+                    match self.patch_visual_line_kind(src_ix) {
                         gitcomet_core::domain::DiffLineKind::Add => 1,
                         gitcomet_core::domain::DiffLineKind::Remove => 2,
                         _ => 0,
@@ -2625,12 +2799,14 @@ impl MainPaneView {
                         return 0;
                     };
                     match &row {
-                        PatchSplitRow::Aligned { row, .. } => match row.kind {
-                            gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
-                            gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
-                            gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
-                            gitcomet_core::file_diff::FileDiffRowKind::Context => 0,
-                        },
+                        PatchSplitRow::Aligned { .. } => {
+                            match self.patch_split_visual_row_kind(&row) {
+                                gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
+                                gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
+                                gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
+                                gitcomet_core::file_diff::FileDiffRowKind::Context => 0,
+                            }
+                        }
                         PatchSplitRow::Raw { .. } => 0,
                     }
                 })
@@ -2705,10 +2881,7 @@ impl MainPaneView {
                     let Some(inline_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return 0;
                     };
-                    let Some(line) = self.file_diff_inline_cache.get(inline_ix) else {
-                        return 0;
-                    };
-                    match line.kind {
+                    match self.file_diff_inline_visual_kind(inline_ix) {
                         gitcomet_core::domain::DiffLineKind::Add => 1,
                         gitcomet_core::domain::DiffLineKind::Remove => 2,
                         _ => 0,
@@ -2723,10 +2896,7 @@ impl MainPaneView {
                     let Some(row_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return 0;
                     };
-                    let Some(row) = self.file_diff_cache_rows.get(row_ix) else {
-                        return 0;
-                    };
-                    match row.kind {
+                    match self.file_diff_split_visual_kind(row_ix) {
                         gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
                         gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
                         gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
@@ -2866,9 +3036,129 @@ impl MainPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    use gitcomet_core::domain::{DiffArea, DiffLine, DiffLineKind, DiffTarget};
     use std::path::Path;
     use std::path::PathBuf;
+
+    fn patch_diff_for_visual_tests(
+        lines: Vec<(DiffLineKind, &str)>,
+    ) -> gitcomet_core::domain::Diff {
+        gitcomet_core::domain::Diff {
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("demo.txt"),
+                area: DiffArea::Unstaged,
+            },
+            lines: lines
+                .into_iter()
+                .map(|(kind, text)| DiffLine {
+                    kind,
+                    text: text.into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_ignore_whitespace_only_groups() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1 +1 @@"),
+            (DiffLineKind::Remove, "-let\tvalue = 1;"),
+            (DiffLineKind::Add, "+let value=1;"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![
+                DiffLineKind::Hunk,
+                DiffLineKind::Context,
+                DiffLineKind::Context
+            ]
+        );
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_ignore_line_break_only_groups() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1,2 +1 @@"),
+            (DiffLineKind::Remove, "-foo"),
+            (DiffLineKind::Remove, "-bar"),
+            (DiffLineKind::Add, "+foobar"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![
+                DiffLineKind::Hunk,
+                DiffLineKind::Context,
+                DiffLineKind::Context,
+                DiffLineKind::Context
+            ]
+        );
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_ignore_eof_marker_between_equal_lines() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1 +1 @@"),
+            (DiffLineKind::Remove, "-foo"),
+            (DiffLineKind::Context, "\\ No newline at end of file"),
+            (DiffLineKind::Add, "+foo"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![
+                DiffLineKind::Hunk,
+                DiffLineKind::Context,
+                DiffLineKind::Context,
+                DiffLineKind::Context
+            ]
+        );
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_ignore_eof_marker_after_equal_lines() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1 +1 @@"),
+            (DiffLineKind::Remove, "-foo"),
+            (DiffLineKind::Add, "+foo"),
+            (DiffLineKind::Context, "\\ No newline at end of file"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![
+                DiffLineKind::Hunk,
+                DiffLineKind::Context,
+                DiffLineKind::Context,
+                DiffLineKind::Context
+            ]
+        );
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_keep_real_content_changes() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1 +1 @@"),
+            (DiffLineKind::Remove, "-let value = 1;"),
+            (DiffLineKind::Add, "+let result = 1;"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![DiffLineKind::Hunk, DiffLineKind::Remove, DiffLineKind::Add]
+        );
+    }
 
     #[test]
     fn preview_source_text_from_lines_preserves_missing_trailing_newline() {

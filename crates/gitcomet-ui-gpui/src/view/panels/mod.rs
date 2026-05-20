@@ -59,6 +59,9 @@ pub(in crate::view) enum ContextMenuAction {
     SetDiffContentMode {
         mode: DiffContentMode,
     },
+    SetDiffWhitespaceMode {
+        mode: DiffWhitespaceMode,
+    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },

@@ -8,6 +8,7 @@ mod commit_file;
 mod conflict_resolver_chunk;
 mod conflict_resolver_input_row;
 mod conflict_resolver_output;
+mod diff_actions;
 mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
@@ -340,6 +341,7 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(self, *repo_id))
             }
+            PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
@@ -353,7 +355,8 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let close_after_action = true;
+        let mut close_after_action = true;
+        let mut restore_diff_panel_focus_after_action = false;
         match action {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
@@ -493,6 +496,17 @@ impl PopoverHost {
                 cx.defer(move |cx| {
                     main_pane.update(cx, |pane, cx| {
                         pane.set_diff_content_mode_and_persist(mode, cx);
+                    });
+                });
+            }
+            ContextMenuAction::SetDiffWhitespaceMode { mode } => {
+                close_after_action = false;
+                restore_diff_panel_focus_after_action = true;
+                self.diff_whitespace_mode = mode;
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.set_diff_whitespace_mode_and_persist(mode, cx);
                     });
                 });
             }
@@ -823,6 +837,10 @@ impl PopoverHost {
         if close_after_action {
             self.close_popover_and_restore_focus(window, cx);
         } else {
+            if restore_diff_panel_focus_after_action {
+                let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
+            }
             cx.notify();
         }
     }

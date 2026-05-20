@@ -50,12 +50,13 @@ pub(super) fn split_conflict_row_canvas(
     right_text: SharedString,
     left_styled: Option<&CachedDiffStyledText>,
     right_styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
+    reveal_whitespace_chars: bool,
     chunk_context: Option<ConflictChunkContext>,
 ) -> AnyElement {
-    let left_prepared = prepare_conflict_text_for_canvas(left_text, left_styled, show_whitespace);
+    let left_prepared =
+        prepare_conflict_text_for_canvas(left_text, left_styled, reveal_whitespace_chars);
     let right_prepared =
-        prepare_conflict_text_for_canvas(right_text, right_styled, show_whitespace);
+        prepare_conflict_text_for_canvas(right_text, right_styled, reveal_whitespace_chars);
 
     keyed_canvas(
         ("conflict_resolver_split_row_canvas", visible_row_ix),
@@ -219,12 +220,12 @@ pub(super) fn single_column_conflict_canvas(
     fg: gpui::Rgba,
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
+    reveal_whitespace_chars: bool,
     chunk_context: Option<ConflictChunkContext>,
     chunk_menu_prefix: &'static str,
     is_three_way: bool,
 ) -> AnyElement {
-    let prepared = prepare_conflict_text_for_canvas(text, styled, show_whitespace);
+    let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
 
     keyed_canvas(
         (id_prefix, visible_row_ix),
@@ -317,10 +318,10 @@ struct PreparedConflictText {
 fn prepare_conflict_text_for_canvas(
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
+    reveal_whitespace_chars: bool,
 ) -> PreparedConflictText {
     let Some(styled) = styled else {
-        let display = if show_whitespace {
+        let display = if reveal_whitespace_chars {
             whitespace_visible_text(text.as_ref())
         } else {
             text
@@ -334,7 +335,7 @@ fn prepare_conflict_text_for_canvas(
     };
 
     if styled.highlights.is_empty() {
-        let display = if show_whitespace {
+        let display = if reveal_whitespace_chars {
             whitespace_visible_text(styled.text.as_ref())
         } else {
             styled.text.clone()
@@ -347,7 +348,7 @@ fn prepare_conflict_text_for_canvas(
         };
     }
 
-    if show_whitespace {
+    if reveal_whitespace_chars {
         let (display, remapped) = whitespace_visible_text_and_highlights(
             styled.text.as_ref(),
             styled.highlights.as_ref(),

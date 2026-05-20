@@ -1000,9 +1000,9 @@ dependencies = [
 
 [[package]]
 name = "collections-gpui-unofficial"
-version = "1.2.6"
+version = "1.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4893fa0b95f3548056dea0a6fee5c1e0a98e411c5e09ff4238f98261d51e4ed0"
+checksum = "b664ab3b1a19374b86ca980ccb921089ccc1d4b601a85153cdcb94ff35944ea2"
 dependencies = [
  "indexmap",
  "rustc-hash 2.1.2",
@@ -1341,6 +1341,12 @@ dependencies = [
  "link-section",
  "linktime-proc-macro",
 ]
+
+[[package]]
+name = "cty"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
 
 [[package]]
 name = "dashmap"
@@ -3351,9 +3357,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-util-gpui-unofficial"
-version = "1.2.6"
+version = "1.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "893c0be6353e8c13b2cff9999c8165d6057871027bf69add07995dc9c4989fdf"
+checksum = "176aec8d175046257e111733aab663ba9ec7eb05559fe4ddcc3731b77368f9a5"
 dependencies = [
  "anyhow",
  "log",
@@ -3529,9 +3535,9 @@ dependencies = [
 
 [[package]]
 name = "http-client-gpui-unofficial"
-version = "1.2.6"
+version = "1.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f93c04be8aa02237d927751b17845c1c74491ccfdbb2609e055008c7020f7601"
+checksum = "1553186df675172578d2208523c58cee882e7f6d1e35b14aa34573f476e11454"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -4111,10 +4117,12 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libmimalloc-sys"
-version = "0.1.47"
-source = "git+https://github.com/havunen/mimalloc_rust.git?rev=843b9b2f240ce98a4d5745a72e77cc21648651dd#843b9b2f240ce98a4d5745a72e77cc21648651dd"
+version = "0.1.48"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2892ae4ea6fa2cb7acb0e236a6880d39523239cd9089de71d220910ccc806790"
 dependencies = [
  "cc",
+ "cty",
 ]
 
 [[package]]
@@ -4371,8 +4379,9 @@ dependencies = [
 
 [[package]]
 name = "mimalloc"
-version = "0.1.50"
-source = "git+https://github.com/havunen/mimalloc_rust.git?rev=843b9b2f240ce98a4d5745a72e77cc21648651dd#843b9b2f240ce98a4d5745a72e77cc21648651dd"
+version = "0.1.51"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebca48a43116bc25f18a61360f1be98412f50cc218f5e52c823086b999a4a21a"
 dependencies = [
  "libmimalloc-sys",
 ]
@@ -5214,9 +5223,9 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.3"
+version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c3a14896dfa883796f1cb410461aef38810ea05f2b2c33c5aded3649095fdad"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
 dependencies = [
  "bitflags 2.11.1",
  "memchr",
@@ -6581,9 +6590,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.26.8"
+version = "0.26.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "887bd495d0582c5e3e0d8ece2233666169fa56a9644d172fc22ad179ab2d0538"
+checksum = "4dab76d0b724ba557954125188cf0633a1ca43199ced82d95c7b9c32cc3de1f3"
 dependencies = [
  "cc",
  "regex",
@@ -7149,9 +7158,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "util-gpui-unofficial"
-version = "1.2.6"
+version = "1.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6f69702d430761a4a285baee8b04158762c45c6d974ab285bae17bbaa77577"
+checksum = "2cebef0b41a2d668b055e1536cd6e3f82fdd31bf7a011aea4a3705a8d02718ec"
 dependencies = [
  "anyhow",
  "async-fs",

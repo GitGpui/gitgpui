@@ -166,6 +166,7 @@ pub(crate) struct SettingsWindowView {
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
     diff_content_mode: DiffContentMode,
+    diff_whitespace_mode: DiffWhitespaceMode,
     diff_scroll_sync: DiffScrollSync,
     history_show_graph: bool,
     history_show_author: bool,
@@ -508,6 +509,11 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(DiffContentMode::from_key)
             .unwrap_or_default();
+        let diff_whitespace_mode = ui_session
+            .diff_whitespace_mode
+            .as_deref()
+            .and_then(DiffWhitespaceMode::from_key)
+            .unwrap_or_default();
         let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
@@ -597,6 +603,7 @@ impl SettingsWindowView {
             show_timezone,
             change_tracking_view,
             diff_content_mode,
+            diff_whitespace_mode,
             diff_scroll_sync,
             history_show_graph,
             history_show_author,
@@ -648,6 +655,7 @@ impl SettingsWindowView {
             change_tracking_view: Some(self.change_tracking_view.key().to_string()),
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
+            diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
             change_tracking_height: None,
             untracked_height: None,
             history_show_graph: Some(self.history_show_graph),
@@ -1033,6 +1041,19 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_diff_content_mode(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_diff_whitespace_mode(&mut self, next: DiffWhitespaceMode, cx: &mut gpui::Context<Self>) {
+        if self.diff_whitespace_mode == next {
+            return;
+        }
+
+        self.diff_whitespace_mode = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_whitespace_mode(next, cx);
         });
         cx.notify();
     }
@@ -2407,6 +2428,17 @@ impl Render for SettingsWindowView {
                             this.toggle_section(SettingsSection::DiffContentMode, cx);
                         }));
 
+                    let diff_whitespace_mode_row = self
+                        .toggle_row(
+                            "settings_window_diff_whitespace_mode",
+                            "Show whitespace changes",
+                            self.diff_whitespace_mode == DiffWhitespaceMode::Show,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_diff_whitespace_mode(this.diff_whitespace_mode.toggled(), cx);
+                        }));
+
                     let history_default_mode_row = self
                         .summary_row(
                             "settings_window_git_log_default_mode",
@@ -2820,6 +2852,8 @@ impl Render for SettingsWindowView {
                             theme,
                         ));
                     }
+
+                    diff_card = diff_card.child(diff_whitespace_mode_row);
 
                     diff_card = diff_card.child(diff_scroll_sync_row);
 
@@ -5307,6 +5341,63 @@ mod tests {
             assert_eq!(
                 settings_window
                     .read_with(app, |settings, _cx| settings.diff_content_mode)
+                    .expect("settings window should remain readable"),
+                next_mode
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn diff_whitespace_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let next_mode = cx.update(|_window, app| {
+            let current = settings_window
+                .read_with(app, |settings, _cx| settings.diff_whitespace_mode)
+                .expect("settings window should be readable");
+            current.toggled()
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_diff_whitespace_mode(next_mode, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "diff whitespace mode update should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::diff_whitespace_mode(main_view.read(app)),
+                next_mode
+            );
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.diff_whitespace_mode)
                     .expect("settings window should remain readable"),
                 next_mode
             );

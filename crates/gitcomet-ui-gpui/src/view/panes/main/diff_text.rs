@@ -11,6 +11,27 @@ impl MainPaneView {
         })
     }
 
+    pub(in super::super::super) fn diff_text_selection_visible_range(
+        &self,
+    ) -> Option<(usize, usize)> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        (start != end).then_some((start.visible_ix, end.visible_ix))
+    }
+
+    pub(in super::super::super) fn sync_diff_focus_to_text_selection(&mut self) {
+        if let Some((_start, end)) = self.diff_text_selection_visible_range() {
+            self.diff_selection_anchor = Some(end);
+            self.diff_selection_range = None;
+        }
+    }
+
+    pub(in super::super::super) fn clear_diff_text_selection(&mut self) {
+        self.diff_text_selecting = false;
+        self.diff_text_anchor = None;
+        self.diff_text_head = None;
+        self.diff_text_autoscroll_target = None;
+    }
+
     pub(in super::super::super) fn diff_text_selection_color(&self) -> gpui::Rgba {
         with_alpha(
             self.theme.colors.accent,
@@ -125,8 +146,8 @@ impl MainPaneView {
         self.diff_text_selecting = false;
         self.diff_text_anchor = Some(anchor);
         self.diff_text_head = Some(head);
-        self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.sync_diff_focus_to_text_selection();
         self.diff_suppress_clicks_remaining = suppress_clicks.min(u8::MAX as usize) as u8;
     }
 
@@ -217,7 +238,6 @@ impl MainPaneView {
         self.diff_text_selecting = true;
         self.diff_text_anchor = Some(pos);
         self.diff_text_head = Some(pos);
-        self.diff_selection_anchor = None;
         self.diff_selection_range = None;
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
@@ -284,6 +304,7 @@ impl MainPaneView {
                 .diff_text_normalized_selection()
                 .is_some_and(|(a, b)| a != b)
             {
+                self.sync_diff_focus_to_text_selection();
                 self.diff_suppress_clicks_remaining = 1;
             }
         }

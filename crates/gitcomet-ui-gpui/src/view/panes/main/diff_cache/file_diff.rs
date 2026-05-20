@@ -483,11 +483,180 @@ impl StreamedFileDiffRunStarts {
     }
 }
 
+fn push_file_diff_line_without_whitespace(
+    source: &IndexedFileDiffSource,
+    line_ix: usize,
+    out: &mut String,
+) {
+    if let Some(text) = source.line_text(line_ix) {
+        super::append_non_whitespace(text.as_ref(), out);
+    }
+}
+
+fn append_file_diff_run_without_whitespace(
+    run: &gitcomet_core::file_diff::FileDiffPlanRun,
+    old_source: &IndexedFileDiffSource,
+    new_source: &IndexedFileDiffSource,
+    old_out: &mut String,
+    new_out: &mut String,
+) {
+    match *run {
+        gitcomet_core::file_diff::FileDiffPlanRun::Context { .. } => {}
+        gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, len } => {
+            for offset in 0..len {
+                push_file_diff_line_without_whitespace(
+                    old_source,
+                    old_start.saturating_add(offset),
+                    old_out,
+                );
+            }
+        }
+        gitcomet_core::file_diff::FileDiffPlanRun::Add { new_start, len } => {
+            for offset in 0..len {
+                push_file_diff_line_without_whitespace(
+                    new_source,
+                    new_start.saturating_add(offset),
+                    new_out,
+                );
+            }
+        }
+        gitcomet_core::file_diff::FileDiffPlanRun::Modify {
+            old_start,
+            new_start,
+            len,
+        } => {
+            for offset in 0..len {
+                push_file_diff_line_without_whitespace(
+                    old_source,
+                    old_start.saturating_add(offset),
+                    old_out,
+                );
+                push_file_diff_line_without_whitespace(
+                    new_source,
+                    new_start.saturating_add(offset),
+                    new_out,
+                );
+            }
+        }
+    }
+}
+
+fn visual_kinds_for_file_diff_plan(
+    plan: &gitcomet_core::file_diff::FileDiffPlan,
+    old_source: &IndexedFileDiffSource,
+    new_source: &IndexedFileDiffSource,
+    whitespace_mode: DiffWhitespaceMode,
+) -> (
+    Box<[gitcomet_core::file_diff::FileDiffRowKind]>,
+    Box<[gitcomet_core::domain::DiffLineKind]>,
+) {
+    use gitcomet_core::domain::DiffLineKind as DK;
+    use gitcomet_core::file_diff::{FileDiffPlanRun, FileDiffRowKind as RK};
+
+    let starts = StreamedFileDiffRunStarts::build(plan);
+    let mut split = vec![RK::Context; plan.row_count];
+    let mut inline = vec![DK::Context; plan.inline_row_count];
+
+    for (run_ix, run) in plan.runs.iter().enumerate() {
+        let split_start = starts.split.get(run_ix).copied().unwrap_or(0);
+        let inline_start = starts.inline.get(run_ix).copied().unwrap_or(0);
+        match *run {
+            FileDiffPlanRun::Context { len, .. } => {
+                for row_ix in split_start..split_start.saturating_add(len).min(split.len()) {
+                    split[row_ix] = RK::Context;
+                }
+                for inline_ix in inline_start..inline_start.saturating_add(len).min(inline.len()) {
+                    inline[inline_ix] = DK::Context;
+                }
+            }
+            FileDiffPlanRun::Remove { len, .. } => {
+                for row_ix in split_start..split_start.saturating_add(len).min(split.len()) {
+                    split[row_ix] = RK::Remove;
+                }
+                for inline_ix in inline_start..inline_start.saturating_add(len).min(inline.len()) {
+                    inline[inline_ix] = DK::Remove;
+                }
+            }
+            FileDiffPlanRun::Add { len, .. } => {
+                for row_ix in split_start..split_start.saturating_add(len).min(split.len()) {
+                    split[row_ix] = RK::Add;
+                }
+                for inline_ix in inline_start..inline_start.saturating_add(len).min(inline.len()) {
+                    inline[inline_ix] = DK::Add;
+                }
+            }
+            FileDiffPlanRun::Modify { len, .. } => {
+                for row_ix in split_start..split_start.saturating_add(len).min(split.len()) {
+                    split[row_ix] = RK::Modify;
+                }
+                for offset in 0..len {
+                    let old_ix = inline_start.saturating_add(offset.saturating_mul(2));
+                    let new_ix = old_ix.saturating_add(1);
+                    if let Some(kind) = inline.get_mut(old_ix) {
+                        *kind = DK::Remove;
+                    }
+                    if let Some(kind) = inline.get_mut(new_ix) {
+                        *kind = DK::Add;
+                    }
+                }
+            }
+        }
+    }
+
+    if whitespace_mode == DiffWhitespaceMode::Ignore {
+        let mut run_ix = 0usize;
+        while run_ix < plan.runs.len() {
+            if matches!(plan.runs[run_ix].kind(), RK::Context) {
+                run_ix += 1;
+                continue;
+            }
+
+            let group_start = run_ix;
+            let mut old_stripped = String::new();
+            let mut new_stripped = String::new();
+            while run_ix < plan.runs.len() && !matches!(plan.runs[run_ix].kind(), RK::Context) {
+                append_file_diff_run_without_whitespace(
+                    &plan.runs[run_ix],
+                    old_source,
+                    new_source,
+                    &mut old_stripped,
+                    &mut new_stripped,
+                );
+                run_ix += 1;
+            }
+
+            if old_stripped == new_stripped {
+                for neutral_run_ix in group_start..run_ix {
+                    let run = &plan.runs[neutral_run_ix];
+                    let split_start = starts.split.get(neutral_run_ix).copied().unwrap_or(0);
+                    let inline_start = starts.inline.get(neutral_run_ix).copied().unwrap_or(0);
+                    for row_ix in
+                        split_start..split_start.saturating_add(run.row_len()).min(split.len())
+                    {
+                        split[row_ix] = RK::Context;
+                    }
+                    for inline_ix in inline_start
+                        ..inline_start
+                            .saturating_add(run.inline_row_len())
+                            .min(inline.len())
+                    {
+                        inline[inline_ix] = DK::Context;
+                    }
+                }
+            }
+        }
+    }
+
+    (split.into_boxed_slice(), inline.into_boxed_slice())
+}
+
 #[derive(Debug)]
 struct StreamedFileDiffSource {
     plan: Arc<gitcomet_core::file_diff::FileDiffPlan>,
     old_source: IndexedFileDiffSource,
     new_source: IndexedFileDiffSource,
+    split_visual_kinds: Box<[gitcomet_core::file_diff::FileDiffRowKind]>,
+    inline_visual_kinds: Box<[gitcomet_core::domain::DiffLineKind]>,
     run_starts: std::sync::OnceLock<StreamedFileDiffRunStarts>,
 }
 
@@ -496,11 +665,20 @@ impl StreamedFileDiffSource {
         plan: Arc<gitcomet_core::file_diff::FileDiffPlan>,
         old_source: IndexedFileDiffSource,
         new_source: IndexedFileDiffSource,
+        whitespace_mode: DiffWhitespaceMode,
     ) -> Self {
+        let (split_visual_kinds, inline_visual_kinds) = visual_kinds_for_file_diff_plan(
+            plan.as_ref(),
+            &old_source,
+            &new_source,
+            whitespace_mode,
+        );
         Self {
             plan,
             old_source,
             new_source,
+            split_visual_kinds,
+            inline_visual_kinds,
             run_starts: std::sync::OnceLock::new(),
         }
     }
@@ -524,6 +702,17 @@ impl StreamedFileDiffSource {
 
     fn inline_len(&self) -> usize {
         self.plan.inline_row_count
+    }
+
+    fn split_visual_kind(
+        &self,
+        row_ix: usize,
+    ) -> Option<gitcomet_core::file_diff::FileDiffRowKind> {
+        self.split_visual_kinds.get(row_ix).copied()
+    }
+
+    fn inline_visual_kind(&self, inline_ix: usize) -> Option<gitcomet_core::domain::DiffLineKind> {
+        self.inline_visual_kinds.get(inline_ix).copied()
     }
 
     fn old_line_shared_text(&self, line_ix: usize) -> gitcomet_core::file_diff::FileDiffLineText {
@@ -863,26 +1052,30 @@ impl StreamedFileDiffSource {
     }
 
     fn change_visible_indices_for_runs(&self, inline: bool) -> Vec<usize> {
-        let starts = if inline {
-            self.inline_run_starts()
+        let len = if inline {
+            self.plan.inline_row_count
         } else {
-            self.split_run_starts()
+            self.plan.row_count
         };
         let mut out = Vec::new();
-        let mut in_change_block = false;
 
-        for (run_ix, run) in self.plan.runs.iter().enumerate() {
-            let is_change = !matches!(
-                run.kind(),
-                gitcomet_core::file_diff::FileDiffRowKind::Context
-            );
-            if is_change
-                && !in_change_block
-                && let Some(start) = starts.get(run_ix).copied()
-            {
-                out.push(start);
+        for row_ix in 0..len {
+            let is_change = if inline {
+                self.inline_visual_kind(row_ix).is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        gitcomet_core::domain::DiffLineKind::Add
+                            | gitcomet_core::domain::DiffLineKind::Remove
+                    )
+                })
+            } else {
+                self.split_visual_kind(row_ix).is_some_and(|kind| {
+                    !matches!(kind, gitcomet_core::file_diff::FileDiffRowKind::Context)
+                })
+            };
+            if is_change {
+                out.push(row_ix);
             }
-            in_change_block = is_change;
         }
 
         out
@@ -897,33 +1090,54 @@ impl StreamedFileDiffSource {
     }
 
     fn split_scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
-        let starts = self.split_run_starts();
-        scrollbar_markers_from_row_ranges(
-            self.plan.row_count,
-            self.plan.runs.iter().enumerate().map(|(run_ix, run)| {
-                let start = starts.get(run_ix).copied().unwrap_or(0);
-                let end = start.saturating_add(run.row_len());
-                (start, end, file_diff_row_flag(run.kind()))
-            }),
-        )
+        let mut ranges = Vec::new();
+        let mut start = 0usize;
+        while start < self.plan.row_count {
+            let flag = self
+                .split_visual_kind(start)
+                .map(file_diff_row_flag)
+                .unwrap_or(0);
+            let mut end = start.saturating_add(1);
+            while end < self.plan.row_count
+                && self
+                    .split_visual_kind(end)
+                    .map(file_diff_row_flag)
+                    .unwrap_or(0)
+                    == flag
+            {
+                end = end.saturating_add(1);
+            }
+            ranges.push((start, end, flag));
+            start = end;
+        }
+        scrollbar_markers_from_row_ranges(self.plan.row_count, ranges)
     }
 
     fn inline_scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
-        let starts = self.inline_run_starts();
-        scrollbar_markers_from_row_ranges(
-            self.plan.inline_row_count,
-            self.plan.runs.iter().enumerate().map(|(run_ix, run)| {
-                let start = starts.get(run_ix).copied().unwrap_or(0);
-                let end = start.saturating_add(run.inline_row_len());
-                let flag = match run.kind() {
-                    gitcomet_core::file_diff::FileDiffRowKind::Context => 0,
-                    gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
-                    gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
-                    gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
+        let mut ranges = Vec::new();
+        let mut start = 0usize;
+        while start < self.plan.inline_row_count {
+            let flag = match self.inline_visual_kind(start) {
+                Some(gitcomet_core::domain::DiffLineKind::Add) => 1,
+                Some(gitcomet_core::domain::DiffLineKind::Remove) => 2,
+                _ => 0,
+            };
+            let mut end = start.saturating_add(1);
+            while end < self.plan.inline_row_count {
+                let next_flag = match self.inline_visual_kind(end) {
+                    Some(gitcomet_core::domain::DiffLineKind::Add) => 1,
+                    Some(gitcomet_core::domain::DiffLineKind::Remove) => 2,
+                    _ => 0,
                 };
-                (start, end, flag)
-            }),
-        )
+                if next_flag != flag {
+                    break;
+                }
+                end = end.saturating_add(1);
+            }
+            ranges.push((start, end, flag));
+            start = end;
+        }
+        scrollbar_markers_from_row_ranges(self.plan.inline_row_count, ranges)
     }
 
     fn build_inline_text(&self) -> SharedString {
@@ -1149,6 +1363,13 @@ impl PagedFileDiffRows {
         self.source.split_scrollbar_markers()
     }
 
+    pub(in crate::view) fn visual_kind(
+        &self,
+        row_ix: usize,
+    ) -> Option<gitcomet_core::file_diff::FileDiffRowKind> {
+        self.source.split_visual_kind(row_ix)
+    }
+
     pub(in crate::view) fn modify_pair_texts(
         &self,
         row_ix: usize,
@@ -1262,6 +1483,13 @@ impl PagedFileDiffInlineRows {
 
     pub(in crate::view) fn scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
         self.source.inline_scrollbar_markers()
+    }
+
+    pub(in crate::view) fn visual_kind(
+        &self,
+        inline_ix: usize,
+    ) -> Option<gitcomet_core::domain::DiffLineKind> {
+        self.source.inline_visual_kind(inline_ix)
     }
 
     pub(in crate::view) fn modify_pair_texts(
@@ -1626,13 +1854,14 @@ pub(in crate::view) fn build_file_diff_cache_rebuild(
     file: &gitcomet_core::domain::FileDiffText,
     workdir: &std::path::Path,
 ) -> Result<FileDiffCacheRebuild, String> {
-    build_file_diff_cache_rebuild_with_patch(file, workdir, None)
+    build_file_diff_cache_rebuild_with_patch(file, workdir, None, DiffWhitespaceMode::Show)
 }
 
 pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     file: &gitcomet_core::domain::FileDiffText,
     workdir: &std::path::Path,
     patch_diff: Option<&gitcomet_core::domain::Diff>,
+    whitespace_mode: DiffWhitespaceMode,
 ) -> Result<FileDiffCacheRebuild, String> {
     let old_source = index_file_diff_side(file.old_source.as_ref(), file.old.as_ref())?;
     let new_source = index_file_diff_side(file.new_source.as_ref(), file.new.as_ref())?;
@@ -1658,6 +1887,7 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
         Arc::clone(&plan),
         old_source,
         new_source,
+        whitespace_mode,
     ));
     let row_provider = Arc::new(PagedFileDiffRows::new(
         Arc::clone(&source),
@@ -1713,7 +1943,11 @@ mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
 
-    fn streamed_file_diff_source_for_test(old: &str, new: &str) -> Arc<StreamedFileDiffSource> {
+    fn streamed_file_diff_source_for_test_with_mode(
+        old: &str,
+        new: &str,
+        whitespace_mode: DiffWhitespaceMode,
+    ) -> Arc<StreamedFileDiffSource> {
         let old_text_arc = Arc::<str>::from(old);
         let new_text_arc = Arc::<str>::from(new);
         let old_source = IndexedFileDiffSource::from_shared(Some(&old_text_arc));
@@ -1726,7 +1960,16 @@ mod tests {
             &new_text,
             new_source.line_starts.as_ref(),
         ));
-        Arc::new(StreamedFileDiffSource::new(plan, old_source, new_source))
+        Arc::new(StreamedFileDiffSource::new(
+            plan,
+            old_source,
+            new_source,
+            whitespace_mode,
+        ))
+    }
+
+    fn streamed_file_diff_source_for_test(old: &str, new: &str) -> Arc<StreamedFileDiffSource> {
+        streamed_file_diff_source_for_test_with_mode(old, new, DiffWhitespaceMode::Show)
     }
 
     fn prepare_test_document(
@@ -1795,6 +2038,105 @@ mod tests {
     fn build_inline_text_returns_empty_for_empty_rows() {
         let text = build_inline_text(&[]);
         assert!(text.as_ref().is_empty());
+    }
+
+    #[test]
+    fn file_diff_visual_kinds_ignore_whitespace_only_changes() {
+        let source = streamed_file_diff_source_for_test_with_mode(
+            "let\tvalue = 1;\n",
+            "let value=1;\n",
+            DiffWhitespaceMode::Ignore,
+        );
+        let split = PagedFileDiffRows::new(Arc::clone(&source), 1);
+        let inline = PagedFileDiffInlineRows::new(Arc::clone(&source), 1);
+
+        let split_raw = split
+            .slice(0, split.len_hint())
+            .map(|row| row.kind)
+            .collect::<Vec<_>>();
+        let inline_raw = inline
+            .slice(0, inline.len_hint())
+            .map(|row| row.kind)
+            .collect::<Vec<_>>();
+        let split_visual = (0..split.len_hint())
+            .map(|ix| split.visual_kind(ix).expect("split visual kind"))
+            .collect::<Vec<_>>();
+        let inline_visual = (0..inline.len_hint())
+            .map(|ix| inline.visual_kind(ix).expect("inline visual kind"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            split_raw,
+            vec![gitcomet_core::file_diff::FileDiffRowKind::Modify]
+        );
+        assert_eq!(
+            inline_raw,
+            vec![
+                gitcomet_core::domain::DiffLineKind::Remove,
+                gitcomet_core::domain::DiffLineKind::Add
+            ]
+        );
+        assert_eq!(
+            split_visual,
+            vec![gitcomet_core::file_diff::FileDiffRowKind::Context]
+        );
+        assert_eq!(
+            inline_visual,
+            vec![
+                gitcomet_core::domain::DiffLineKind::Context,
+                gitcomet_core::domain::DiffLineKind::Context
+            ]
+        );
+        assert!(split.change_visible_indices().is_empty());
+        assert!(inline.change_visible_indices().is_empty());
+        assert!(split.scrollbar_markers().is_empty());
+        assert!(inline.scrollbar_markers().is_empty());
+    }
+
+    #[test]
+    fn file_diff_visual_kinds_ignore_line_break_only_changes() {
+        let source = streamed_file_diff_source_for_test_with_mode(
+            "foo\nbar\n",
+            "foobar\n",
+            DiffWhitespaceMode::Ignore,
+        );
+        let split = PagedFileDiffRows::new(Arc::clone(&source), 1);
+        let inline = PagedFileDiffInlineRows::new(Arc::clone(&source), 1);
+
+        let split_visual = (0..split.len_hint())
+            .map(|ix| split.visual_kind(ix).expect("split visual kind"))
+            .collect::<Vec<_>>();
+        let inline_visual = (0..inline.len_hint())
+            .map(|ix| inline.visual_kind(ix).expect("inline visual kind"))
+            .collect::<Vec<_>>();
+
+        assert!(!split_visual.is_empty());
+        assert!(!inline_visual.is_empty());
+        assert!(
+            split_visual
+                .iter()
+                .all(|kind| *kind == gitcomet_core::file_diff::FileDiffRowKind::Context)
+        );
+        assert!(
+            inline_visual
+                .iter()
+                .all(|kind| *kind == gitcomet_core::domain::DiffLineKind::Context)
+        );
+        assert!(split.change_visible_indices().is_empty());
+        assert!(inline.change_visible_indices().is_empty());
+    }
+
+    #[test]
+    fn file_diff_change_visible_indices_include_every_changed_row() {
+        let source = streamed_file_diff_source_for_test(
+            "alpha\nold one\nold two\nold three\nomega\n",
+            "alpha\nnew one\nnew two\nnew three\nomega\n",
+        );
+        let split = PagedFileDiffRows::new(Arc::clone(&source), 1);
+        let inline = PagedFileDiffInlineRows::new(Arc::clone(&source), 1);
+
+        assert_eq!(split.change_visible_indices(), vec![1, 2, 3]);
+        assert_eq!(inline.change_visible_indices(), vec![1, 2, 3, 4, 5, 6]);
     }
 
     #[test]
