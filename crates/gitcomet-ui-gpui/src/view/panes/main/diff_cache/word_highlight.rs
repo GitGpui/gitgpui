@@ -9,6 +9,15 @@ impl MainPaneView {
             return ranges.clone();
         }
 
+        if !matches!(
+            self.file_diff_inline_visual_kind(inline_ix),
+            gitcomet_core::domain::DiffLineKind::Add | gitcomet_core::domain::DiffLineKind::Remove
+        ) {
+            self.file_diff_inline_word_highlights
+                .put(inline_ix, Vec::new());
+            return Vec::new();
+        }
+
         let ranges = self
             .file_diff_inline_modify_pair_texts(inline_ix)
             .map(|(old, new, kind)| {
@@ -45,6 +54,18 @@ impl MainPaneView {
             } else {
                 ranges.new.clone()
             };
+        }
+
+        if !matches!(
+            self.file_diff_split_visual_kind(row_ix),
+            gitcomet_core::file_diff::FileDiffRowKind::Modify
+        ) {
+            let ranges = FileDiffSplitWordHighlights {
+                old: Vec::new(),
+                new: Vec::new(),
+            };
+            self.file_diff_split_word_highlights.put(row_ix, ranges);
+            return Vec::new();
         }
 
         let pair = self.file_diff_split_modify_pair_texts(row_ix).or_else(|| {

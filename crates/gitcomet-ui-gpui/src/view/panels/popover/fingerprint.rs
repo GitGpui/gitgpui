@@ -50,6 +50,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             }
         }
         PopoverKind::DiffContentModeSettings
+        | PopoverKind::DiffActionMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::AppMenu => {
@@ -118,6 +119,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::DiffActionMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker => None,
 
@@ -272,6 +274,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::DiffActionMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -330,6 +333,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
+        PopoverKind::DiffActionMenu => 69u8.hash(hasher),
 
         PopoverKind::ResetPrompt {
             repo_id,

@@ -102,7 +102,7 @@ clru	0.6.3	MIT
 cocoa	0.26.1	MIT OR Apache-2.0
 cocoa-foundation	0.2.1	MIT OR Apache-2.0
 codespan-reporting	0.13.1	Apache-2.0
-collections-gpui-unofficial	1.2.6	Apache-2.0
+collections-gpui-unofficial	1.2.7	Apache-2.0
 color_quant	1.1.0	MIT
 colorchoice	1.0.5	MIT OR Apache-2.0
 command-fds	0.3.3	Apache-2.0
@@ -135,6 +135,7 @@ crossbeam-utils	0.8.21	MIT OR Apache-2.0
 crunchy	0.2.4	MIT
 crypto-common	0.1.7	MIT OR Apache-2.0
 ctor	1.0.6	Apache-2.0 OR MIT
+cty	0.2.2	MIT OR Apache-2.0
 dashmap	6.2.1	MIT
 data-url	0.3.2	MIT OR Apache-2.0
 deflate64	0.1.12	MIT
@@ -278,7 +279,7 @@ gpu-descriptor	0.3.2	MIT OR Apache-2.0
 gpu-descriptor-types	0.2.0	MIT OR Apache-2.0
 gpui-ce	0.3.3	Apache-2.0
 gpui-ce-macros	0.1.0	Apache-2.0
-gpui-util-gpui-unofficial	1.2.6	Apache-2.0
+gpui-util-gpui-unofficial	1.2.7	Apache-2.0
 grid	1.0.1	MIT
 half	2.7.1	MIT OR Apache-2.0
 harfrust	0.5.2	MIT
@@ -298,7 +299,7 @@ hmac	0.12.1	MIT OR Apache-2.0
 home	0.5.12	MIT OR Apache-2.0
 http	1.4.0	MIT OR Apache-2.0
 http-body	1.0.1	MIT
-http-client-gpui-unofficial	1.2.6	Apache-2.0
+http-client-gpui-unofficial	1.2.7	Apache-2.0
 human_format	1.2.1	MIT
 iana-time-zone	0.1.65	MIT OR Apache-2.0
 iana-time-zone-haiku	0.1.2	MIT OR Apache-2.0
@@ -357,7 +358,7 @@ libc	0.2.186	MIT OR Apache-2.0
 libfuzzer-sys	0.4.12	(MIT OR Apache-2.0) AND NCSA
 libloading	0.8.9	ISC
 libm	0.2.16	MIT
-libmimalloc-sys	0.1.47	MIT
+libmimalloc-sys	0.1.48	MIT
 libredox	0.1.16	MIT
 libz-sys	1.1.28	MIT OR Apache-2.0
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT
@@ -387,7 +388,7 @@ memchr	2.8.0	Unlicense OR MIT
 memmap2	0.9.10	MIT OR Apache-2.0
 memoffset	0.9.1	MIT
 metal	0.33.0	MIT OR Apache-2.0
-mimalloc	0.1.50	MIT
+mimalloc	0.1.51	MIT
 miniz_oxide	0.8.9	MIT OR Zlib OR Apache-2.0
 mio	1.2.0	MIT
 moxcms	0.8.1	BSD-3-Clause OR Apache-2.0
@@ -471,7 +472,7 @@ profiling	1.0.18	MIT OR Apache-2.0
 profiling-procmacros	1.0.18	MIT OR Apache-2.0
 proptest	1.11.0	MIT OR Apache-2.0
 psm	0.1.31	MIT OR Apache-2.0
-pulldown-cmark	0.13.3	MIT
+pulldown-cmark	0.13.4	MIT
 pulldown-cmark-escape	0.11.0	MIT
 pxfm	0.1.29	BSD-3-Clause OR Apache-2.0
 qoi	0.4.1	MIT/Apache-2.0
@@ -613,7 +614,7 @@ toml_writer	1.1.1+spec-1.1.0	MIT OR Apache-2.0
 tracing	0.1.44	MIT
 tracing-attributes	0.1.31	MIT
 tracing-core	0.1.36	MIT
-tree-sitter	0.26.8	MIT
+tree-sitter	0.26.9	MIT
 tree-sitter-bash	0.25.1	MIT
 tree-sitter-bicep	1.1.0	MIT
 tree-sitter-c	0.24.2	MIT
@@ -676,7 +677,7 @@ usvg	0.47.0	Apache-2.0 OR MIT
 utf-8	0.7.6	MIT OR Apache-2.0
 utf8_iter	1.0.4	Apache-2.0 OR MIT
 utf8parse	0.2.2	Apache-2.0 OR MIT
-util-gpui-unofficial	1.2.6	Apache-2.0
+util-gpui-unofficial	1.2.7	Apache-2.0
 uuid	1.23.1	Apache-2.0 OR MIT
 v_frame	0.3.9	BSD-2-Clause
 value-bag	1.12.0	Apache-2.0 OR MIT

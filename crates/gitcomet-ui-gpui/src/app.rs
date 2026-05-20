@@ -614,8 +614,7 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
 
 fn install_global_diff_shortcut_fallback(cx: &mut App) {
     cx.observe_keystrokes(|event, window, cx| {
-        if event.action.is_some()
-            || !is_diff_shortcut_candidate(&event.keystroke)
+        if !is_diff_shortcut_candidate(&event.keystroke)
             || event
                 .context_stack
                 .iter()
@@ -634,7 +633,12 @@ fn install_global_diff_shortcut_fallback(cx: &mut App) {
         let handled = entry
             .main_pane
             .update(cx, |pane, cx| {
-                pane.handle_diff_shortcut(&event.keystroke, window, cx)
+                let handled = pane.handle_diff_shortcut(&event.keystroke, window, cx);
+                if handled {
+                    cx.notify();
+                    window.refresh();
+                }
+                handled
             })
             .unwrap_or(false);
         if handled {

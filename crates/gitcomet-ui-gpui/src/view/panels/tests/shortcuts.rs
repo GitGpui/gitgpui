@@ -313,6 +313,20 @@ fn diff_selection_anchor(
     cx.update(|_window, app| view.read(app).main_pane.read(app).diff_selection_anchor)
 }
 
+fn diff_selection_range(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<(usize, usize)> {
+    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_selection_range)
+}
+
+fn diff_text_has_selection(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> bool {
+    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_text_has_selection())
+}
+
 fn set_diff_selection_anchor(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -331,6 +345,53 @@ fn set_diff_selection_anchor(
     cx.run_until_parked();
 }
 
+fn set_diff_selection_area(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    anchor: Option<usize>,
+    range: Option<(usize, usize)>,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_selection_anchor = anchor;
+                pane.diff_selection_range = range;
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
+fn set_diff_text_selection_on_row(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    visible_ix: usize,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_text_anchor = Some(DiffTextPos {
+                    visible_ix,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                });
+                pane.diff_text_head = Some(DiffTextPos {
+                    visible_ix,
+                    region: DiffTextRegion::Inline,
+                    offset: 1,
+                });
+                pane.diff_selection_anchor = Some(visible_ix);
+                pane.diff_selection_range = None;
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
 fn diff_view_mode(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -338,11 +399,11 @@ fn diff_view_mode(
     cx.update(|_window, app| view.read(app).main_pane.read(app).diff_view)
 }
 
-fn show_whitespace(
+fn reveal_whitespace_chars(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
 ) -> bool {
-    cx.update(|_window, app| view.read(app).main_pane.read(app).show_whitespace)
+    cx.update(|_window, app| view.read(app).main_pane.read(app).reveal_whitespace_chars)
 }
 
 fn diff_search_active(
@@ -587,6 +648,29 @@ fn two_hunk_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
             },
         ],
     }
+}
+
+fn three_hunk_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
+    let mut diff = two_hunk_diff(target);
+    diff.lines.extend([
+        gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Context,
+            text: " unchanged again".into(),
+        },
+        gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Hunk,
+            text: "@@ -20 +20 @@".into(),
+        },
+        gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Remove,
+            text: "-old three".into(),
+        },
+        gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Add,
+            text: "+new three".into(),
+        },
+    ]);
+    diff
 }
 
 fn searchable_scroll_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
@@ -2016,7 +2100,7 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
         &path,
     );
     repo.diff_state.diff = Loadable::Ready(
-        two_hunk_diff(DiffTarget::WorkingTree {
+        three_hunk_diff(DiffTarget::WorkingTree {
             path: path.clone(),
             area: DiffArea::Unstaged,
         })
@@ -2066,7 +2150,50 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
         "expected a later diff change target after the second F7 navigation"
     );
 
-    set_diff_selection_anchor(cx, &view, Some(second_change));
+    set_diff_selection_area(
+        cx,
+        &view,
+        Some(first_change),
+        Some((first_change, second_change)),
+    );
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let third_change = diff_selection_anchor(cx, &view)
+        .expect("expected F3 from a selected diff area to reach the third diff change");
+    assert!(
+        third_change > second_change,
+        "expected F3 to continue after the selected diff area"
+    );
+    assert_eq!(
+        diff_selection_range(cx, &view),
+        Some((third_change, third_change)),
+        "expected F3 to replace the selected diff area with the target change"
+    );
+
+    set_diff_selection_area(
+        cx,
+        &view,
+        Some(third_change),
+        Some((second_change, third_change)),
+    );
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_selection_anchor(cx, &view),
+        Some(first_change),
+        "expected F2 to continue before the selected diff area"
+    );
+    assert_eq!(
+        diff_selection_range(cx, &view),
+        Some((first_change, first_change)),
+        "expected F2 to replace the selected diff area with the target change"
+    );
+
+    set_diff_text_selection_on_row(cx, &view, second_change);
+    assert!(
+        diff_text_has_selection(cx, &view),
+        "expected test setup to create a diff text selection"
+    );
     cx.simulate_keystrokes("f2");
     draw_and_drain_test_window(cx);
     assert_eq!(
@@ -2075,8 +2202,33 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
         "expected F2 from commit-message input to fall back to the previous diff change when search is inactive"
     );
     assert!(
+        !diff_text_has_selection(cx, &view),
+        "expected F2 to clear the active diff text selection"
+    );
+    assert!(
         commit_message_input_is_focused(cx, &view),
         "expected commit-message input to keep focus after F2 change navigation"
+    );
+
+    set_diff_text_selection_on_row(cx, &view, second_change);
+    assert!(
+        diff_text_has_selection(cx, &view),
+        "expected test setup to create a diff text selection"
+    );
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_selection_anchor(cx, &view),
+        Some(third_change),
+        "expected F3 from commit-message input to continue after the selected diff text"
+    );
+    assert!(
+        !diff_text_has_selection(cx, &view),
+        "expected F3 to clear the active diff text selection"
+    );
+    assert!(
+        commit_message_input_is_focused(cx, &view),
+        "expected commit-message input to keep focus after F3 change navigation"
     );
 
     set_diff_selection_anchor(cx, &view, Some(second_change));
@@ -2598,6 +2750,199 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
     assert!(
         cx.debug_bounds("diff_search_overlay").is_none(),
         "expected search close button to remove diff search overlay"
+    );
+}
+
+#[gpui::test]
+fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70546);
+    let commit_id = CommitId("1122334455667746".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_action_menu",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds("diff_whitespace_mode_header").is_none(),
+        "expected whitespace setting to be removed from the diff action bar"
+    );
+    let menu_bounds = cx
+        .debug_bounds("diff_action_menu")
+        .expect("expected diff action menu button in the diff action bar");
+    let close_bounds = cx
+        .debug_bounds("diff_close")
+        .expect("expected diff close button in the diff action bar");
+    assert!(
+        menu_bounds.right() <= close_bounds.left(),
+        "expected diff action menu button to be before the close button"
+    );
+
+    focus_diff_panel(cx, &view);
+    cx.simulate_click(menu_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let popover_kind = cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    });
+    assert_eq!(
+        popover_kind,
+        Some(PopoverKind::DiffActionMenu),
+        "expected clicking the cog to open the diff action menu"
+    );
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected opening the diff action menu to move focus away from the diff panel"
+    );
+
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected Escape to close the diff action menu"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected closing the diff action menu to restore diff-panel focus"
+    );
+
+    cx.simulate_click(menu_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+        }),
+        Some(PopoverKind::DiffActionMenu),
+        "expected reopening the cog menu to show diff actions"
+    );
+
+    let whitespace_bounds = cx
+        .debug_bounds("context_menu_show_whitespace_changes")
+        .expect("expected whitespace setting to be rendered in the diff action menu");
+    cx.simulate_click(whitespace_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let whitespace_mode =
+        cx.update(|_window, app| crate::view::test_support::diff_whitespace_mode(view.read(app)));
+    assert_eq!(
+        whitespace_mode,
+        DiffWhitespaceMode::Ignore,
+        "expected selecting the whitespace entry to toggle the global diff whitespace mode"
+    );
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the diff action menu to remain open after selecting whitespace mode"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected selecting whitespace mode to restore diff-panel focus"
+    );
+    assert!(
+        cx.debug_bounds("context_menu_show_whitespace_changes")
+            .is_some(),
+        "expected the whitespace setting to remain visible after toggling"
+    );
+}
+
+#[gpui::test]
+fn diff_view_toolbar_toggle_restores_diff_panel_focus(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70547);
+    let commit_id = CommitId("1122334455667747".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_view_toggle_focus",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    focus_commit_message_input(cx, &view);
+    let split_bounds = cx
+        .debug_bounds("diff_split")
+        .expect("expected split diff toolbar button");
+    cx.simulate_click(split_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_view_mode(cx, &view),
+        DiffViewMode::Split,
+        "expected clicking Split to switch diff view"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected clicking Split to restore diff-panel focus"
     );
 }
 
@@ -3176,7 +3521,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
-                pane.show_whitespace = false;
+                pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
         });
@@ -3210,7 +3555,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.show_whitespace = false;
+                pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
         });
@@ -3219,7 +3564,7 @@ fn commit_message_text_input_view_and_whitespace_shortcuts_do_not_fallback(
     cx.simulate_keystrokes("alt-w");
     draw_and_drain_test_window(cx);
     assert!(
-        !show_whitespace(cx, &view),
+        !reveal_whitespace_chars(cx, &view),
         "expected Alt-W from commit-message input to avoid toggling whitespace visibility"
     );
     assert!(
@@ -3493,13 +3838,22 @@ fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestA
     ));
     let first = std::path::PathBuf::from("src/first.rs");
     let second = std::path::PathBuf::from("src/second.rs");
-    let repo = simple_worktree_repo(
+    let mut repo = simple_worktree_repo(
         repo_id,
         &workdir,
         &commit_id,
         &[first.clone(), second.clone()],
         &first,
     );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: first.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    repo.diff_state.diff_rev = repo.diff_state.diff_rev.wrapping_add(1);
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
     bind_app_keys_and_global_diff_fallback_for_test(cx);
@@ -3524,12 +3878,19 @@ fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestA
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
-                pane.show_whitespace = false;
+                pane.reveal_whitespace_chars = false;
+                pane.diff_search_active = false;
+                pane.diff_search_matches.clear();
+                pane.diff_search_match_ix = None;
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
                 cx.notify();
             });
         });
         let _ = window.draw(app);
     });
+    draw_and_drain_test_window(cx);
+
     focus_detached_window_focus(cx);
     cx.simulate_keystrokes("alt-i");
     draw_and_drain_test_window(cx);
@@ -3552,8 +3913,34 @@ fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestA
     cx.simulate_keystrokes("alt-w");
     draw_and_drain_test_window(cx);
     assert!(
-        show_whitespace(cx, &view),
+        reveal_whitespace_chars(cx, &view),
         "expected Alt-W from detached focus to toggle whitespace visibility"
+    );
+
+    set_diff_selection_anchor(cx, &view, None);
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let first_change = diff_selection_anchor(cx, &view)
+        .expect("expected F3 from detached focus to navigate to the first diff change");
+
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let second_change = diff_selection_anchor(cx, &view)
+        .expect("expected F3 from detached focus to navigate to the second diff change");
+    assert!(
+        second_change > first_change,
+        "expected repeated F3 from detached focus to move forward through diff changes"
+    );
+
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        diff_selection_anchor(cx, &view),
+        Some(first_change),
+        "expected F2 from detached focus to move back to the previous diff change"
     );
 
     focus_detached_window_focus(cx);
@@ -3662,6 +4049,129 @@ fn detached_window_focus_conflict_quick_pick_uses_global_diff_shortcut_fallback(
         active_conflict_ix(cx, &view),
         1,
         "expected conflict quick-pick key from detached focus to pick the first conflict and advance"
+    );
+}
+
+#[gpui::test]
+fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70566);
+    let commit_id = CommitId("abcdef00112233aa".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_content_focus_switch",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    repo.diff_state.diff_rev = repo.diff_state.diff_rev.wrapping_add(1);
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+    focus_diff_panel(cx, &view);
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected the diff panel to be focused before opening diff mode settings"
+    );
+
+    open_popover_for_test(cx, &view, PopoverKind::DiffContentModeSettings);
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the diff mode settings popover to open"
+    );
+    assert!(
+        !diff_panel_is_focused(cx, &view),
+        "expected the diff mode settings popover to move focus away from the diff panel"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_activate_action(
+                    ContextMenuAction::SetDiffContentMode {
+                        mode: DiffContentMode::Collapsed,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed diff content mode with navigable changes",
+        |pane| {
+            pane.diff_content_mode == DiffContentMode::Collapsed
+                && pane.diff_nav_entries().len() >= 2
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_visible_len(),
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected selecting a diff mode to close the popover"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected selecting a diff mode to restore diff-panel focus"
+    );
+    assert_eq!(
+        cx.update(|_window, app| crate::view::test_support::diff_content_mode(view.read(app))),
+        DiffContentMode::Collapsed,
+        "expected selecting the collapsed entry to update the global diff content mode"
+    );
+
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let next_change = diff_selection_anchor(cx, &view)
+        .expect("expected F3 after closing diff mode settings to navigate to a change");
+
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    let previous_change = diff_selection_anchor(cx, &view)
+        .expect("expected F2 after closing diff mode settings to navigate to a change");
+    assert!(
+        previous_change < next_change,
+        "expected F2 after closing diff mode settings to refresh and move to the previous change"
     );
 }
 

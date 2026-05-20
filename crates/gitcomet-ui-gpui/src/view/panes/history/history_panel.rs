@@ -111,7 +111,7 @@ impl HistoryView {
                     window.focus(&this.history_panel_focus_handle, cx);
                 }),
             )
-            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
                 let key = e.keystroke.key.as_str();
                 let mods = e.keystroke.modifiers;
 
@@ -129,6 +129,7 @@ impl HistoryView {
                 if handled {
                     cx.stop_propagation();
                     cx.notify();
+                    window.refresh();
                 }
             }))
             .child(

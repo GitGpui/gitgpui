@@ -317,6 +317,28 @@ index 1111111..2222222 100644
     (unified, old_text, new_text)
 }
 
+fn build_full_diff_multi_line_change_fixture_texts() -> (String, String, String) {
+    let old_text = "alpha\nold one\nold two\nold three\nomega\n".to_string();
+    let new_text = "alpha\nnew one\nnew two\nnew three\nomega\n".to_string();
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,5 +1,5 @@
+ alpha
+-old one
+-old two
+-old three
++new one
++new two
++new three
+ omega
+"
+    .to_string();
+    (unified, old_text, new_text)
+}
+
 fn build_collapsed_diff_trailing_hscroll_fixture_texts() -> (String, String, String) {
     let old_lines = (1..=70usize)
         .map(|line| {
@@ -1722,6 +1744,275 @@ index 1111111..2222222 100644
                 pane.file_diff_split_row_len(),
             )
         },
+    );
+}
+
+fn set_diff_row_selection_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    anchor: usize,
+    range: (usize, usize),
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_selection_anchor = Some(anchor);
+                pane.diff_selection_range = Some(range);
+                pane.clear_diff_text_selection();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+}
+
+fn set_diff_text_selection_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    start_visible_ix: usize,
+    end_visible_ix: usize,
+    region: DiffTextRegion,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_text_anchor = Some(DiffTextPos {
+                    visible_ix: start_visible_ix,
+                    region,
+                    offset: 0,
+                });
+                pane.diff_text_head = Some(DiffTextPos {
+                    visible_ix: end_visible_ix,
+                    region,
+                    offset: 1,
+                });
+                pane.diff_selection_anchor = Some(end_visible_ix);
+                pane.diff_selection_range = None;
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+}
+
+fn assert_full_diff_change_shortcuts_visit_each_changed_row(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let path = PathBuf::from("src/lib.rs");
+    let (unified, old_text, new_text) = build_full_diff_multi_line_change_fixture_texts();
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "full diff fixture activates file diff view",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight.is_some(),
+                pane.file_diff_cache_target.clone(),
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_content_mode = DiffContentMode::Full;
+                pane.diff_view = diff_view;
+                pane.diff_selection_anchor = None;
+                pane.diff_selection_range = None;
+                pane.diff_autoscroll_pending = false;
+                pane.clear_diff_text_selection();
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "full diff has per-row navigation entries",
+        |pane| {
+            let entries = pane.diff_nav_entries();
+            pane.diff_content_mode == DiffContentMode::Full
+                && pane.diff_view == diff_view
+                && entries.len() >= 2
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.diff_visible_len(),
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+    let entries = cx.update(|_window, app| view.read(app).main_pane.read(app).diff_nav_entries());
+    assert_eq!(
+        entries[1],
+        entries[0].saturating_add(1),
+        "fixture should expose adjacent changed rows in one contiguous change block"
+    );
+    assert!(
+        entries.len() >= 3,
+        "fixture should expose at least three changed rows to test continuing from a selection"
+    );
+
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_anchor,
+            Some(entries[0]),
+            "first F3 should select the first changed row in Full diff {diff_view:?}"
+        );
+    });
+
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_anchor,
+            Some(entries[1]),
+            "second F3 should advance within the same Full diff change block in {diff_view:?}"
+        );
+    });
+
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_anchor,
+            Some(entries[0]),
+            "F2 should move back one changed row in Full diff {diff_view:?}"
+        );
+    });
+
+    set_diff_row_selection_for_test(cx, view, entries[0], (entries[0], entries[1]));
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_anchor,
+            Some(entries[2]),
+            "F3 should continue after the selected Full diff row range in {diff_view:?}"
+        );
+        assert_eq!(pane.diff_selection_range, Some((entries[2], entries[2])));
+    });
+
+    set_diff_row_selection_for_test(cx, view, entries[2], (entries[1], entries[2]));
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_anchor,
+            Some(entries[0]),
+            "F2 should continue before the selected Full diff row range in {diff_view:?}"
+        );
+        assert_eq!(pane.diff_selection_range, Some((entries[0], entries[0])));
+    });
+
+    let text_region = match diff_view {
+        DiffViewMode::Inline => DiffTextRegion::Inline,
+        DiffViewMode::Split => DiffTextRegion::SplitLeft,
+    };
+    set_diff_text_selection_for_test(cx, view, entries[0], entries[1], text_region);
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_anchor,
+            Some(entries[2]),
+            "F3 should continue after the selected Full diff text range in {diff_view:?}"
+        );
+        assert_eq!(pane.diff_selection_range, Some((entries[2], entries[2])));
+        assert_eq!(pane.diff_text_anchor, None);
+        assert_eq!(pane.diff_text_head, None);
+    });
+
+    set_diff_text_selection_for_test(cx, view, entries[1], entries[2], text_region);
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_anchor,
+            Some(entries[0]),
+            "F2 should continue before the selected Full diff text range in {diff_view:?}"
+        );
+        assert_eq!(pane.diff_selection_range, Some((entries[0], entries[0])));
+        assert_eq!(pane.diff_text_anchor, None);
+        assert_eq!(pane.diff_text_head, None);
+    });
+}
+
+#[gpui::test]
+fn full_diff_inline_change_shortcuts_visit_each_changed_row(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_change_shortcuts_visit_each_changed_row(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70601),
+        "full_diff_inline_row_nav",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_diff_split_change_shortcuts_visit_each_changed_row(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_change_shortcuts_visit_each_changed_row(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70602),
+        "full_diff_split_row_nav",
+        DiffViewMode::Split,
     );
 }
 
@@ -6989,6 +7280,11 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(
+            pane.diff_selection_anchor,
+            Some(visible_ix),
+            "double click on diff text should update the diff focus location"
+        );
+        assert_eq!(
             pane.diff_selection_range, None,
             "double click on diff text should not also select the row"
         );
@@ -8405,6 +8701,10 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_selection_anchor = None;
+                    pane.diff_selection_range = None;
+                    pane.diff_autoscroll_pending = false;
+                    pane.clear_diff_text_selection();
                     pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                     cx.notify();
                 });
@@ -10287,6 +10587,10 @@ fn file_diff_cache_rebuilds_when_patch_arrives_after_same_file_refresh(
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_selection_anchor = None;
+                    pane.diff_selection_range = None;
+                    pane.diff_autoscroll_pending = false;
+                    pane.clear_diff_text_selection();
                     pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                     cx.notify();
                 });
@@ -11725,6 +12029,10 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_selection_anchor = None;
+                    pane.diff_selection_range = None;
+                    pane.diff_autoscroll_pending = false;
+                    pane.clear_diff_text_selection();
                     pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                     cx.notify();
                 });
@@ -12706,6 +13014,10 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_selection_anchor = None;
+                    pane.diff_selection_range = None;
+                    pane.diff_autoscroll_pending = false;
+                    pane.clear_diff_text_selection();
                     pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                     cx.notify();
                 });
@@ -13772,6 +14084,10 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_selection_anchor = None;
+                    pane.diff_selection_range = None;
+                    pane.diff_autoscroll_pending = false;
+                    pane.clear_diff_text_selection();
                     pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                     cx.notify();
                 });
@@ -14573,6 +14889,10 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_selection_anchor = None;
+                    pane.diff_selection_range = None;
+                    pane.diff_autoscroll_pending = false;
+                    pane.clear_diff_text_selection();
                     pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
                     cx.notify();
                 });

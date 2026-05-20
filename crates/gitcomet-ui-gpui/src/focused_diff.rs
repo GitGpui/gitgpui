@@ -63,6 +63,7 @@ pub struct FocusedDiffConfig {
 struct FocusedDiffView {
     lines: Vec<DiffLine>,
     title: String,
+    diff_whitespace_mode: FocusedDiffWhitespaceMode,
     exit_code: Arc<AtomicI32>,
     focus_handle: FocusHandle,
     scroll_handle: ScrollHandle,
@@ -76,6 +77,7 @@ struct FocusedDiffView {
 #[derive(Clone, Debug)]
 struct DiffLine {
     kind: DiffLineKind,
+    visual_kind: DiffLineKind,
     content: String,
 }
 
@@ -88,6 +90,44 @@ enum DiffLineKind {
     Context,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum FocusedDiffWhitespaceMode {
+    #[default]
+    Show,
+    Ignore,
+}
+
+impl FocusedDiffWhitespaceMode {
+    fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "show" => Some(Self::Show),
+            "ignore" => Some(Self::Ignore),
+            _ => None,
+        }
+    }
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Show => "show",
+            Self::Ignore => "ignore",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Show => "Show",
+            Self::Ignore => "Ignore",
+        }
+    }
+
+    const fn toggled(self) -> Self {
+        match self {
+            Self::Show => Self::Ignore,
+            Self::Ignore => Self::Show,
+        }
+    }
+}
+
 impl FocusedDiffView {
     fn new(
         config: FocusedDiffConfig,
@@ -95,13 +135,18 @@ impl FocusedDiffView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let lines = parse_diff_lines(&config.diff_text);
+        let ui_session = session::load();
+        let diff_whitespace_mode = ui_session
+            .diff_whitespace_mode
+            .as_deref()
+            .and_then(FocusedDiffWhitespaceMode::from_key)
+            .unwrap_or_default();
+        let lines = parse_diff_lines(&config.diff_text, diff_whitespace_mode);
         let title = config
             .display_path
             .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
 
         let theme = AppTheme::default_for_window_appearance(window.appearance());
-        let ui_session = session::load();
         let ui_scale = crate::ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
@@ -109,6 +154,7 @@ impl FocusedDiffView {
         Self {
             lines,
             title,
+            diff_whitespace_mode,
             exit_code,
             focus_handle: cx.focus_handle(),
             scroll_handle: ScrollHandle::new(),
@@ -127,6 +173,23 @@ impl FocusedDiffView {
     fn close(&mut self, cx: &mut Context<Self>) {
         self.exit_code.store(0, Ordering::SeqCst);
         cx.quit();
+    }
+
+    fn set_diff_whitespace_mode(
+        &mut self,
+        mode: FocusedDiffWhitespaceMode,
+        cx: &mut Context<Self>,
+    ) {
+        if self.diff_whitespace_mode == mode {
+            return;
+        }
+        self.diff_whitespace_mode = mode;
+        apply_visual_diff_line_kinds(self.lines.as_mut_slice(), mode);
+        let _ = session::persist_ui_settings(session::UiSettings {
+            diff_whitespace_mode: Some(mode.key().to_string()),
+            ..session::UiSettings::default()
+        });
+        cx.notify();
     }
 
     fn set_ui_scale_percent(&mut self, percent: u32, window: &mut Window, cx: &mut Context<Self>) {
@@ -155,8 +218,9 @@ impl Focusable for FocusedDiffView {
     }
 }
 
-fn parse_diff_lines(text: &str) -> Vec<DiffLine> {
-    text.lines()
+fn parse_diff_lines(text: &str, whitespace_mode: FocusedDiffWhitespaceMode) -> Vec<DiffLine> {
+    let mut lines = text
+        .lines()
         .map(|line| {
             let kind = if line.starts_with("diff ")
                 || line.starts_with("index ")
@@ -175,10 +239,76 @@ fn parse_diff_lines(text: &str) -> Vec<DiffLine> {
             };
             DiffLine {
                 kind,
+                visual_kind: kind,
                 content: line.to_string(),
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    apply_visual_diff_line_kinds(lines.as_mut_slice(), whitespace_mode);
+    lines
+}
+
+fn diff_line_content(line: &DiffLine) -> &str {
+    match line.kind {
+        DiffLineKind::Add => line.content.strip_prefix('+').unwrap_or(&line.content),
+        DiffLineKind::Remove => line.content.strip_prefix('-').unwrap_or(&line.content),
+        DiffLineKind::Context => line.content.strip_prefix(' ').unwrap_or(&line.content),
+        DiffLineKind::Header | DiffLineKind::HunkHeader => &line.content,
+    }
+}
+
+fn push_non_whitespace(text: &str, out: &mut String) {
+    out.extend(text.chars().filter(|ch| !ch.is_whitespace()));
+}
+
+fn is_no_newline_marker(line: &DiffLine) -> bool {
+    line.content.starts_with("\\ No newline")
+}
+
+fn is_whitespace_group_line(line: &DiffLine) -> bool {
+    matches!(line.kind, DiffLineKind::Remove | DiffLineKind::Add) || is_no_newline_marker(line)
+}
+
+fn apply_visual_diff_line_kinds(
+    lines: &mut [DiffLine],
+    whitespace_mode: FocusedDiffWhitespaceMode,
+) {
+    for line in lines.iter_mut() {
+        line.visual_kind = line.kind;
+    }
+    if whitespace_mode == FocusedDiffWhitespaceMode::Show {
+        return;
+    }
+
+    let mut ix = 0usize;
+    while ix < lines.len() {
+        if !matches!(lines[ix].kind, DiffLineKind::Remove | DiffLineKind::Add) {
+            ix += 1;
+            continue;
+        }
+
+        let group_start = ix;
+        let mut old_stripped = String::new();
+        let mut new_stripped = String::new();
+        while ix < lines.len() && is_whitespace_group_line(&lines[ix]) {
+            match lines[ix].kind {
+                DiffLineKind::Remove => {
+                    push_non_whitespace(diff_line_content(&lines[ix]), &mut old_stripped)
+                }
+                DiffLineKind::Add => {
+                    push_non_whitespace(diff_line_content(&lines[ix]), &mut new_stripped)
+                }
+                DiffLineKind::Header | DiffLineKind::HunkHeader | DiffLineKind::Context => {}
+            }
+            ix += 1;
+        }
+
+        if old_stripped == new_stripped {
+            for line in &mut lines[group_start..ix] {
+                line.visual_kind = DiffLineKind::Context;
+            }
+        }
+    }
 }
 
 impl Render for FocusedDiffView {
@@ -186,6 +316,7 @@ impl Render for FocusedDiffView {
         let theme = self.theme;
         let line_count = self.lines.len();
         let scaled_px = |value| crate::ui_scale::design_px_from_window(value, window);
+        let next_whitespace_mode = self.diff_whitespace_mode.toggled();
 
         div()
             .id("focused-diff-root")
@@ -250,6 +381,25 @@ impl Render for FocusedDiffView {
                     )
                     .child(
                         div()
+                            .id("btn-whitespace-mode")
+                            .px(scaled_px(10.0))
+                            .py(scaled_px(4.0))
+                            .border_1()
+                            .border_color(theme.colors.border)
+                            .rounded(scaled_px(2.0))
+                            .cursor_pointer()
+                            .on_click(cx.listener(
+                                move |this, _e: &gpui::ClickEvent, _window, cx| {
+                                    this.set_diff_whitespace_mode(next_whitespace_mode, cx);
+                                },
+                            ))
+                            .child(SharedString::from(format!(
+                                "Whitespace: {}",
+                                self.diff_whitespace_mode.label()
+                            ))),
+                    )
+                    .child(
+                        div()
                             .id("btn-close")
                             .px(scaled_px(10.0))
                             .py(scaled_px(4.0))
@@ -290,7 +440,7 @@ fn render_diff_line(
     theme: &AppTheme,
     window: &Window,
 ) -> impl IntoElement {
-    let (text_color, bg) = match line.kind {
+    let (text_color, bg) = match line.visual_kind {
         DiffLineKind::Header => (theme.colors.text_muted, None),
         DiffLineKind::HunkHeader => (theme.colors.accent, None),
         DiffLineKind::Add => (theme.colors.diff_add_text, Some(theme.colors.diff_add_bg)),
@@ -481,7 +631,7 @@ index 1234567..abcdef0 100644
 -removed
 +added
 ";
-        let lines = parse_diff_lines(diff);
+        let lines = parse_diff_lines(diff, FocusedDiffWhitespaceMode::Show);
 
         assert_eq!(lines[0].kind, DiffLineKind::Header); // diff --git
         assert_eq!(lines[1].kind, DiffLineKind::Header); // index
@@ -495,14 +645,50 @@ index 1234567..abcdef0 100644
 
     #[test]
     fn parse_empty_diff() {
-        let lines = parse_diff_lines("");
+        let lines = parse_diff_lines("", FocusedDiffWhitespaceMode::Show);
         assert!(lines.is_empty());
     }
 
     #[test]
     fn parse_no_diff_only_context() {
-        let lines = parse_diff_lines("hello\nworld\n");
+        let lines = parse_diff_lines("hello\nworld\n", FocusedDiffWhitespaceMode::Show);
         assert!(lines.iter().all(|l| l.kind == DiffLineKind::Context));
+    }
+
+    #[test]
+    fn parse_diff_lines_ignore_whitespace_handles_eof_newline_markers() {
+        let diff = "\
+@@ -1 +1 @@
+-foo
+\\ No newline at end of file
++foo
+";
+        let lines = parse_diff_lines(diff, FocusedDiffWhitespaceMode::Ignore);
+
+        assert_eq!(lines[1].kind, DiffLineKind::Remove);
+        assert_eq!(lines[2].kind, DiffLineKind::Context);
+        assert_eq!(lines[3].kind, DiffLineKind::Add);
+        assert_eq!(lines[1].visual_kind, DiffLineKind::Context);
+        assert_eq!(lines[2].visual_kind, DiffLineKind::Context);
+        assert_eq!(lines[3].visual_kind, DiffLineKind::Context);
+    }
+
+    #[test]
+    fn parse_diff_lines_ignore_whitespace_neutralizes_visual_kinds() {
+        let diff = "\
+@@ -1,2 +1 @@
+-foo
+-bar
++foobar
+";
+        let lines = parse_diff_lines(diff, FocusedDiffWhitespaceMode::Ignore);
+
+        assert_eq!(lines[1].kind, DiffLineKind::Remove);
+        assert_eq!(lines[2].kind, DiffLineKind::Remove);
+        assert_eq!(lines[3].kind, DiffLineKind::Add);
+        assert_eq!(lines[1].visual_kind, DiffLineKind::Context);
+        assert_eq!(lines[2].visual_kind, DiffLineKind::Context);
+        assert_eq!(lines[3].visual_kind, DiffLineKind::Context);
     }
 
     #[gpui::test]

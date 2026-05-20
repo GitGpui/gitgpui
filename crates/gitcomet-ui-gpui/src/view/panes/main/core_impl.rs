@@ -801,6 +801,7 @@ impl MainPaneView {
         show_timezone: bool,
         diff_scroll_sync: DiffScrollSync,
         diff_content_mode: DiffContentMode,
+        diff_whitespace_mode: DiffWhitespaceMode,
         history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
@@ -992,12 +993,13 @@ impl MainPaneView {
             layout_details_render_width: px(420.0),
             layout_sidebar_collapsed: false,
             layout_details_collapsed: false,
-            show_whitespace: false,
+            reveal_whitespace_chars: false,
             diff_view: DiffViewMode::Split,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap: false,
             diff_scroll_sync,
             diff_content_mode,
+            diff_whitespace_mode,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
             diff_split_last_synced_x: [px(0.0); 2],
@@ -1015,6 +1017,7 @@ impl MainPaneView {
             diff_yaml_block_scalar_for_src_ix: Vec::new(),
             diff_click_kinds: Vec::new(),
             diff_line_kind_for_src_ix: Vec::new(),
+            diff_visual_line_kind_for_src_ix: Vec::new(),
             diff_hide_unified_header_for_src_ix: Vec::new(),
             diff_header_display_cache: HashMap::default(),
             diff_split_cache: Vec::new(),
@@ -1067,6 +1070,7 @@ impl MainPaneView {
             file_diff_cache_repo_id: None,
             file_diff_cache_rev: 0,
             file_diff_cache_content_signature: None,
+            file_diff_cache_whitespace_mode: diff_whitespace_mode,
             file_diff_cache_target: None,
             file_diff_cache_error: None,
             file_diff_cache_path: None,
@@ -2611,6 +2615,8 @@ impl MainPaneView {
         self.diff_selection_range = None;
         self.clear_diff_text_style_caches();
         self.clear_diff_text_query_overlay_cache();
+        self.clear_conflict_diff_style_caches();
+        self.clear_conflict_diff_query_overlay_caches();
         self.clear_worktree_preview_segments_cache();
         self.reset_collapsed_diff_projection(false);
         self.ensure_rendered_patch_diff_cache(cx);
@@ -2619,6 +2625,45 @@ impl MainPaneView {
         }
         if self.current_main_diff_wants_file_diff() {
             self.ensure_file_image_diff_cache(cx);
+        }
+        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            self.diff_search_recompute_matches_preserving_current();
+        }
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_diff_whitespace_mode(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_whitespace_mode == next {
+            return;
+        }
+
+        self.diff_whitespace_mode = next;
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
+        self.rebuild_patch_visual_line_kinds_from_current_diff();
+        self.diff_word_highlights.clear();
+        self.diff_word_highlights_inflight = None;
+        self.file_diff_inline_word_highlights =
+            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
+        self.file_diff_split_word_highlights =
+            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
+        self.clear_diff_text_style_caches();
+        self.clear_diff_text_query_overlay_cache();
+        self.clear_conflict_diff_style_caches();
+        self.clear_conflict_diff_query_overlay_caches();
+        self.conflict_three_way_segments_cache.clear();
+        self.clear_worktree_preview_segments_cache();
+        self.reset_collapsed_diff_projection(false);
+        self.diff_visible_cache_len = 0;
+        self.diff_visible_cache_projection_rev = u64::MAX;
+        self.diff_scrollbar_markers_cache.clear();
+        if self.current_main_diff_supports_diff_content_toggle() {
+            self.reset_file_diff_cache_data();
+            self.ensure_file_diff_cache(cx);
         }
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches_preserving_current();
@@ -2818,6 +2863,7 @@ impl MainPaneView {
         self.file_diff_cache_repo_id == Some(repo_id)
             && self.file_diff_cache_rev == diff_file_rev
             && self.file_diff_cache_target == Some(diff_target)
+            && self.file_diff_cache_whitespace_mode == self.diff_whitespace_mode
             && self.file_diff_cache_path.as_ref() == Some(&abs_path)
     }
 
@@ -2844,6 +2890,7 @@ impl MainPaneView {
             repo_id,
             diff_target,
             file_path: abs_path,
+            diff_whitespace_mode: self.diff_whitespace_mode,
             patch_content_signature: self.diff_cache_content_signature,
             file_content_signature: self.file_diff_cache_content_signature,
         })
@@ -2885,6 +2932,20 @@ impl MainPaneView {
         let root_view = self.root_view.clone();
         let _ = root_view.update(cx, |root, cx| {
             root.sync_diff_content_mode_from_pane(next, cx);
+        });
+    }
+
+    pub(in crate::view) fn set_diff_whitespace_mode_and_persist(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_whitespace_mode != next {
+            self.set_diff_whitespace_mode(next, cx);
+        }
+        let root_view = self.root_view.clone();
+        let _ = root_view.update(cx, |root, cx| {
+            root.sync_diff_whitespace_mode_from_pane(next, cx);
         });
     }
 
@@ -3752,6 +3813,7 @@ impl MainPaneView {
                 region,
                 offset: end_offset,
             });
+            self.sync_diff_focus_to_text_selection();
             return;
         }
 
@@ -3777,6 +3839,7 @@ impl MainPaneView {
                 region: DiffTextRegion::Inline,
                 offset: end_offset,
             });
+            self.sync_diff_focus_to_text_selection();
             return;
         }
 
@@ -3809,6 +3872,7 @@ impl MainPaneView {
             region: end_region,
             offset: end_offset,
         });
+        self.sync_diff_focus_to_text_selection();
     }
 
     pub(super) fn split_next_boundary_visible_ix(

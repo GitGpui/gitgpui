@@ -85,6 +85,7 @@ impl PopoverWidthSpec {
 const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 320.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
+const DIFF_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 320.0);
 const DIFF_EDITOR_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 260.0);
 const CONFLICT_INPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 280.0);
 const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 190.0, 280.0);
@@ -113,6 +114,7 @@ pub(in super::super) struct PopoverHost {
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
     diff_content_mode: DiffContentMode,
+    diff_whitespace_mode: DiffWhitespaceMode,
     _ui_model_subscription: gpui::Subscription,
     _clone_repo_url_input_subscription: gpui::Subscription,
     _clone_repo_parent_dir_input_subscription: gpui::Subscription,
@@ -255,6 +257,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
         kind,
         PopoverKind::PullPicker
             | PopoverKind::PushPicker
+            | PopoverKind::DiffActionMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
@@ -340,6 +343,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
+        | PopoverKind::DiffActionMenu
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
@@ -423,6 +427,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
+        PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CommitMenu { .. }
@@ -533,6 +538,7 @@ impl PopoverHost {
         show_timezone: bool,
         change_tracking_view: ChangeTrackingView,
         diff_content_mode: DiffContentMode,
+        diff_whitespace_mode: DiffWhitespaceMode,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
@@ -961,6 +967,7 @@ impl PopoverHost {
             show_timezone,
             change_tracking_view,
             diff_content_mode,
+            diff_whitespace_mode,
             _ui_model_subscription: subscription,
             _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
             _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
@@ -1127,6 +1134,8 @@ impl PopoverHost {
             self.popover,
             Some(
                 PopoverKind::ChangeTrackingSettings
+                    | PopoverKind::DiffContentModeSettings
+                    | PopoverKind::DiffActionMenu
                     | PopoverKind::DiffHunkMenu { .. }
                     | PopoverKind::DiffEditorMenu { .. }
             )
@@ -1943,6 +1952,21 @@ impl PopoverHost {
         }
     }
 
+    pub(in super::super) fn sync_diff_whitespace_mode(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_whitespace_mode == next {
+            return;
+        }
+
+        self.diff_whitespace_mode = next;
+        if matches!(self.popover, Some(PopoverKind::DiffActionMenu)) {
+            cx.notify();
+        }
+    }
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
         let _ = self.root_view.update(cx, |root, cx| {
@@ -2183,6 +2207,7 @@ impl PopoverHost {
             PopoverKind::PullReconcilePrompt { repo_id } => {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
+            PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
             }
