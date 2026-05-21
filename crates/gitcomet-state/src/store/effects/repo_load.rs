@@ -6,7 +6,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
-use gitcomet_core::services::{ConflictFileStages, GitBackend, GitRepository};
+use gitcomet_core::services::{CancellationToken, ConflictFileStages, GitBackend, GitRepository};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -497,6 +497,7 @@ pub(super) fn schedule_load_tags(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
     spawn_with_repo_or_else(
         executor,
@@ -508,7 +509,7 @@ pub(super) fn schedule_load_tags(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
                     repo_id,
-                    result: repo.list_tags(),
+                    result: repo.list_tags_cancellable(&cancellation),
                 }),
             );
         },
@@ -529,6 +530,7 @@ pub(super) fn schedule_load_remote_tags(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
     spawn_with_repo_or_else(
         executor,
@@ -540,7 +542,7 @@ pub(super) fn schedule_load_remote_tags(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RemoteTagsLoaded {
                     repo_id,
-                    result: repo.list_remote_tags(),
+                    result: repo.list_remote_tags_cancellable(&cancellation),
                 }),
             );
         },
@@ -870,6 +872,7 @@ pub(super) fn schedule_load_submodules(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
     spawn_with_repo_or_else(
         executor,
@@ -881,7 +884,7 @@ pub(super) fn schedule_load_submodules(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
                     repo_id,
-                    result: repo.list_submodules(),
+                    result: repo.list_submodules_cancellable(&cancellation),
                 }),
             );
         },

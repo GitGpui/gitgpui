@@ -9,8 +9,9 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
-    BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
-    PullMode, RemoteUrlKind, ResetMode, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    BlameLine, CancellationToken, CommandOutput, ConflictFileStages, ConflictSide, GitRepository,
+    MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, SubmoduleTrustDecision,
+    SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -233,9 +234,22 @@ impl GitRepository for GixRepo {
         self.list_tags_impl()
     }
 
+    fn list_tags_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Tag>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        self.list_tags_cancellable_impl(cancellation)
+    }
+
     fn list_remote_tags(&self) -> Result<Vec<RemoteTag>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_remote_tags_impl()
+    }
+
+    fn list_remote_tags_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteTag>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        self.list_remote_tags_cancellable_impl(cancellation)
     }
 
     fn list_remotes(&self) -> Result<Vec<Remote>> {
@@ -577,6 +591,13 @@ impl GitRepository for GixRepo {
 
     fn list_submodules(&self) -> Result<Vec<Submodule>> {
         self.list_submodules_impl()
+    }
+
+    fn list_submodules_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Submodule>> {
+        self.list_submodules_cancellable_impl(cancellation)
     }
 
     fn submodule_diff_summary(&self, target: &DiffTarget) -> Result<SubmoduleDiffSummary> {

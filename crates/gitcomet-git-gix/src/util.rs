@@ -10,7 +10,7 @@ use gitcomet_core::auth::{
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::process::{configure_background_command, git_command};
-use gitcomet_core::services::{CommandOutput, Result};
+use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use std::fs;
 use std::io::{self, BufRead as _};
 use std::path::{Path, PathBuf};
@@ -471,7 +471,12 @@ pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
     )))
 }
 
-fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) -> Result<Output> {
+fn run_command_with_timeout(
+    mut cmd: Command,
+    label: &str,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Output> {
     configure_background_command(&mut cmd);
     configure_non_interactive_git(&mut cmd);
     let askpass_context = if command_may_require_auth(&cmd) {
@@ -491,11 +496,20 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
 
     let start = Instant::now();
     let mut timed_out = false;
+    let mut cancelled = false;
 
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                    cancelled = true;
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(e) => return Err(io_err(e)),
+                    }
+                }
                 let elapsed = start.elapsed();
                 if elapsed >= timeout {
                     timed_out = true;
@@ -518,6 +532,10 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+    }
+
+    if cancelled {
+        return Err(Error::new(ErrorKind::Cancelled));
     }
 
     if timed_out {
@@ -544,7 +562,7 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
 }
 
 pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<Output> {
-    run_command_with_timeout(cmd, label, git_command_timeout())
+    run_command_with_timeout(cmd, label, git_command_timeout(), None)
 }
 
 pub(crate) fn run_git_parsed_stdout<T, F>(
@@ -855,6 +873,19 @@ pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOu
 pub(crate) fn run_git_capture(cmd: Command, label: &str) -> Result<String> {
     let bytes = run_git_capture_bytes(cmd, label)?;
     Ok(bytes_to_text_preserving_utf8(&bytes))
+}
+
+pub(crate) fn run_git_capture_cancellable(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<String> {
+    let output = run_command_with_timeout(cmd, label, git_command_timeout(), Some(cancellation))?;
+    if output.status.success() {
+        Ok(bytes_to_text_preserving_utf8(&output.stdout))
+    } else {
+        Err(git_command_failed_error(label, output))
+    }
 }
 
 pub(crate) fn run_git_capture_bytes(cmd: Command, label: &str) -> Result<Vec<u8>> {
@@ -1178,9 +1209,13 @@ mod tests {
 
     #[test]
     fn run_command_with_timeout_returns_structured_timeout_failure() {
-        let err =
-            run_command_with_timeout(sleep_command(2), "git synthetic", Duration::from_millis(50))
-                .expect_err("expected timed out command");
+        let err = run_command_with_timeout(
+            sleep_command(2),
+            "git synthetic",
+            Duration::from_millis(50),
+            None,
+        )
+        .expect_err("expected timed out command");
 
         match err.kind() {
             ErrorKind::Git(failure) => {

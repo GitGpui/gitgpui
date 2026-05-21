@@ -659,6 +659,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
+    state.repos[0].set_open(Loadable::Ready(()));
     state.active_repo = Some(RepoId(1));
 
     let effects = reduce(
@@ -672,7 +673,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
-    assert!(matches!(repo_state.remote_tags, Loadable::NotLoaded));
+    assert!(repo_state.remote_tags.is_loading());
     assert!(repo_state.remotes.is_loading());
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
@@ -681,13 +682,28 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.log.is_loading());
     assert!(!repo_state.history_state.log_loading_more);
     assert!(repo_state.merge_commit_message.is_loading());
+    assert!(repo_state.submodules.is_loading());
     assert!(has_status_refresh_effects(&effects, RepoId(1)));
     assert!(
-        !effects.iter().any(|effect| matches!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadTags { repo_id } if *repo_id == RepoId(1)
+        )),
+        "tags should auto-load in the background on repo reload"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
             effect,
             Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
         )),
-        "remote tags should lazy-load from tag UI, not repo reload"
+        "remote tags should auto-load in the background on repo reload"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSubmodules { repo_id } if *repo_id == RepoId(1)
+        )),
+        "submodules should auto-load in the background on repo reload"
     );
 }
 

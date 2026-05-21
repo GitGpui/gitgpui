@@ -4,7 +4,7 @@ use super::util::{
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
 };
-use crate::model::{AppState, Loadable, RepoId, RepoState};
+use crate::model::{AppState, Loadable, RepoId, RepoLoadsInFlight, RepoState};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
 use gitcomet_core::domain::{DiffTarget, FileConflictKind};
@@ -826,7 +826,12 @@ pub(super) fn repo_command_finished(
     }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);
-        extra_effects.push(Effect::LoadSubmodules { repo_id });
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::SUBMODULES)
+        {
+            extra_effects.push(Effect::LoadSubmodules { repo_id });
+        }
     }
     if matches!(
         &command,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{RepoLoadsInFlight, SidebarDataRequest};
+use crate::model::{GitLogSettings, GitLogTagFetchMode, RepoLoadsInFlight, SidebarDataRequest};
 
 fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
     repo.branches = Loadable::Ready(Arc::new(Vec::new()));
@@ -15,8 +15,7 @@ fn has_full_refresh_only_effects(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadTags { repo_id: candidate }
-                | Effect::LoadRemotes { repo_id: candidate }
+            Effect::LoadRemotes { repo_id: candidate }
                 | Effect::LoadRemoteBranches { repo_id: candidate }
                 if *candidate == repo_id
         )
@@ -51,6 +50,46 @@ fn has_stash_load_effect(effects: &[Effect], repo_id: RepoId) -> bool {
             } if *candidate == repo_id
         )
     })
+}
+
+#[test]
+fn worker_command_prioritizes_close_repo_over_queued_background_result() {
+    let repo_id = RepoId(7);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+        crate::msg::InternalMsg::TagsLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        },
+    ))))
+    .expect("send background result");
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::CloseRepo {
+        repo_id,
+    })))
+    .expect("send close");
+
+    let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("next command");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::CloseRepo { repo_id: got } if got == repo_id));
+        }
+        _ => panic!("expected close repo command first"),
+    }
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("deferred command");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(
+                *msg,
+                Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+                    repo_id: got,
+                    ..
+                }) if got == repo_id
+            ));
+        }
+        _ => panic!("expected deferred tags result"),
+    }
 }
 
 fn has_effect_for_repo(
@@ -1421,7 +1460,7 @@ fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
 }
 
 #[test]
-fn pre_open_submodule_lazy_load_can_retry_after_repo_opened() {
+fn pre_open_submodule_load_auto_starts_after_repo_opened() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -1456,10 +1495,10 @@ fn pre_open_submodule_lazy_load_can_retry_after_repo_opened() {
         }),
     );
 
-    assert!(!effects.iter().any(
+    assert!(effects.iter().any(
         |effect| matches!(effect, Effect::LoadSubmodules { repo_id: rid } if *rid == repo_id)
     ));
-    assert!(matches!(state.repos[0].submodules, Loadable::NotLoaded));
+    assert!(state.repos[0].submodules.is_loading());
 
     let effects = reduce(
         &mut repos,
@@ -1467,9 +1506,7 @@ fn pre_open_submodule_lazy_load_can_retry_after_repo_opened() {
         &mut state,
         Msg::LoadSubmodules { repo_id },
     );
-    assert!(effects.iter().any(
-        |effect| matches!(effect, Effect::LoadSubmodules { repo_id: rid } if *rid == repo_id)
-    ));
+    assert!(effects.is_empty());
     assert!(state.repos[0].submodules.is_loading());
 }
 
@@ -2047,7 +2084,7 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
         .find(|repo| repo.id == repo1)
         .expect("repo1 exists");
     mark_repo_switch_secondary_metadata_ready(repo1_state);
-    repo1_state.tags = Loadable::NotLoaded;
+    repo1_state.remotes = Loadable::NotLoaded;
     repo1_state.last_active_at = Some(SystemTime::now());
 
     let effects = reduce(
@@ -2196,7 +2233,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
-    assert!(matches!(repo_state.remote_tags, Loadable::NotLoaded));
+    assert!(repo_state.remote_tags.is_loading());
     assert!(repo_state.remotes.is_loading());
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
@@ -2209,6 +2246,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.rebase_in_progress.is_loading());
     assert!(repo_state.merge_commit_message.is_loading());
     assert!(repo_state.worktrees.is_loading());
+    assert!(repo_state.submodules.is_loading());
     assert!(matches!(
         repo_state.history_state.file_history,
         Loadable::NotLoaded
@@ -2251,20 +2289,14 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
             matches!(effect, Effect::LoadBranches { repo_id: candidate } if *candidate == repo_id)
         }
     ));
-    assert!(has_effect_for_repo(
-        &effects,
-        RepoId(1),
-        |effect, repo_id| {
-            matches!(effect, Effect::LoadTags { repo_id: candidate } if *candidate == repo_id)
-        }
-    ));
-    assert!(
-        !effects.iter().any(|effect| matches!(
-            effect,
-            Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
-        )),
-        "remote tags should lazy-load from tag UI, not repo open"
-    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadTags { repo_id } if *repo_id == RepoId(1)
+    )));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
+    )));
     assert!(has_effect_for_repo(
         &effects,
         RepoId(1),
@@ -2297,6 +2329,94 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         }
     ));
     assert!(has_worktree_refresh_effect(&effects, RepoId(1)));
+    assert!(has_submodule_load_effect(&effects, RepoId(1)));
+}
+
+#[test]
+fn repo_opened_ok_auto_loads_tags_when_enabled() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState {
+        git_log_settings: GitLogSettings {
+            show_history_tags: true,
+            tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
+        },
+        ..AppState::default()
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    let repo_state = state.repos.first().unwrap();
+    assert!(repo_state.tags.is_loading());
+    assert!(repo_state.remote_tags.is_loading());
+    assert!(repo_state.submodules.is_loading());
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadTags { repo_id } if *repo_id == RepoId(1)
+    )));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
+    )));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadSubmodules { repo_id } if *repo_id == RepoId(1)
+    )));
+}
+
+#[test]
+fn repo_opened_ok_for_closed_repo_is_ignored() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo { repo_id: RepoId(1) },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    assert!(effects.is_empty());
+    assert!(state.repos.is_empty());
+    assert!(!repos.contains_key(&RepoId(1)));
 }
 
 #[test]

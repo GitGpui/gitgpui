@@ -8,6 +8,67 @@ use gitcomet_core::domain::{
 use gitcomet_state::model::{InlineSubmoduleDiffEntry, InlineSubmoduleDiffSection};
 use gpui::Focusable;
 
+struct DiffSearchOverlayLayer {
+    child: AnyElement,
+}
+
+impl IntoElement for DiffSearchOverlayLayer {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for DiffSearchOverlayLayer {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let _ = self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        // Diff text rows paint in their own layers, so layer the search UI as a unit.
+        window.paint_layer(bounds, |window| self.child.paint(window, cx));
+    }
+}
+
 fn short_submodule_hash(commit_id: &CommitId) -> String {
     let raw = commit_id.as_ref();
     raw.chars().take(12).collect()
@@ -530,7 +591,7 @@ impl MainPaneView {
         let option_selected_bg =
             with_alpha(theme.colors.accent, if theme.is_dark { 0.34 } else { 0.24 });
         let options = self.diff_search_options;
-        let compact_control_height = px(20.0);
+        let compact_control_height = px(26.0);
         let compact_icon_button_width = px(22.0);
         let compact_option_button_width = px(24.0);
 
@@ -547,8 +608,8 @@ impl MainPaneView {
             .shadow_sm()
             .child(
                 div()
-                    .w(px(180.0))
-                    .min_w(px(96.0))
+                    .w(px(220.0))
+                    .min_w(px(140.0))
                     .h(compact_control_height)
                     .max_h(compact_control_height)
                     .overflow_hidden()
@@ -622,9 +683,9 @@ impl MainPaneView {
             )
             .child(
                 div()
-                    .w(px(72.0))
-                    .min_w(px(72.0))
-                    .max_w(px(72.0))
+                    .w(px(104.0))
+                    .min_w(px(104.0))
+                    .max_w(px(104.0))
                     .h(compact_control_height)
                     .flex()
                     .items_center()
@@ -652,6 +713,7 @@ impl MainPaneView {
                     .h(compact_control_height)
                     .debug_selector(|| "diff_search_close".to_string()),
             )
+            .occlude()
             .with_animation(
                 "diff_search_overlay_mount",
                 Animation::new(Duration::from_millis(120)).with_easing(gpui::quadratic),
@@ -661,16 +723,25 @@ impl MainPaneView {
                 },
             );
 
-        Some(
-            div()
-                .id("diff_search_overlay")
-                .debug_selector(|| "diff_search_overlay".to_string())
-                .absolute()
-                .top(components::control_height_md(ui_scale_percent))
-                .right(px(8.0))
-                .child(panel)
-                .into_any_element(),
-        )
+        let overlay_panel = div()
+            .id("diff_search_overlay_panel")
+            .debug_selector(|| "diff_search_overlay".to_string())
+            .absolute()
+            .top(components::control_height_md(ui_scale_percent))
+            .right(px(8.0))
+            .child(panel)
+            .into_any_element();
+
+        let overlay = div()
+            .id("diff_search_overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(overlay_panel)
+            .into_any_element();
+
+        Some(DiffSearchOverlayLayer { child: overlay }.into_any_element())
     }
 
     fn prepare_submodule_hash_input(

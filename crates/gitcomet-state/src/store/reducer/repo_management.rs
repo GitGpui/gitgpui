@@ -1,7 +1,8 @@
 use super::effects::append_ensure_sidebar_data_effects;
 use super::util::{
-    SelectedConflictTarget, append_refresh_full_effects, append_refresh_primary_effects,
-    append_start_conflict_target_reload, append_start_current_conflict_target_reload,
+    SelectedConflictTarget, append_auto_background_metadata_effects, append_refresh_full_effects,
+    append_refresh_primary_effects, append_start_conflict_target_reload,
+    append_start_current_conflict_target_reload, background_metadata_effect_capacity,
     clear_banner_error_for_repo, dedup_paths_in_order, format_failure_summary,
     handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
     refresh_full_effect_capacity, refresh_full_effects, refresh_primary_effect_capacity,
@@ -26,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 const HOT_REPO_SWITCH_SECONDARY_REFRESH_WINDOW: Duration = Duration::from_secs(5);
-pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 16;
+pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 24;
 pub(crate) type SetActiveRepoEffects = SmallVec<[Effect; SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY]>;
 pub(crate) const REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY: usize = 1;
 pub(crate) type ReorderRepoTabsEffects =
@@ -384,7 +385,8 @@ pub(super) fn fill_set_active_repo_inline(
     // On focus events the UI can re-send SetActiveRepo for the already-active repo. Avoid
     // re-running the full refresh fan-out in that case: prioritize the minimum set that
     // keeps the UI correct and responsive.
-    let extra_effect_capacity = usize::from(selected_diff_reload.is_some())
+    let extra_effect_capacity = background_metadata_effect_capacity()
+        + usize::from(selected_diff_reload.is_some())
         + usize::from(persist_effect.is_some())
         + usize::from(changed)
         + usize::from(changed && !use_full_refresh)
@@ -416,6 +418,9 @@ pub(super) fn fill_set_active_repo_inline(
         append_repo_switch_worktree_refresh_effect(repo_state, effects);
     }
     append_ensure_sidebar_data_effects(repo_state, effects);
+    if changed {
+        append_auto_background_metadata_effects(repo_state, git_log_settings, effects);
+    }
 
     if let Some(selected_diff_reload) = selected_diff_reload {
         match selected_diff_reload {
@@ -677,6 +682,10 @@ pub(super) fn repo_opened_ok(
     spec: RepoSpec,
     repo: Arc<dyn GitRepository>,
 ) -> Vec<Effect> {
+    if !state.repos.iter().any(|repo| repo.id == repo_id) {
+        return Vec::new();
+    }
+
     repos.insert(repo_id, repo);
     let git_log_settings = state.git_log_settings;
 
@@ -692,13 +701,7 @@ pub(super) fn repo_opened_ok(
         repo_state.set_detached_head_commit(None);
         repo_state.set_upstream_divergence(Loadable::Loading);
         repo_state.set_branches(Loadable::Loading);
-        if git_log_settings.show_history_tags
-            && git_log_settings.auto_fetch_tags_on_repo_activation()
-        {
-            repo_state.set_tags(Loadable::Loading);
-        } else {
-            repo_state.set_tags(Loadable::NotLoaded);
-        }
+        repo_state.set_tags(Loadable::NotLoaded);
         repo_state.set_remote_tags(Loadable::NotLoaded);
         repo_state.set_remotes(Loadable::Loading);
         repo_state.set_remote_branches(Loadable::Loading);
@@ -747,6 +750,7 @@ pub(super) fn repo_opened_ok(
         }
         if should_refresh_worktrees {
             append_ensure_sidebar_data_effects(repo_state, &mut effects);
+            append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
         }
         return effects;
     }

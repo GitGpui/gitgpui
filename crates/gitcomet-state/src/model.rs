@@ -85,6 +85,7 @@ impl RepoLoadsInFlight {
     pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 12;
     pub const REMOTE_TAGS: u32 = 1 << 13;
     pub const WORKTREES: u32 = 1 << 14;
+    pub const SUBMODULES: u32 = 1 << 15;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE

@@ -3057,7 +3057,7 @@ impl Render for SettingsWindowView {
                                         "settings_window_git_log_tag_fetch_mode_activation",
                                         "On repository activation",
                                         Some(
-                                            "Fetch local tags when a repository becomes active."
+                                            "Fetch local and remote tags in the background when a repository becomes active."
                                                 .into(),
                                         ),
                                         self.history_tag_fetch_mode

@@ -11,7 +11,7 @@ use crate::session;
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::GitRuntimeState;
-use gitcomet_core::services::{GitBackend, GitRepository};
+use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -902,7 +902,9 @@ pub(super) fn schedule_effect(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     backend: &Arc<dyn GitBackend>,
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    repo_task_tokens: &mut HashMap<RepoId, CancellationToken>,
     msg_tx: StoreWorkerSender,
+    metadata_executor: &TaskExecutor,
     effect: Effect,
 ) {
     if effect_requires_available_git(&effect) {
@@ -1011,6 +1013,7 @@ pub(super) fn schedule_effect(
             });
         }
         Effect::OpenRepo { repo_id, path } => {
+            repo_task_tokens.insert(repo_id, CancellationToken::new());
             open_repo::schedule_open_repo(executor, Arc::clone(backend), msg_tx, repo_id, path);
         }
         Effect::LoadBranches { repo_id } => {
@@ -1044,10 +1047,18 @@ pub(super) fn schedule_effect(
             cursor,
         } => repo_load::schedule_load_log(executor, repos, msg_tx, repo_id, scope, limit, cursor),
         Effect::LoadTags { repo_id } => {
-            repo_load::schedule_load_tags(executor, repos, msg_tx, repo_id)
+            let cancellation = repo_task_tokens.get(&repo_id).cloned().unwrap_or_default();
+            repo_load::schedule_load_tags(metadata_executor, repos, msg_tx, repo_id, cancellation)
         }
         Effect::LoadRemoteTags { repo_id } => {
-            repo_load::schedule_load_remote_tags(executor, repos, msg_tx, repo_id)
+            let cancellation = repo_task_tokens.get(&repo_id).cloned().unwrap_or_default();
+            repo_load::schedule_load_remote_tags(
+                metadata_executor,
+                repos,
+                msg_tx,
+                repo_id,
+                cancellation,
+            )
         }
         Effect::LoadStashes { repo_id, limit } => {
             repo_load::schedule_load_stashes(executor, repos, msg_tx, repo_id, limit);
@@ -1082,7 +1093,14 @@ pub(super) fn schedule_effect(
             repo_load::schedule_load_worktrees(executor, repos, msg_tx, repo_id);
         }
         Effect::LoadSubmodules { repo_id } => {
-            repo_load::schedule_load_submodules(executor, repos, msg_tx, repo_id);
+            let cancellation = repo_task_tokens.get(&repo_id).cloned().unwrap_or_default();
+            repo_load::schedule_load_submodules(
+                metadata_executor,
+                repos,
+                msg_tx,
+                repo_id,
+                cancellation,
+            );
         }
         Effect::LoadRebaseAndMergeState { repo_id } => {
             repo_load::schedule_load_rebase_and_merge_state(executor, repos, msg_tx, repo_id);

@@ -46,13 +46,17 @@ fn schedule_effect_with_state_for_test(
 ) {
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let mut repo_task_tokens = HashMap::default();
+    let metadata_executor = super::executor::TaskExecutor::new(1);
     super::effects::schedule_effect(
         executor,
         session_persist_executor,
         &thread_state,
         backend,
         repos,
+        &mut repo_task_tokens,
         msg_tx,
+        &metadata_executor,
         effect,
     );
 }

@@ -1,8 +1,9 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, StoreEvent};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::services::{GitBackend, GitRepository};
+use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -48,14 +49,59 @@ fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
     }
 }
 
+fn is_control_msg(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::CloseRepo { .. } | Msg::SetActiveRepo { .. } | Msg::ReorderRepoTabs { .. }
+    )
+}
+
+fn is_control_command(command: &StoreWorkerCommand) -> bool {
+    match command {
+        StoreWorkerCommand::Msg(msg) => is_control_msg(msg),
+        StoreWorkerCommand::Shutdown => true,
+        #[cfg(any(test, feature = "test-support"))]
+        StoreWorkerCommand::InsertRepoForTest { .. } => true,
+    }
+}
+
+fn recv_next_worker_command(
+    command_rx: &mpsc::Receiver<StoreWorkerCommand>,
+    deferred: &mut VecDeque<StoreWorkerCommand>,
+) -> Result<StoreWorkerCommand, mpsc::RecvError> {
+    if let Some(ix) = deferred.iter().position(is_control_command) {
+        return Ok(deferred.remove(ix).expect("deferred command exists"));
+    }
+
+    let first = match deferred.pop_front() {
+        Some(command) => command,
+        None => command_rx.recv()?,
+    };
+    if is_control_command(&first) {
+        return Ok(first);
+    }
+
+    while let Ok(command) = command_rx.try_recv() {
+        if is_control_command(&command) {
+            deferred.push_front(first);
+            return Ok(command);
+        }
+        deferred.push_back(command);
+    }
+
+    Ok(first)
+}
+
 struct ReducerEffectsContext<'a> {
     thread_state: &'a Arc<RwLock<Arc<AppState>>>,
     active_repo_id: &'a Arc<AtomicU64>,
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
     repos: &'a HashMap<RepoId, Arc<dyn GitRepository>>,
+    repo_task_tokens: &'a mut HashMap<RepoId, CancellationToken>,
     thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
+    metadata_executor: &'a TaskExecutor,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
 }
@@ -120,7 +166,9 @@ where
             ctx.thread_state,
             ctx.backend,
             ctx.repos,
+            ctx.repo_task_tokens,
             ctx.thread_msg_tx.clone(),
+            ctx.metadata_executor,
             effect,
         );
     }
@@ -177,13 +225,16 @@ impl AppStore {
 
         thread::spawn(move || {
             let executor = TaskExecutor::new(default_worker_threads());
+            let metadata_executor = TaskExecutor::new(1);
             let session_persist_executor = TaskExecutor::new(1);
             let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+            let mut repo_task_tokens: HashMap<RepoId, CancellationToken> = HashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));
+            let mut deferred_commands = VecDeque::new();
 
-            while let Ok(command) = command_rx.recv() {
+            while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
                 let msg = match command {
                     StoreWorkerCommand::Msg(msg) => *msg,
                     StoreWorkerCommand::Shutdown => break,
@@ -199,8 +250,22 @@ impl AppStore {
                 }
 
                 match &msg {
-                    Msg::RestoreSession { .. } => repo_monitors.stop_all(),
-                    Msg::CloseRepo { repo_id } => repo_monitors.stop(*repo_id),
+                    Msg::RestoreSession { .. } => {
+                        repo_monitors.stop_all();
+                        for token in repo_task_tokens.values() {
+                            token.cancel();
+                        }
+                        repo_task_tokens.clear();
+                    }
+                    Msg::CloseRepo { repo_id } => {
+                        repo_monitors.stop(*repo_id);
+                        if let Some(token) = repo_task_tokens.remove(repo_id) {
+                            token.cancel();
+                        }
+                    }
+                    Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr { repo_id, .. }) => {
+                        repo_task_tokens.remove(repo_id);
+                    }
                     _ => {}
                 }
 
@@ -224,8 +289,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -258,8 +325,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -284,8 +353,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -310,8 +381,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -336,8 +409,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -362,8 +437,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -388,8 +465,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -423,8 +502,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -447,8 +528,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -472,8 +555,10 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -482,6 +567,9 @@ impl AppStore {
                 }
             }
 
+            for token in repo_task_tokens.values() {
+                token.cancel();
+            }
             repo_monitors.stop_all();
         });
 

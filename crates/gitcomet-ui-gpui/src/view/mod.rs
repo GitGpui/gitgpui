@@ -1361,10 +1361,16 @@ impl GitCometView {
             tag_fetch_mode,
         });
         if show_tags
+            && auto_fetch_tags_on_repo_activation
             && let Some(repo) = self.main_pane.read(cx).active_repo()
-            && matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_))
         {
-            self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
+            if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
+                self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
+            }
+            if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
+                self.store
+                    .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
+            }
         }
         self.schedule_ui_settings_persist(cx);
     }

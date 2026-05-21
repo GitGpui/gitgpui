@@ -4,8 +4,36 @@ use crate::error::{Error, ErrorKind};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    pub fn check_cancelled(&self) -> Result<()> {
+        if self.is_cancelled() {
+            Err(Error::new(ErrorKind::Cancelled))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
@@ -178,10 +206,25 @@ pub trait GitRepository: Send + Sync {
             "tag listing is not implemented for this backend",
         )))
     }
+    fn list_tags_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Tag>> {
+        cancellation.check_cancelled()?;
+        let tags = self.list_tags()?;
+        cancellation.check_cancelled()?;
+        Ok(tags)
+    }
     fn list_remote_tags(&self) -> Result<Vec<RemoteTag>> {
         Err(Error::new(ErrorKind::Unsupported(
             "remote tag listing is not implemented for this backend",
         )))
+    }
+    fn list_remote_tags_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteTag>> {
+        cancellation.check_cancelled()?;
+        let tags = self.list_remote_tags()?;
+        cancellation.check_cancelled()?;
+        Ok(tags)
     }
     fn list_remotes(&self) -> Result<Vec<Remote>>;
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
@@ -567,6 +610,15 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule listing is not implemented for this backend",
         )))
+    }
+    fn list_submodules_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Submodule>> {
+        cancellation.check_cancelled()?;
+        let submodules = self.list_submodules()?;
+        cancellation.check_cancelled()?;
+        Ok(submodules)
     }
 
     fn submodule_diff_summary(
