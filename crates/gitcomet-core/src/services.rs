@@ -137,6 +137,7 @@ pub struct BlameLine {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommitOperationOutcome {
+    pub local_branch: Option<String>,
     pub pre_head: Option<CommitId>,
     pub post_head: Option<CommitId>,
 }
@@ -144,6 +145,7 @@ pub struct CommitOperationOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SafePushAfterCommitContext {
     pub amend: bool,
+    pub local_branch: Option<String>,
     pub pre_head: Option<CommitId>,
     pub post_head: Option<CommitId>,
 }

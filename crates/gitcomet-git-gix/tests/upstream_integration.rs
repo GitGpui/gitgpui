@@ -281,6 +281,7 @@ fn safe_push_after_published_amend_blocks_and_offers_lease() {
     let decision = opened
         .safe_push_after_commit(&SafePushAfterCommitContext {
             amend: true,
+            local_branch: Some(branch.to_string()),
             pre_head: Some(pre_head.clone()),
             post_head: Some(post_head.clone()),
         })
@@ -382,6 +383,7 @@ fn safe_push_after_commit_without_upstream_sets_upstream_for_new_branch() {
     let decision = opened
         .safe_push_after_commit(&SafePushAfterCommitContext {
             amend: false,
+            local_branch: Some("new-topic".to_string()),
             pre_head: None,
             post_head: Some(post_head.clone()),
         })
@@ -451,6 +453,7 @@ fn push_after_commit_checked_push_rejects_stale_branch_and_head() {
     let decision = opened
         .safe_push_after_commit(&SafePushAfterCommitContext {
             amend: false,
+            local_branch: Some("safe-main".to_string()),
             pre_head: None,
             post_head: Some(post_head.clone()),
         })
@@ -478,6 +481,76 @@ fn push_after_commit_checked_push_rejects_stale_branch_and_head() {
     run_git(&work_repo, &["reset", "--hard", target.local_head.as_ref()]);
     opened.push_after_commit_with_output(&target).unwrap();
     assert_eq!(commit_id(&remote_repo, "refs/heads/safe-main"), post_head);
+}
+
+#[test]
+fn safe_push_after_commit_rejects_branch_change_before_decision() {
+    if !require_git_shell_for_upstream_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+
+    run_git(&remote_repo, &["init", "--bare"]);
+    run_git(&work_repo, &["init"]);
+    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
+    run_git(&work_repo, &["config", "user.name", "You"]);
+    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    run_git(
+        &work_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_str().expect("remote path"),
+        ],
+    );
+
+    fs::write(work_repo.join("file.txt"), "base\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(&work_repo, &["checkout", "-b", "safe-main"]);
+    run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
+    let remote_base = commit_id(&remote_repo, "refs/heads/safe-main");
+
+    fs::write(work_repo.join("file.txt"), "safe\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "safe"],
+    );
+    let post_head = commit_id(&work_repo, "HEAD");
+
+    run_git(&work_repo, &["checkout", "-b", "other"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).unwrap();
+    let decision = opened
+        .safe_push_after_commit(&SafePushAfterCommitContext {
+            amend: false,
+            local_branch: Some("safe-main".to_string()),
+            pre_head: None,
+            post_head: Some(post_head),
+        })
+        .unwrap();
+
+    let SafePushAfterCommitDecision::Blocked {
+        summary,
+        lease: None,
+    } = decision
+    else {
+        panic!("branch changes before safe-push decision should block");
+    };
+    assert!(summary.contains("Current branch changed from safe-main to other"));
+    assert_eq!(commit_id(&remote_repo, "refs/heads/safe-main"), remote_base);
 }
 
 #[test]
@@ -515,6 +588,9 @@ fn safe_push_after_amend_blocks_when_remote_advanced_without_conflicting_worktre
         &work_repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
     );
+    let branch = run_git_capture(&work_repo, &["branch", "--show-current"])
+        .trim()
+        .to_string();
     run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
 
     fs::write(work_repo.join("file.txt"), "published\n").unwrap();
@@ -564,6 +640,7 @@ fn safe_push_after_amend_blocks_when_remote_advanced_without_conflicting_worktre
     let decision = opened
         .safe_push_after_commit(&SafePushAfterCommitContext {
             amend: true,
+            local_branch: Some(branch),
             pre_head: Some(pre_head),
             post_head: Some(post_head),
         })

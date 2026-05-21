@@ -4272,6 +4272,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 context: gitcomet_core::services::SafePushAfterCommitContext {
                     amend: false,
+                    local_branch: None,
                     pre_head: None,
                     post_head: None,
                 },

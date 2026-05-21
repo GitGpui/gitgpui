@@ -694,21 +694,78 @@ impl GixRepo {
         })
     }
 
+    fn validate_safe_push_after_commit_context(
+        &self,
+        local_branch: &str,
+        post_head: &CommitId,
+    ) -> Result<Option<SafePushAfterCommitDecision>> {
+        validate_ref_like_arg(local_branch, "local branch name")?;
+        validate_hex_commit_id(post_head)?;
+
+        let Some(current_branch) = self.current_branch_name()? else {
+            return Ok(Some(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "Current branch changed from {local_branch} to detached HEAD after committing. Check out {local_branch} and push manually."
+                ),
+                lease: None,
+            }));
+        };
+        if current_branch != local_branch {
+            return Ok(Some(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "Current branch changed from {local_branch} to {current_branch} after committing. Check out {local_branch} and push manually."
+                ),
+                lease: None,
+            }));
+        }
+
+        let Some(current_head) = self.head_commit_id_impl()? else {
+            return Ok(Some(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "Current HEAD no longer points to the commit created on {local_branch}. Push manually."
+                ),
+                lease: None,
+            }));
+        };
+        if &current_head != post_head {
+            return Ok(Some(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "Current HEAD changed after committing on {local_branch}. Expected {post_head}, but current HEAD is {current_head}. Push manually."
+                ),
+                lease: None,
+            }));
+        }
+
+        Ok(None)
+    }
+
     pub(super) fn safe_push_after_commit_impl(
         &self,
         context: &SafePushAfterCommitContext,
     ) -> Result<SafePushAfterCommitDecision> {
-        let Some(local_branch) = self.current_branch_name()? else {
+        let Some(post_head) = context.post_head.as_ref() else {
+            return Ok(SafePushAfterCommitDecision::Blocked {
+                summary: "No commit was created to push.".to_string(),
+                lease: None,
+            });
+        };
+        let Some(local_branch) = context.local_branch.as_deref() else {
             return Ok(SafePushAfterCommitDecision::Blocked {
                 summary: "Push after commit needs a checked-out branch.".to_string(),
                 lease: None,
             });
         };
 
-        if let Some(upstream) = self.branch_upstream(&local_branch)? {
+        if let Some(decision) =
+            self.validate_safe_push_after_commit_context(local_branch, post_head)?
+        {
+            return Ok(decision);
+        }
+
+        if let Some(upstream) = self.branch_upstream(local_branch)? {
             return self.safe_push_decision_for_target(
                 context,
-                &local_branch,
+                local_branch,
                 upstream.remote,
                 upstream.branch,
                 true,
@@ -724,9 +781,9 @@ impl GixRepo {
 
         self.safe_push_decision_for_target(
             context,
-            &local_branch,
+            local_branch,
             remote,
-            local_branch.clone(),
+            local_branch.to_string(),
             false,
         )
     }

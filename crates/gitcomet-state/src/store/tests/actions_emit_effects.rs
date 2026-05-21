@@ -3156,6 +3156,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id,
             result: Ok(gitcomet_core::services::CommitOperationOutcome {
+                local_branch: Some("main".to_string()),
                 pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
             }),
@@ -3167,6 +3168,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
             .iter()
             .any(|effect| matches!(effect, Effect::SafePushAfterCommit { repo_id: id, context, .. } if *id == repo_id
                 && !context.amend
+                && context.local_branch.as_deref() == Some("main")
                 && context.pre_head.as_ref().is_some_and(|id| id.as_ref() == "1111111111111111111111111111111111111111")
                 && context.post_head.as_ref().is_some_and(|id| id.as_ref() == "2222222222222222222222222222222222222222")))
     );
@@ -3228,6 +3230,7 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
             repo_id,
             context: gitcomet_core::services::SafePushAfterCommitContext {
                 amend: false,
+                local_branch: Some("main".to_string()),
                 pre_head: None,
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
             },
@@ -3277,6 +3280,7 @@ fn safe_push_after_commit_decision_push_set_upstream_enqueues_checked_push() {
             repo_id,
             context: gitcomet_core::services::SafePushAfterCommitContext {
                 amend: false,
+                local_branch: Some("feature".to_string()),
                 pre_head: None,
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
             },
@@ -3329,6 +3333,7 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
             repo_id,
             context: gitcomet_core::services::SafePushAfterCommitContext {
                 amend: true,
+                local_branch: Some("main".to_string()),
                 pre_head: Some(expected.clone()),
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
             },

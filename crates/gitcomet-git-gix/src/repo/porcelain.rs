@@ -846,10 +846,12 @@ impl GixRepo {
     }
 
     pub(super) fn commit_with_outcome_impl(&self, message: &str) -> Result<CommitOperationOutcome> {
+        let local_branch = self.current_branch_name_for_outcome()?;
         let pre_head = self.head_commit_id_for_outcome()?;
         self.commit_impl(message)?;
         let post_head = self.head_commit_id_for_outcome()?;
         Ok(CommitOperationOutcome {
+            local_branch,
             pre_head,
             post_head,
         })
@@ -870,13 +872,26 @@ impl GixRepo {
         &self,
         message: &str,
     ) -> Result<CommitOperationOutcome> {
+        let local_branch = self.current_branch_name_for_outcome()?;
         let pre_head = self.head_commit_id_for_outcome()?;
         self.commit_amend_impl(message)?;
         let post_head = self.head_commit_id_for_outcome()?;
         Ok(CommitOperationOutcome {
+            local_branch,
             pre_head,
             post_head,
         })
+    }
+}
+
+impl GixRepo {
+    fn current_branch_name_for_outcome(&self) -> Result<Option<String>> {
+        let head = self.current_branch_impl()?;
+        let head = head.trim();
+        if head.is_empty() || head == "HEAD" {
+            return Ok(None);
+        }
+        Ok(Some(head.to_string()))
     }
 }
 

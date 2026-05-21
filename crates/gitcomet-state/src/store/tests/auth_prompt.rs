@@ -309,6 +309,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
     let id_alloc = AtomicU64::new(1);
     let context = gitcomet_core::services::SafePushAfterCommitContext {
         amend: true,
+        local_branch: Some("main".to_string()),
         pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
         post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
     };
@@ -593,6 +594,7 @@ fn submit_auth_prompt_replays_safe_push_after_commit() {
     let id_alloc = AtomicU64::new(1);
     let context = gitcomet_core::services::SafePushAfterCommitContext {
         amend: true,
+        local_branch: Some("main".to_string()),
         pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
         post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
     };

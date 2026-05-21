@@ -1550,6 +1550,7 @@ pub(super) fn reduce(
                     repo_id,
                     SafePushAfterCommitContext {
                         amend: pending_commit.amend,
+                        local_branch: outcome.local_branch,
                         pre_head: outcome.pre_head,
                         post_head: outcome.post_head,
                     },
@@ -1589,6 +1590,7 @@ pub(super) fn reduce(
                     repo_id,
                     SafePushAfterCommitContext {
                         amend: pending_commit.amend,
+                        local_branch: outcome.local_branch,
                         pre_head: outcome.pre_head,
                         post_head: outcome.post_head,
                     },
