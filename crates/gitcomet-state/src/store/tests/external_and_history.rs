@@ -135,7 +135,7 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
 }
 
 #[test]
-fn external_git_state_change_clears_head_dependent_cached_state() {
+fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recent_messages() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -161,7 +161,10 @@ fn external_git_state_change_clears_head_dependent_cached_state() {
         },
     );
 
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(
+        state.repos[0].pending_force_push_lease,
+        Some(test_force_push_lease())
+    );
     assert!(matches!(
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded

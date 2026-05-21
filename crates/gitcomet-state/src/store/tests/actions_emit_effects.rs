@@ -3401,6 +3401,61 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
 }
 
 #[test]
+fn safe_push_after_commit_published_amend_lease_survives_followup_git_state_refresh() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let expected = CommitId("1111111111111111111111111111111111111111".into());
+    let lease = gitcomet_core::services::ForcePushLease {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        expected: expected.clone(),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: true,
+                local_branch: Some("main".to_string()),
+                pre_head: Some(expected),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            },
+            result: Ok(
+                gitcomet_core::services::SafePushAfterCommitDecision::Blocked {
+                    summary: "published amend".to_string(),
+                    lease: Some(lease.clone()),
+                },
+            ),
+        }),
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+
+    assert_eq!(state.repos[0].pending_force_push_lease, Some(lease));
+}
+
+#[test]
 fn checkout_branch_clears_stale_force_push_lease_and_recent_messages() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

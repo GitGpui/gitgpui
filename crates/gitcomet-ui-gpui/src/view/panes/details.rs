@@ -187,6 +187,8 @@ impl DetailsPaneView {
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
+            repo.head_branch_rev.hash(&mut hasher);
+            repo.branches_rev.hash(&mut hasher);
         }
 
         hasher.finish()
@@ -1254,5 +1256,26 @@ mod tests {
 
         state.repos[0].merge_message_rev = 1;
         assert_ne!(DetailsPaneView::notify_fingerprint(&state), after_details);
+    }
+
+    #[test]
+    fn notify_fingerprint_tracks_amend_availability_revisions() {
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = DetailsPaneView::notify_fingerprint(&state);
+
+        state.repos[0].head_branch_rev = 1;
+        let after_head_branch = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_head_branch, initial);
+
+        state.repos[0].branches_rev = 1;
+        assert_ne!(
+            DetailsPaneView::notify_fingerprint(&state),
+            after_head_branch
+        );
     }
 }

@@ -267,6 +267,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.log_rev.hash(hasher);
             repo.ops_rev.hash(hasher);
             repo.merge_message_rev.hash(hasher);
+            repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
         }
 
         PopoverKind::TagMenu { .. } => {
@@ -832,6 +834,32 @@ mod tests {
         let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn commit_options_fingerprint_changes_when_amend_availability_revisions_change() {
+        let repo_id = RepoId(9);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_commit_options_fingerprint"),
+            },
+        );
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(repo);
+
+        let popover = PopoverKind::CommitOptionsMenu { repo_id };
+        let before = notify_fingerprint(&state, &popover);
+
+        state.repos[0].head_branch_rev = state.repos[0].head_branch_rev.wrapping_add(1);
+        let after_head_branch = notify_fingerprint(&state, &popover);
+        assert_ne!(before, after_head_branch);
+
+        state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
+        assert_ne!(after_head_branch, notify_fingerprint(&state, &popover));
     }
 
     #[test]

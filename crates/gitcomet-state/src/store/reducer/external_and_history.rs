@@ -99,7 +99,10 @@ pub(super) fn repo_externally_changed(
 
     // Coalesce refreshes while a refresh is already in flight.
     let mut effects = if change.git_state {
-        repo_state.clear_head_dependent_cached_state();
+        // A git-state watcher event can be produced by the safety fetch that
+        // prepared a pending force-push lease. Preserve that offer; the force
+        // push command validates the branch and HEAD again before pushing.
+        repo_state.set_recent_commit_messages(Loadable::NotLoaded);
         let mut effects = refresh_primary_effects(repo_state);
         if repo_state
             .loads_in_flight
