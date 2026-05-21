@@ -936,6 +936,7 @@ fn summarize_command(
             RepoCommandKind::SquashRef { .. } => "Squash",
             RepoCommandKind::Push => "Push",
             RepoCommandKind::ForcePush => "Force push",
+            RepoCommandKind::ForcePushWithLease { .. } => "Force push with lease",
             RepoCommandKind::PushSetUpstream { .. } => "Push",
             RepoCommandKind::SetUpstreamBranch { .. } => "Set as tracking upstream",
             RepoCommandKind::UnsetUpstreamBranch { .. } => "Unlink upstream branch",
@@ -1067,6 +1068,13 @@ fn summarize_command(
                 "Force push: Everything up-to-date".to_string()
             } else {
                 "Force push: Completed".to_string()
+            }
+        }
+        RepoCommandKind::ForcePushWithLease { .. } => {
+            if output.stderr.contains("Everything up-to-date") {
+                "Force push with lease: Everything up-to-date".to_string()
+            } else {
+                "Force push with lease: Completed".to_string()
             }
         }
         RepoCommandKind::PushSetUpstream { remote, branch } => {

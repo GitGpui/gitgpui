@@ -135,6 +135,41 @@ pub struct BlameLine {
     pub line: String,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommitOperationOutcome {
+    pub pre_head: Option<CommitId>,
+    pub post_head: Option<CommitId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SafePushAfterCommitContext {
+    pub amend: bool,
+    pub pre_head: Option<CommitId>,
+    pub post_head: Option<CommitId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForcePushLease {
+    pub remote: String,
+    pub branch: String,
+    pub expected: CommitId,
+    pub local_branch: String,
+    pub local_head: CommitId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SafePushAfterCommitDecision {
+    Push,
+    PushSetUpstream {
+        remote: String,
+        branch: String,
+    },
+    Blocked {
+        summary: String,
+        lease: Option<ForcePushLease>,
+    },
+}
+
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
@@ -275,10 +310,18 @@ pub trait GitRepository: Send + Sync {
     fn stage(&self, paths: &[&Path]) -> Result<()>;
     fn unstage(&self, paths: &[&Path]) -> Result<()>;
     fn commit(&self, message: &str) -> Result<()>;
+    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit(message)?;
+        Ok(CommitOperationOutcome::default())
+    }
     fn commit_amend(&self, _message: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "commit amend is not implemented for this backend",
         )))
+    }
+    fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_amend(message)?;
+        Ok(CommitOperationOutcome::default())
     }
 
     fn rebase_with_output(&self, _onto: &str) -> Result<CommandOutput> {
@@ -397,6 +440,22 @@ pub trait GitRepository: Send + Sync {
     fn push_force_with_output(&self) -> Result<CommandOutput> {
         self.push_force()?;
         Ok(CommandOutput::empty_success("git push --force-with-lease"))
+    }
+
+    fn safe_push_after_commit(
+        &self,
+        _context: &SafePushAfterCommitContext,
+    ) -> Result<SafePushAfterCommitDecision> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "safe push after commit is not implemented for this backend",
+        )))
+    }
+
+    fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {
+        let _ = lease;
+        Err(Error::new(ErrorKind::Unsupported(
+            "oid-specific force push with lease is not implemented for this backend",
+        )))
     }
 
     fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {

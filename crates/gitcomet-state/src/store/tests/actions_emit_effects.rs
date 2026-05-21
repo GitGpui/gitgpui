@@ -1655,7 +1655,7 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id,
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     let expected_scope = state.repos[0].history_state.history_scope;
@@ -3030,7 +3030,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id,
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     assert!(!effects.is_empty());
@@ -3077,7 +3077,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
             repo_id,
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     assert_eq!(
@@ -3112,7 +3112,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id: RepoId(999),
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     assert!(missing_commit.is_empty());
@@ -3122,14 +3122,14 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
             repo_id: RepoId(999),
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     assert!(missing_amend.is_empty());
 }
 
 #[test]
-fn commit_finished_push_after_commit_enqueues_push_only_on_success() {
+fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -3155,16 +3155,22 @@ fn commit_finished_push_after_commit_enqueues_push_only_on_success() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id,
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome {
+                pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            }),
         }),
     );
 
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::Push { repo_id: id, .. } if *id == repo_id))
+            .any(|effect| matches!(effect, Effect::SafePushAfterCommit { repo_id: id, context, .. } if *id == repo_id
+                && !context.amend
+                && context.pre_head.as_ref().is_some_and(|id| id.as_ref() == "1111111111111111111111111111111111111111")
+                && context.post_head.as_ref().is_some_and(|id| id.as_ref() == "2222222222222222222222222222222222222222")))
     );
-    assert_eq!(state.repos[0].push_in_flight, 1);
+    assert_eq!(state.repos[0].push_in_flight, 0);
     assert!(state.repos[0].pending_commit_retry.is_none());
 
     state.repos[0].push_in_flight = 0;
@@ -3189,9 +3195,102 @@ fn commit_finished_push_after_commit_enqueues_push_only_on_success() {
     assert!(
         !effects
             .iter()
-            .any(|effect| matches!(effect, Effect::Push { .. }))
+            .any(|effect| matches!(effect, Effect::SafePushAfterCommit { .. }))
     );
     assert_eq!(state.repos[0].push_in_flight, 0);
+}
+
+#[test]
+fn safe_push_after_commit_decision_push_enqueues_push() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: false,
+                pre_head: None,
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            },
+            result: Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push),
+        }),
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Push { repo_id: id, .. } if *id == repo_id))
+    );
+    assert_eq!(state.repos[0].push_in_flight, 1);
+}
+
+#[test]
+fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let expected = CommitId("1111111111111111111111111111111111111111".into());
+    let lease = gitcomet_core::services::ForcePushLease {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        expected: expected.clone(),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: true,
+                pre_head: Some(expected.clone()),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            },
+            result: Ok(
+                gitcomet_core::services::SafePushAfterCommitDecision::Blocked {
+                    summary: "published amend".to_string(),
+                    lease: Some(lease.clone()),
+                },
+            ),
+        }),
+    );
+
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Push { .. } | Effect::PushSetUpstream { .. }))
+    );
+    assert_eq!(state.repos[0].pending_force_push_lease, Some(lease));
+    assert!(
+        state.repos[0]
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Push after commit blocked")
+    );
 }
 
 #[test]

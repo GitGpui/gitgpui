@@ -648,6 +648,15 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::SafePushAfterCommit {
+            repo_id, context, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::SafePushAfterCommitFinished {
+                repo_id,
+                context,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::FetchAll {
             repo_id, prune: _, ..
         } => send(Msg::Internal(
@@ -715,6 +724,13 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::ForcePush,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::ForcePushWithLease { repo_id, lease, .. } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::ForcePushWithLease { lease },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1413,6 +1429,15 @@ pub(super) fn schedule_effect(
         } => {
             repo_actions::schedule_commit_amend(executor, repos, msg_tx, repo_id, message, auth);
         }
+        Effect::SafePushAfterCommit {
+            repo_id,
+            context,
+            auth,
+        } => {
+            repo_commands::schedule_safe_push_after_commit(
+                executor, repos, msg_tx, repo_id, context, auth,
+            );
+        }
         Effect::FetchAll {
             repo_id,
             prune,
@@ -1449,6 +1474,13 @@ pub(super) fn schedule_effect(
         Effect::ForcePush { repo_id, auth } => {
             repo_commands::schedule_force_push(executor, repos, msg_tx, repo_id, auth)
         }
+        Effect::ForcePushWithLease {
+            repo_id,
+            lease,
+            auth,
+        } => repo_commands::schedule_force_push_with_lease(
+            executor, repos, msg_tx, repo_id, lease, auth,
+        ),
         Effect::PushSetUpstream {
             repo_id,
             remote,

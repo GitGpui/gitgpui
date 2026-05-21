@@ -1945,13 +1945,15 @@ impl DetailsPaneView {
             (false, false) => "Commit",
             (false, true) => "Commit changes and Push",
             (true, false) => "Amend Previous Commit",
-            (true, true) => "Amend Previous Commit and Push",
+            (true, true) => "Amend and Push Safely",
         };
         let commit_tooltip = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
             (false, false) => "Commit staged changes",
             (false, true) => "Commit staged changes and push",
             (true, false) => "Amend the previous commit",
-            (true, true) => "Amend the previous commit and push",
+            (true, true) => {
+                "Amend the previous commit; published amends require explicit force push with lease"
+            }
         };
         let commit_options_invoker: SharedString = "commit_options".into();
         let commit_options_active = self

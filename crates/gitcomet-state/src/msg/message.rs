@@ -6,7 +6,8 @@ use gitcomet_core::error::Error;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustDecision,
+    CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, PullMode, RemoteUrlKind,
+    ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision, SubmoduleTrustDecision,
     SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
@@ -365,6 +366,10 @@ pub enum Msg {
         message: String,
         push_after_commit: bool,
     },
+    SafePushAfterCommit {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
+    },
     FetchAll {
         repo_id: RepoId,
     },
@@ -396,6 +401,10 @@ pub enum Msg {
     },
     ForcePush {
         repo_id: RepoId,
+    },
+    ForcePushWithLease {
+        repo_id: RepoId,
+        lease: ForcePushLease,
     },
     PushSetUpstream {
         repo_id: RepoId,
@@ -735,11 +744,16 @@ pub enum InternalMsg {
     },
     CommitFinished {
         repo_id: RepoId,
-        result: Result<(), Error>,
+        result: Result<CommitOperationOutcome, Error>,
     },
     CommitAmendFinished {
         repo_id: RepoId,
-        result: Result<(), Error>,
+        result: Result<CommitOperationOutcome, Error>,
+    },
+    SafePushAfterCommitFinished {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
+        result: Result<SafePushAfterCommitDecision, Error>,
     },
     RepoCommandFinished {
         repo_id: RepoId,

@@ -6,7 +6,9 @@ use gitcomet_core::conflict_session::{
 };
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
-use gitcomet_core::services::{BlameLine, SubmoduleTrustTarget};
+use gitcomet_core::services::{
+    BlameLine, ForcePushLease, SafePushAfterCommitContext, SubmoduleTrustTarget,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -304,6 +306,10 @@ pub enum AuthRetryOperation {
     RepoCommand {
         repo_id: RepoId,
         command: RepoCommandKind,
+    },
+    SafePushAfterCommit {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
     },
     Commit {
         repo_id: RepoId,
@@ -651,6 +657,7 @@ pub struct RepoState {
 
     pub command_log: Vec<CommandLogEntry>,
     pub pending_commit_retry: Option<PendingCommitRetry>,
+    pub pending_force_push_lease: Option<ForcePushLease>,
 }
 
 impl RepoState {
@@ -719,6 +726,7 @@ impl RepoState {
             diagnostics: Vec::new(),
             command_log: Vec::new(),
             pending_commit_retry: None,
+            pending_force_push_lease: None,
         }
     }
 

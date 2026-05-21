@@ -12,7 +12,7 @@ use crate::model::{
 };
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
-use gitcomet_core::services::GitRepository;
+use gitcomet_core::services::{GitRepository, SafePushAfterCommitContext};
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -56,6 +56,7 @@ fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
         repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_add(1);
+        repo_state.pending_force_push_lease = None;
         repo_state.bump_ops_rev();
     }
 }
@@ -129,6 +130,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::SaveWorktreeFile { .. }
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
+            | Msg::SafePushAfterCommit { .. }
             | Msg::FetchAll { .. }
             | Msg::PruneMergedBranches { .. }
             | Msg::PruneLocalTags { .. }
@@ -138,6 +140,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::SquashRef { .. }
             | Msg::Push { .. }
             | Msg::ForcePush { .. }
+            | Msg::ForcePushWithLease { .. }
             | Msg::PushSetUpstream { .. }
             | Msg::SetUpstreamBranch { .. }
             | Msg::UnsetUpstreamBranch { .. }
@@ -202,6 +205,19 @@ fn auth_prompt_for_repo_command(
     })
 }
 
+fn auth_prompt_for_safe_push_after_commit(
+    repo_id: RepoId,
+    context: SafePushAfterCommitContext,
+    error: &gitcomet_core::error::Error,
+) -> Option<AuthPromptState> {
+    let kind = util::detect_auth_prompt_kind(error)?;
+    Some(AuthPromptState {
+        kind,
+        reason: util::format_error_for_user(error),
+        operation: AuthRetryOperation::SafePushAfterCommit { repo_id, context },
+    })
+}
+
 fn auth_prompt_for_commit(
     repo_id: RepoId,
     pending: Option<PendingCommitRetry>,
@@ -242,6 +258,9 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
         AuthRetryOperation::RepoCommand { repo_id, command } => {
             retry_msg_for_repo_command(repo_id, command)
         }
+        AuthRetryOperation::SafePushAfterCommit { repo_id, context } => {
+            Some(Msg::SafePushAfterCommit { repo_id, context })
+        }
         AuthRetryOperation::Commit {
             repo_id,
             message,
@@ -267,6 +286,7 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
 fn clear_banner_error_for_auth_operation(state: &mut AppState, operation: &AuthRetryOperation) {
     match operation {
         AuthRetryOperation::RepoCommand { repo_id, .. }
+        | AuthRetryOperation::SafePushAfterCommit { repo_id, .. }
         | AuthRetryOperation::Commit { repo_id, .. } => {
             util::clear_banner_error_for_repo(state, *repo_id);
         }
@@ -299,6 +319,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::SquashRef { reference } => Msg::SquashRef { repo_id, reference },
         RepoCommandKind::Push => Msg::Push { repo_id },
         RepoCommandKind::ForcePush => Msg::ForcePush { repo_id },
+        RepoCommandKind::ForcePushWithLease { lease } => Msg::ForcePushWithLease { repo_id, lease },
         RepoCommandKind::PushSetUpstream { remote, branch } => Msg::PushSetUpstream {
             repo_id,
             remote,
@@ -431,11 +452,13 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::LoadSubmodule { auth: slot, .. }
         | Effect::Commit { auth: slot, .. }
         | Effect::CommitAmend { auth: slot, .. }
+        | Effect::SafePushAfterCommit { auth: slot, .. }
         | Effect::FetchAll { auth: slot, .. }
         | Effect::Pull { auth: slot, .. }
         | Effect::PullBranch { auth: slot, .. }
         | Effect::Push { auth: slot, .. }
         | Effect::ForcePush { auth: slot, .. }
+        | Effect::ForcePushWithLease { auth: slot, .. }
         | Effect::PushSetUpstream { auth: slot, .. }
         | Effect::DeleteRemoteBranch { auth: slot, .. }
         | Effect::PushTag { auth: slot, .. }
@@ -1032,6 +1055,9 @@ pub(super) fn reduce(
             }
             actions_emit_effects::commit_amend(repo_id, message)
         }
+        Msg::SafePushAfterCommit { repo_id, context } => {
+            actions_emit_effects::safe_push_after_commit(repo_id, context)
+        }
         Msg::FetchAll { repo_id } => actions_emit_effects::fetch_all(repos, state, repo_id),
         Msg::PruneMergedBranches { repo_id } => {
             actions_emit_effects::prune_merged_branches(repos, state, repo_id)
@@ -1055,6 +1081,9 @@ pub(super) fn reduce(
         }
         Msg::Push { repo_id } => actions_emit_effects::push(repos, state, repo_id),
         Msg::ForcePush { repo_id } => actions_emit_effects::force_push(repos, state, repo_id),
+        Msg::ForcePushWithLease { repo_id, lease } => {
+            actions_emit_effects::force_push_with_lease(repos, state, repo_id, lease)
+        }
         Msg::PushSetUpstream {
             repo_id,
             remote,
@@ -1481,7 +1510,8 @@ pub(super) fn reduce(
                 .iter()
                 .find(|r| r.id == repo_id)
                 .and_then(|r| r.pending_commit_retry.clone());
-            let push_after_commit = result.is_ok()
+            let outcome = result.as_ref().ok().cloned();
+            let push_after_commit = outcome.is_some()
                 && pending_commit
                     .as_ref()
                     .is_some_and(|pending| pending.push_after_commit);
@@ -1489,7 +1519,8 @@ pub(super) fn reduce(
                 .as_ref()
                 .err()
                 .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
-            let mut effects = actions_emit_effects::commit_finished(state, repo_id, result);
+            let commit_result = result.map(|_| ());
+            let mut effects = actions_emit_effects::commit_finished(state, repo_id, commit_result);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_commit_retry = None;
             }
@@ -1497,8 +1528,17 @@ pub(super) fn reduce(
                 util::clear_staged_git_auth_env();
                 state.auth_prompt = Some(prompt);
             }
-            if push_after_commit {
-                effects.extend(actions_emit_effects::push(repos, state, repo_id));
+            if push_after_commit
+                && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
+            {
+                effects.extend(actions_emit_effects::safe_push_after_commit(
+                    repo_id,
+                    SafePushAfterCommitContext {
+                        amend: pending_commit.amend,
+                        pre_head: outcome.pre_head,
+                        post_head: outcome.post_head,
+                    },
+                ));
             }
             effects
         }
@@ -1508,7 +1548,8 @@ pub(super) fn reduce(
                 .iter()
                 .find(|r| r.id == repo_id)
                 .and_then(|r| r.pending_commit_retry.clone());
-            let push_after_commit = result.is_ok()
+            let outcome = result.as_ref().ok().cloned();
+            let push_after_commit = outcome.is_some()
                 && pending_commit
                     .as_ref()
                     .is_some_and(|pending| pending.push_after_commit);
@@ -1516,7 +1557,9 @@ pub(super) fn reduce(
                 .as_ref()
                 .err()
                 .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
-            let mut effects = actions_emit_effects::commit_amend_finished(state, repo_id, result);
+            let commit_result = result.map(|_| ());
+            let mut effects =
+                actions_emit_effects::commit_amend_finished(state, repo_id, commit_result);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_commit_retry = None;
             }
@@ -1524,8 +1567,34 @@ pub(super) fn reduce(
                 util::clear_staged_git_auth_env();
                 state.auth_prompt = Some(prompt);
             }
-            if push_after_commit {
-                effects.extend(actions_emit_effects::push(repos, state, repo_id));
+            if push_after_commit
+                && let (Some(outcome), Some(pending_commit)) = (outcome, pending_commit)
+            {
+                effects.extend(actions_emit_effects::safe_push_after_commit(
+                    repo_id,
+                    SafePushAfterCommitContext {
+                        amend: pending_commit.amend,
+                        pre_head: outcome.pre_head,
+                        post_head: outcome.post_head,
+                    },
+                ));
+            }
+            effects
+        }
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context,
+            result,
+        }) => {
+            let auth_prompt = result.as_ref().err().and_then(|error| {
+                auth_prompt_for_safe_push_after_commit(repo_id, context.clone(), error)
+            });
+            let effects = actions_emit_effects::safe_push_after_commit_finished(
+                repos, state, repo_id, result,
+            );
+            if let Some(prompt) = auth_prompt {
+                util::clear_staged_git_auth_env();
+                state.auth_prompt = Some(prompt);
             }
             effects
         }

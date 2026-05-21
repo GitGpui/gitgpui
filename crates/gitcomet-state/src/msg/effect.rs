@@ -2,7 +2,8 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{
-    ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustTarget,
+    ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
+    SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -330,6 +331,11 @@ pub enum Effect {
         message: String,
         auth: Option<StagedGitAuth>,
     },
+    SafePushAfterCommit {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
+        auth: Option<StagedGitAuth>,
+    },
     FetchAll {
         repo_id: RepoId,
         prune: bool,
@@ -366,6 +372,11 @@ pub enum Effect {
     },
     ForcePush {
         repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    ForcePushWithLease {
+        repo_id: RepoId,
+        lease: ForcePushLease,
         auth: Option<StagedGitAuth>,
     },
     PushSetUpstream {

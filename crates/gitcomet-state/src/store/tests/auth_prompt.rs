@@ -34,11 +34,13 @@ fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
         | Effect::UpdateSubmodules { auth, .. }
         | Effect::Commit { auth, .. }
         | Effect::CommitAmend { auth, .. }
+        | Effect::SafePushAfterCommit { auth, .. }
         | Effect::FetchAll { auth, .. }
         | Effect::Pull { auth, .. }
         | Effect::PullBranch { auth, .. }
         | Effect::Push { auth, .. }
         | Effect::ForcePush { auth, .. }
+        | Effect::ForcePushWithLease { auth, .. }
         | Effect::PushSetUpstream { auth, .. }
         | Effect::DeleteRemoteBranch { auth, .. }
         | Effect::PushTag { auth, .. }
@@ -300,6 +302,38 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
 }
 
 #[test]
+fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let context = gitcomet_core::services::SafePushAfterCommitContext {
+        amend: true,
+        pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+        post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: context.clone(),
+            result: Err(auth_error(
+                "git fetch origin refs/heads/main failed: fatal: could not read Username for 'https://example.com': terminal prompts disabled",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(prompt.kind, AuthPromptKind::UsernamePassword);
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::SafePushAfterCommit { repo_id, context }
+    );
+}
+
+#[test]
 fn clone_finished_auth_error_sets_clone_retry_prompt() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -546,6 +580,51 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             push_after_commit: false,
         })
     );
+}
+
+#[test]
+fn submit_auth_prompt_replays_safe_push_after_commit() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let context = gitcomet_core::services::SafePushAfterCommitContext {
+        amend: true,
+        pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+        post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+    };
+
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::SafePushAfterCommit {
+            repo_id,
+            context: context.clone(),
+        },
+    });
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: None,
+            secret: "passphrase".to_string(),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SafePushAfterCommit {
+            repo_id: RepoId(1),
+            context: emitted,
+            ..
+        }] if emitted == &context
+    ));
+    let auth = effect_git_auth(&effects[0]).expect("safe push auth should be present");
+    assert_eq!(auth.kind, GitAuthKind::Passphrase);
+    assert_eq!(auth.secret, "passphrase");
 }
 
 #[test]
@@ -885,6 +964,24 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             branch,
             ..
         }] if remote == "origin" && branch == "main"
+    ));
+
+    let force_with_lease_effects = replay_case(RepoCommandKind::ForcePushWithLease {
+        lease: gitcomet_core::services::ForcePushLease {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+            expected: CommitId("1111111111111111111111111111111111111111".into()),
+            local_branch: "main".to_string(),
+            local_head: CommitId("2222222222222222222222222222222222222222".into()),
+        },
+    });
+    assert!(matches!(
+        force_with_lease_effects.as_slice(),
+        [Effect::ForcePushWithLease {
+            repo_id: RepoId(1),
+            lease,
+            ..
+        }] if lease.remote == "origin" && lease.branch == "main"
     ));
 
     let unset_upstream_effects = replay_case(RepoCommandKind::UnsetUpstreamBranch {

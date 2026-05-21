@@ -232,6 +232,17 @@ pub(super) fn commit_amend(repo_id: RepoId, message: String) -> Vec<Effect> {
     }]
 }
 
+pub(super) fn safe_push_after_commit(
+    repo_id: RepoId,
+    context: gitcomet_core::services::SafePushAfterCommitContext,
+) -> Vec<Effect> {
+    vec![Effect::SafePushAfterCommit {
+        repo_id,
+        context,
+        auth: None,
+    }]
+}
+
 enum InFlightKind {
     Pull,
     Push,
@@ -353,6 +364,20 @@ pub(super) fn force_push(
     bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::ForcePush {
         repo_id,
+        auth: None,
+    }]
+}
+
+pub(super) fn force_push_with_lease(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    lease: gitcomet_core::services::ForcePushLease,
+) -> Vec<Effect> {
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
+    vec![Effect::ForcePushWithLease {
+        repo_id,
+        lease,
         auth: None,
     }]
 }
@@ -645,6 +670,65 @@ pub(super) fn commit_amend_finished(
     refresh_primary_effects(repo_state)
 }
 
+pub(super) fn safe_push_after_commit_finished(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
+) -> Vec<Effect> {
+    match result {
+        Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push) => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.pending_force_push_lease = None;
+            }
+            push(repos, state, repo_id)
+        }
+        Ok(gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream {
+            remote,
+            branch,
+        }) => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.pending_force_push_lease = None;
+            }
+            push_set_upstream(repos, state, repo_id, remote, branch)
+        }
+        Ok(gitcomet_core::services::SafePushAfterCommitDecision::Blocked { summary, lease }) => {
+            let git_log_settings = state.git_log_settings;
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            let full_summary = format!("Push after commit blocked: {summary}");
+            repo_state.pending_force_push_lease = lease;
+            repo_state.last_error = Some(full_summary.clone());
+            push_action_log(
+                repo_state,
+                false,
+                "Push after commit".to_string(),
+                full_summary,
+                None,
+            );
+            refresh_full_effects(repo_state, git_log_settings)
+        }
+        Err(e) => {
+            let git_log_settings = state.git_log_settings;
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.pending_force_push_lease = None;
+            let summary = format_failure_summary("Push after commit", &e);
+            repo_state.last_error = Some(summary.clone());
+            push_action_log(
+                repo_state,
+                false,
+                "Push after commit".to_string(),
+                summary,
+                Some(&e),
+            );
+            refresh_full_effects(repo_state, git_log_settings)
+        }
+    }
+}
+
 fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
     matches!(
         command,
@@ -748,6 +832,7 @@ pub(super) fn repo_command_finished(
         }
         RepoCommandKind::Push
         | RepoCommandKind::ForcePush
+        | RepoCommandKind::ForcePushWithLease { .. }
         | RepoCommandKind::PushSetUpstream { .. }
         | RepoCommandKind::DeleteRemoteBranch { .. }
         | RepoCommandKind::PushTag { .. }
@@ -776,6 +861,15 @@ pub(super) fn repo_command_finished(
         Ok(output) => {
             repo_state.last_error = None;
             clear_banner = true;
+            if matches!(
+                &command,
+                RepoCommandKind::Push
+                    | RepoCommandKind::ForcePush
+                    | RepoCommandKind::ForcePushWithLease { .. }
+                    | RepoCommandKind::PushSetUpstream { .. }
+            ) {
+                repo_state.pending_force_push_lease = None;
+            }
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             if matches!(
                 &command,

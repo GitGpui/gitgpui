@@ -4268,6 +4268,18 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::SafePushAfterCommit {
+                repo_id,
+                context: gitcomet_core::services::SafePushAfterCommitContext {
+                    amend: false,
+                    pre_head: None,
+                    post_head: None,
+                },
+                auth: None,
+            },
+            1,
+        ),
+        (
             Effect::FetchAll {
                 repo_id,
                 prune: true,
@@ -4318,6 +4330,20 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::ForcePush {
                 repo_id,
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::ForcePushWithLease {
+                repo_id,
+                lease: gitcomet_core::services::ForcePushLease {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                    expected: CommitId("1111111111111111111111111111111111111111".into()),
+                    local_branch: "main".to_string(),
+                    local_head: CommitId("2222222222222222222222222222222222222222".into()),
+                },
                 auth: None,
             },
             1,

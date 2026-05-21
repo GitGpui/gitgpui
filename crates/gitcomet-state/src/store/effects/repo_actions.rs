@@ -30,6 +30,24 @@ fn schedule_repo_action_with_hook<F, H, M>(
     });
 }
 
+fn schedule_repo_action_with_result<T, F, M>(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    run: F,
+    finish: M,
+) where
+    T: Send + 'static,
+    F: FnOnce(Arc<dyn GitRepository>) -> Result<T, Error> + Send + 'static,
+    M: FnOnce(RepoId, Result<T, Error>) -> Msg + Send + 'static,
+{
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = run(repo);
+        send_or_log(&msg_tx, finish(repo_id, result));
+    });
+}
+
 fn schedule_repo_action<F>(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -366,13 +384,12 @@ pub(super) fn schedule_commit(
     message: String,
     auth: Option<StagedGitAuth>,
 ) {
-    schedule_repo_action_with_hook(
+    schedule_repo_action_with_result(
         executor,
         repos,
         msg_tx,
         repo_id,
-        move |repo| run_with_git_auth(auth, || repo.commit(&message)),
-        |_msg_tx, _repo_id, _result| {},
+        move |repo| run_with_git_auth(auth, || repo.commit_with_outcome(&message)),
         |repo_id, result| {
             Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result })
         },
@@ -387,13 +404,12 @@ pub(super) fn schedule_commit_amend(
     message: String,
     auth: Option<StagedGitAuth>,
 ) {
-    schedule_repo_action_with_hook(
+    schedule_repo_action_with_result(
         executor,
         repos,
         msg_tx,
         repo_id,
-        move |repo| run_with_git_auth(auth, || repo.commit_amend(&message)),
-        |_msg_tx, _repo_id, _result| {},
+        move |repo| run_with_git_auth(auth, || repo.commit_amend_with_outcome(&message)),
         |repo_id, result| {
             Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result })
         },

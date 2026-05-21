@@ -9,8 +9,10 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
-    BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
-    PullMode, RemoteUrlKind, ResetMode, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    BlameLine, CommandOutput, CommitOperationOutcome, ConflictFileStages, ConflictSide,
+    ForcePushLease, GitRepository, MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result,
+    SafePushAfterCommitContext, SafePushAfterCommitDecision, SubmoduleTrustDecision,
+    SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -377,8 +379,16 @@ impl GitRepository for GixRepo {
         self.commit_impl(message)
     }
 
+    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_with_outcome_impl(message)
+    }
+
     fn commit_amend(&self, message: &str) -> Result<()> {
         self.commit_amend_impl(message)
+    }
+
+    fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_amend_with_outcome_impl(message)
     }
 
     fn fetch_all(&self) -> Result<()> {
@@ -415,6 +425,17 @@ impl GitRepository for GixRepo {
 
     fn push_force_with_output(&self) -> Result<CommandOutput> {
         self.push_force_with_output_impl()
+    }
+
+    fn safe_push_after_commit(
+        &self,
+        context: &SafePushAfterCommitContext,
+    ) -> Result<SafePushAfterCommitDecision> {
+        self.safe_push_after_commit_impl(context)
+    }
+
+    fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {
+        self.push_force_with_lease_with_output_impl(lease)
     }
 
     fn reset_with_output(&self, target: &str, mode: ResetMode) -> Result<CommandOutput> {
