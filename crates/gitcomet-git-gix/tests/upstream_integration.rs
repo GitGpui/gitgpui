@@ -656,3 +656,104 @@ fn safe_push_after_amend_blocks_when_remote_advanced_without_conflicting_worktre
     assert!(summary.contains("changed while committing"));
     assert!(!run_git_capture(&work_repo, &["status", "--short"]).contains("UU "));
 }
+
+#[test]
+fn safe_push_after_commit_remote_advance_does_not_refresh_force_lease_tracking_ref() {
+    if !require_git_shell_for_upstream_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    let peer_repo = root.join("peer");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+
+    run_git(&remote_repo, &["init", "--bare"]);
+    run_git(&work_repo, &["init"]);
+    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
+    run_git(&work_repo, &["config", "user.name", "You"]);
+    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    run_git(
+        &work_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_str().expect("remote path"),
+        ],
+    );
+
+    fs::write(work_repo.join("file.txt"), "base\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    let branch = run_git_capture(&work_repo, &["branch", "--show-current"])
+        .trim()
+        .to_string();
+    run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
+    let tracking_ref = format!("refs/remotes/origin/{branch}");
+    let tracking_before = commit_id(&work_repo, &tracking_ref);
+
+    run_git(root, &["clone", remote_repo.to_str().unwrap(), "peer"]);
+    run_git(&peer_repo, &["config", "user.email", "peer@example.com"]);
+    run_git(&peer_repo, &["config", "user.name", "Peer"]);
+    run_git(&peer_repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(peer_repo.join("file.txt"), "remote advanced\n").unwrap();
+    run_git(&peer_repo, &["add", "file.txt"]);
+    run_git(
+        &peer_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "remote advanced",
+        ],
+    );
+    run_git(&peer_repo, &["push", "origin", "HEAD"]);
+    let remote_advanced = commit_id(&remote_repo, &format!("refs/heads/{branch}"));
+
+    fs::write(work_repo.join("file.txt"), "local commit\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "local commit"],
+    );
+    let post_head = commit_id(&work_repo, "HEAD");
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).unwrap();
+    let decision = opened
+        .safe_push_after_commit(&SafePushAfterCommitContext {
+            amend: false,
+            local_branch: Some(branch.clone()),
+            pre_head: None,
+            post_head: Some(post_head),
+        })
+        .unwrap();
+
+    let SafePushAfterCommitDecision::Blocked {
+        summary,
+        lease: None,
+    } = decision
+    else {
+        panic!("remote-advanced commit should block without lease");
+    };
+    assert!(summary.contains("changed while committing"));
+    assert_eq!(commit_id(&work_repo, &tracking_ref), tracking_before);
+    assert_eq!(commit_id(&work_repo, "FETCH_HEAD"), remote_advanced);
+
+    assert!(
+        opened.push_force_with_output().is_err(),
+        "generic force-with-lease should reject the stale tracking ref"
+    );
+    assert_eq!(
+        commit_id(&remote_repo, &format!("refs/heads/{branch}")),
+        remote_advanced
+    );
+}

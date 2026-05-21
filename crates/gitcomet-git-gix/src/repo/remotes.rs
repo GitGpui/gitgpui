@@ -89,10 +89,6 @@ fn normalize_remote_url(url: &str) -> String {
     format!("file:///{normalized_path}")
 }
 
-fn remote_tracking_ref_name(remote: &str, branch: &str) -> String {
-    format!("refs/remotes/{remote}/{branch}")
-}
-
 fn safe_push_ref_display(remote: &str, branch: &str) -> String {
     format!("{remote}/{branch}")
 }
@@ -553,29 +549,6 @@ impl GixRepo {
         self.push_after_commit_target_with_optional_output_impl(target, true, true)
     }
 
-    fn remote_branch_tip(&self, remote: &str, branch: &str) -> Result<Option<CommitId>> {
-        validate_ref_like_arg(remote, "remote name")?;
-        validate_ref_like_arg(branch, "branch name")?;
-
-        let repo = self.reopen_repo()?;
-        let ref_name = remote_tracking_ref_name(remote, branch);
-        let Some(mut reference) = repo
-            .try_find_reference(ref_name.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
-        else {
-            return Ok(None);
-        };
-
-        let target = match reference.try_id() {
-            Some(id) => id.detach(),
-            None => reference
-                .peel_to_id()
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel branch: {e}"))))?
-                .detach(),
-        };
-        Ok(Some(CommitId(target.to_string().into())))
-    }
-
     fn fetch_remote_branch_tip_for_safe_push(
         &self,
         remote: &str,
@@ -585,25 +558,38 @@ impl GixRepo {
         validate_ref_like_arg(branch, "branch name")?;
 
         let remote_ref = format!("refs/heads/{branch}");
-        let tracking_ref = remote_tracking_ref_name(remote, branch);
-        let refspec = format!("+{remote_ref}:{tracking_ref}");
-        let label = format!("git fetch {remote} {remote_ref}");
+        let label = format!("git fetch --refmap= {remote} {remote_ref}");
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch")
             .arg("--no-tags")
+            .arg("--refmap=")
             .arg("--")
             .arg(remote)
-            .arg(refspec);
+            .arg(&remote_ref);
         let output = run_git_raw_output(cmd, &label)?;
         if !output.status.success() {
             if output_mentions_missing_remote_ref(&output) {
-                self.best_effort_delete_reference(&tracking_ref);
                 return Ok(None);
             }
             return Err(git_command_failed_error(&label, output));
         }
 
-        self.remote_branch_tip(remote, branch)
+        let label = "git rev-parse --verify FETCH_HEAD^{commit}";
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("rev-parse")
+            .arg("--verify")
+            .arg("FETCH_HEAD^{commit}");
+        let output = run_git_raw_output(cmd, label)?;
+        if !output.status.success() {
+            return Err(git_command_failed_error(label, output));
+        }
+
+        let tip = bytes_to_text_preserving_utf8(&output.stdout)
+            .trim()
+            .to_string();
+        let tip = CommitId(tip.into());
+        validate_hex_commit_id(&tip)?;
+        Ok(Some(tip))
     }
 
     fn commit_is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
