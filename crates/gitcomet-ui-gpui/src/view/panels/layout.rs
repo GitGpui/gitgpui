@@ -402,8 +402,16 @@ impl DetailsPaneView {
     }
 
     fn repo_has_head_commit(repo: &RepoState) -> bool {
-        match &repo.log {
-            Loadable::Ready(page) => !page.commits.is_empty(),
+        if repo.detached_head_commit.is_some() {
+            return true;
+        }
+
+        match &repo.head_branch {
+            Loadable::Ready(head) if head == "HEAD" => true,
+            Loadable::Ready(head) => match &repo.branches {
+                Loadable::Ready(branches) => branches.iter().any(|branch| branch.name == *head),
+                _ => true,
+            },
             _ => true,
         }
     }
@@ -443,12 +451,12 @@ impl DetailsPaneView {
         }
 
         if amend {
+            self.mark_pending_commit_amend(repo_id);
             self.store.dispatch(Msg::CommitAmend {
                 repo_id,
                 message: message.trim().to_string(),
                 push_after_commit: self.commit_push_after_enabled,
             });
-            self.pending_commit_amend_repo = Some(repo_id);
         } else {
             self.store.dispatch(Msg::Commit {
                 repo_id,
@@ -2079,7 +2087,7 @@ impl DetailsPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_core::domain::{Branch, CommitId, LogPage, RepoSpec};
     use gitcomet_state::model::{Loadable, RepoId, RepoState};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -2112,6 +2120,15 @@ mod tests {
         repo
     }
 
+    fn branch(name: &str, target: &str) -> Branch {
+        Branch {
+            name: name.to_string(),
+            target: CommitId(target.into()),
+            upstream: None,
+            divergence: None,
+        }
+    }
+
     #[test]
     fn commit_allowed_when_staged_changes_exist() {
         assert!(commit_allowed(false, 1));
@@ -2127,6 +2144,56 @@ mod tests {
     #[test]
     fn commit_not_allowed_without_staged_changes_or_merge() {
         assert!(!commit_allowed(false, 0));
+    }
+
+    #[test]
+    fn amend_allowed_when_filtered_log_is_empty_but_head_branch_exists() {
+        let mut repo = test_repo();
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "abc123")]));
+        repo.log = Loadable::Ready(Arc::new(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        }));
+
+        assert!(DetailsPaneView::can_submit_commit(
+            Some(&repo),
+            "message",
+            true
+        ));
+    }
+
+    #[test]
+    fn amend_not_allowed_on_unborn_head_branch() {
+        let mut repo = test_repo();
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.log = Loadable::Ready(Arc::new(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        }));
+
+        assert!(!DetailsPaneView::can_submit_commit(
+            Some(&repo),
+            "message",
+            true
+        ));
+    }
+
+    #[test]
+    fn amend_allowed_on_detached_head_without_visible_log_entry() {
+        let mut repo = test_repo();
+        repo.head_branch = Loadable::Ready("HEAD".to_string());
+        repo.log = Loadable::Ready(Arc::new(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        }));
+
+        assert!(DetailsPaneView::can_submit_commit(
+            Some(&repo),
+            "message",
+            true
+        ));
     }
 
     #[test]

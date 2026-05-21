@@ -18,6 +18,21 @@ use rustc_hash::FxHashSet as HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
+const RECENT_COMMIT_MESSAGES_MAX_LIMIT: usize = 100;
+
+fn recent_commit_message_limits(limit: usize) -> Option<(usize, usize)> {
+    let limit = limit.min(RECENT_COMMIT_MESSAGES_MAX_LIMIT);
+    if limit == 0 {
+        return None;
+    }
+
+    let scan_limit = limit
+        .saturating_mul(5)
+        .min(RECENT_COMMIT_MESSAGES_MAX_LIMIT)
+        .max(limit);
+    Some((limit, scan_limit))
+}
+
 struct CursorGate<'a> {
     last_seen: Option<&'a str>,
     started: bool,
@@ -1038,11 +1053,10 @@ impl GixRepo {
         &self,
         limit: usize,
     ) -> Result<Vec<RecentCommitMessage>> {
-        if limit == 0 {
+        let Some((limit, scan_limit)) = recent_commit_message_limits(limit) else {
             return Ok(Vec::new());
-        }
+        };
 
-        let scan_limit = limit.saturating_mul(5).clamp(limit, 100);
         let page = self.log_history_mode_page_impl(HistoryMode::FirstParent, scan_limit, None)?;
         let repo = self._repo.to_thread_local();
         let mut seen = HashSet::default();
@@ -1180,6 +1194,39 @@ mod tests {
     #[test]
     fn object_id_from_commit_id_rejects_invalid_hex() {
         assert!(object_id_from_commit_id(&CommitId("not-a-sha".into())).is_none());
+    }
+
+    #[test]
+    fn recent_commit_message_limits_cap_large_requests_without_panicking() {
+        assert_eq!(recent_commit_message_limits(0), None);
+        assert_eq!(recent_commit_message_limits(1), Some((1, 5)));
+        assert_eq!(recent_commit_message_limits(10), Some((10, 50)));
+        assert_eq!(recent_commit_message_limits(20), Some((20, 100)));
+        assert_eq!(recent_commit_message_limits(21), Some((21, 100)));
+        assert_eq!(recent_commit_message_limits(100), Some((100, 100)));
+        assert_eq!(recent_commit_message_limits(101), Some((100, 100)));
+        assert_eq!(recent_commit_message_limits(usize::MAX), Some((100, 100)));
+    }
+
+    #[test]
+    fn recent_commit_messages_large_limit_reads_available_messages() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        commit_file(workdir, "tracked.txt", "one\n", "first");
+        commit_file(workdir, "tracked.txt", "two\n", "second");
+        commit_file(workdir, "tracked.txt", "three\n", "third");
+
+        let repo = open_repo(workdir);
+        let messages = repo
+            .recent_commit_messages_impl(usize::MAX)
+            .expect("recent commit messages");
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].message, "third");
+        assert_eq!(messages[1].message, "second");
+        assert_eq!(messages[2].message, "first");
     }
 
     #[test]
