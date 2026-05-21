@@ -34,6 +34,7 @@ impl DiffSearchMatcher {
         let (regex, regex_error) = if options.regex && !query.is_empty() {
             match RegexBuilder::new(&query)
                 .case_insensitive(!options.match_case)
+                .multi_line(true)
                 .build()
             {
                 Ok(regex) => (Some(regex), None),
@@ -72,21 +73,7 @@ impl DiffSearchMatcher {
 
     #[cfg(test)]
     pub(in crate::view) fn is_match(&self, haystack: &str) -> bool {
-        if self.is_empty() || self.regex_error.is_some() {
-            return false;
-        }
-
-        if let Some(regex) = self.regex.as_ref() {
-            return regex
-                .find_iter(haystack)
-                .any(|m| self.range_has_requested_boundaries(haystack, m.start()..m.end()));
-        }
-
-        if self.options.match_case {
-            return self.find_literal_case_sensitive(haystack).is_some();
-        }
-
-        self.find_literal_ascii_case_insensitive(haystack).is_some()
+        self.find_range_at_or_after(haystack, 0).is_some()
     }
 
     pub(in crate::view) fn find_ranges_into(
@@ -100,46 +87,32 @@ impl DiffSearchMatcher {
             return;
         }
 
-        if let Some(regex) = self.regex.as_ref() {
-            for m in regex.find_iter(haystack) {
-                let range = m.start()..m.end();
-                if !range.is_empty() && self.range_has_requested_boundaries(haystack, range.clone())
-                {
-                    out.push(range);
-                    if out.len() == max_matches {
-                        break;
-                    }
-                }
-            }
-            return;
-        }
-
-        if max_matches == 1 {
-            let range = if self.options.match_case {
-                self.find_literal_case_sensitive(haystack)
-            } else {
-                self.find_literal_ascii_case_insensitive(haystack)
+        let mut search_start = 0usize;
+        while out.len() < max_matches {
+            let Some(range) = self.find_range_at_or_after(haystack, search_start) else {
+                break;
             };
-            if let Some(range) = range {
-                out.push(range);
-            }
-            return;
-        }
-
-        if self.options.match_case {
-            self.find_literal_case_sensitive_into(haystack, out, max_matches);
-        } else {
-            self.find_literal_ascii_case_insensitive_into(haystack, out, max_matches);
+            search_start = range.end;
+            out.push(range);
         }
     }
 
-    fn find_literal_case_sensitive(&self, haystack: &str) -> Option<Range<usize>> {
+    fn find_literal_case_sensitive_from(
+        &self,
+        haystack: &str,
+        start_at: usize,
+    ) -> Option<Range<usize>> {
         let needle = self.query.as_bytes();
         let haystack_bytes = haystack.as_bytes();
         let (&first, _) = needle.first().zip(needle.last())?;
         let last_start = haystack_bytes.len().checked_sub(needle.len())?;
+        let start_at = start_at.min(haystack_bytes.len());
+        if start_at > last_start {
+            return None;
+        }
 
-        for start in memchr_iter(first, &haystack_bytes[..=last_start]) {
+        for offset in memchr_iter(first, &haystack_bytes[start_at..=last_start]) {
+            let start = start_at + offset;
             let range = start..(start + needle.len());
             if haystack_bytes.get(range.clone()) == Some(needle)
                 && self.range_has_requested_boundaries(haystack, range.clone())
@@ -150,49 +123,25 @@ impl DiffSearchMatcher {
         None
     }
 
-    fn find_literal_case_sensitive_into(
+    fn find_literal_ascii_case_insensitive_from(
         &self,
         haystack: &str,
-        out: &mut Vec<Range<usize>>,
-        max_matches: usize,
-    ) {
-        let needle = self.query.as_bytes();
-        let haystack_bytes = haystack.as_bytes();
-        let Some((&first, _)) = needle.first().zip(needle.last()) else {
-            return;
-        };
-        let Some(last_start) = haystack_bytes.len().checked_sub(needle.len()) else {
-            return;
-        };
-
-        let mut next_allowed_start = 0usize;
-        for start in memchr_iter(first, &haystack_bytes[..=last_start]) {
-            if start < next_allowed_start {
-                continue;
-            }
-            let range = start..(start + needle.len());
-            if haystack_bytes.get(range.clone()) == Some(needle)
-                && self.range_has_requested_boundaries(haystack, range.clone())
-            {
-                out.push(range);
-                if out.len() == max_matches {
-                    break;
-                }
-                next_allowed_start = start + needle.len();
-            }
-        }
-    }
-
-    fn find_literal_ascii_case_insensitive(&self, haystack: &str) -> Option<Range<usize>> {
+        start_at: usize,
+    ) -> Option<Range<usize>> {
         let needle = self.query.as_bytes();
         let haystack_bytes = haystack.as_bytes();
         let (&first, &last) = needle.first().zip(needle.last())?;
         let last_start = haystack_bytes.len().checked_sub(needle.len())?;
+        let start_at = start_at.min(haystack_bytes.len());
+        if start_at > last_start {
+            return None;
+        }
         let first_lower = first.to_ascii_lowercase();
         let first_upper = first.to_ascii_uppercase();
 
         if needle.len() == 1 {
-            for start in memchr2_iter(first_lower, first_upper, haystack_bytes) {
+            for offset in memchr2_iter(first_lower, first_upper, &haystack_bytes[start_at..]) {
+                let start = start_at + offset;
                 let range = start..(start + 1);
                 if self.range_has_requested_boundaries(haystack, range.clone()) {
                     return Some(range);
@@ -204,7 +153,12 @@ impl DiffSearchMatcher {
         let middle = &needle[1..needle.len() - 1];
         let last_lower = last.to_ascii_lowercase();
         let last_upper = last.to_ascii_uppercase();
-        for start in memchr2_iter(first_lower, first_upper, &haystack_bytes[..=last_start]) {
+        for offset in memchr2_iter(
+            first_lower,
+            first_upper,
+            &haystack_bytes[start_at..=last_start],
+        ) {
+            let start = start_at + offset;
             let haystack_last = haystack_bytes[start + needle.len() - 1];
             if haystack_last != last_lower && haystack_last != last_upper {
                 continue;
@@ -220,59 +174,87 @@ impl DiffSearchMatcher {
         None
     }
 
-    fn find_literal_ascii_case_insensitive_into(
+    pub(in crate::view) fn find_row_overlay_ranges_into(
         &self,
         haystack: &str,
         out: &mut Vec<Range<usize>>,
         max_matches: usize,
     ) {
-        let needle = self.query.as_bytes();
-        let haystack_bytes = haystack.as_bytes();
-        let Some((&first, &last)) = needle.first().zip(needle.last()) else {
-            return;
-        };
-        let Some(last_start) = haystack_bytes.len().checked_sub(needle.len()) else {
-            return;
-        };
-
-        let first_lower = first.to_ascii_lowercase();
-        let first_upper = first.to_ascii_uppercase();
-        if needle.len() == 1 {
-            for start in memchr2_iter(first_lower, first_upper, haystack_bytes) {
-                let range = start..(start + 1);
-                if self.range_has_requested_boundaries(haystack, range.clone()) {
-                    out.push(range);
-                    if out.len() == max_matches {
-                        break;
-                    }
-                }
-            }
+        self.find_ranges_into(haystack, out, max_matches);
+        if !out.is_empty() || max_matches == 0 || self.options.regex || !self.query.contains('\n') {
             return;
         }
 
-        let middle = &needle[1..needle.len() - 1];
-        let last_lower = last.to_ascii_lowercase();
-        let last_upper = last.to_ascii_uppercase();
-        let mut next_allowed_start = 0usize;
-        for start in memchr2_iter(first_lower, first_upper, &haystack_bytes[..=last_start]) {
-            if start < next_allowed_start {
+        self.find_literal_multiline_row_fragment_ranges_into(haystack, out, max_matches);
+    }
+
+    fn find_literal_multiline_row_fragment_ranges_into(
+        &self,
+        haystack: &str,
+        out: &mut Vec<Range<usize>>,
+        max_matches: usize,
+    ) {
+        let fragments: Vec<_> = self.query.split('\n').collect();
+        for (fragment_ix, fragment) in fragments.iter().enumerate() {
+            if fragment.is_empty() {
                 continue;
             }
-            let haystack_last = haystack_bytes[start + needle.len() - 1];
-            if haystack_last != last_lower && haystack_last != last_upper {
+
+            let fragment_matcher = DiffSearchMatcher::new(fragment, self.options);
+            let is_first = fragment_ix == 0;
+            let is_last = fragment_ix + 1 == fragments.len();
+            let search_start = if is_first && !is_last {
+                haystack.len().saturating_sub(fragment.len())
+            } else {
+                0
+            };
+            let Some(range) = fragment_matcher.find_range_at_or_after(haystack, search_start)
+            else {
+                continue;
+            };
+
+            let valid_boundary = match (is_first, is_last) {
+                (true, true) => true,
+                (true, false) => range.end == haystack.len(),
+                (false, true) => range.start == 0,
+                (false, false) => range.start == 0 && range.end == haystack.len(),
+            };
+            if !valid_boundary {
                 continue;
             }
-            if !haystack_bytes[start + 1..start + needle.len() - 1].eq_ignore_ascii_case(middle) {
-                continue;
+
+            out.push(range);
+            if out.len() == max_matches {
+                break;
             }
-            let range = start..(start + needle.len());
-            if self.range_has_requested_boundaries(haystack, range.clone()) {
-                out.push(range);
-                if out.len() == max_matches {
-                    break;
+        }
+
+        out.sort_unstable_by_key(|range| (range.start, range.end));
+        out.dedup();
+    }
+
+    fn find_range_at_or_after(&self, haystack: &str, start_at: usize) -> Option<Range<usize>> {
+        if self.is_empty() || self.regex_error.is_some() {
+            return None;
+        }
+
+        if let Some(regex) = self.regex.as_ref() {
+            let mut search_start = start_at.min(haystack.len());
+            loop {
+                let m = regex.find_at(haystack, search_start)?;
+                let range = m.start()..m.end();
+                if !range.is_empty() && self.range_has_requested_boundaries(haystack, range.clone())
+                {
+                    return Some(range);
                 }
-                next_allowed_start = start + needle.len();
+                search_start = next_char_boundary_after(haystack, m.start())?;
             }
+        }
+
+        if self.options.match_case {
+            self.find_literal_case_sensitive_from(haystack, start_at)
+        } else {
+            self.find_literal_ascii_case_insensitive_from(haystack, start_at)
         }
     }
 
@@ -295,6 +277,14 @@ impl DiffSearchMatcher {
 #[inline]
 fn is_ascii_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn next_char_boundary_after(s: &str, ix: usize) -> Option<usize> {
+    if ix >= s.len() {
+        return None;
+    }
+
+    Some(ix + s[ix..].chars().next()?.len_utf8())
 }
 
 #[derive(Clone, Copy)]
@@ -713,7 +703,7 @@ fn collect_stream_match_visible_rows<'a>(
     let mut visible_indices = Vec::new();
 
     for (visible_ix, row_text) in rows {
-        if !text.is_empty() {
+        if !visible_indices.is_empty() {
             text.push('\n');
         }
         line_starts.push(text.len());
@@ -725,9 +715,8 @@ fn collect_stream_match_visible_rows<'a>(
         return;
     }
 
-    let mut ranges = Vec::new();
-    matcher.find_ranges_into(&text, &mut ranges, usize::MAX);
-    for range in ranges {
+    let mut search_start = 0usize;
+    while let Some(range) = matcher.find_range_at_or_after(&text, search_start) {
         let start = range.start.min(text.len());
         let line_ix = match line_starts.binary_search(&start) {
             Ok(ix) => ix,
@@ -735,6 +724,11 @@ fn collect_stream_match_visible_rows<'a>(
         };
         if let Some(visible_ix) = visible_indices.get(line_ix).copied() {
             out.push(visible_ix);
+        }
+
+        search_start = line_starts.get(line_ix + 1).copied().unwrap_or(text.len());
+        if search_start <= start {
+            break;
         }
     }
 }
@@ -2148,6 +2142,47 @@ mod tests {
     }
 
     #[test]
+    fn diff_search_matcher_regex_anchors_match_visible_rows() {
+        let start_anchor = DiffSearchMatcher::new(
+            r"^use",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("mod app;")),
+                (11, Cow::Borrowed("use crate::app;")),
+                (12, Cow::Borrowed("  use crate::other;")),
+            ],
+            &start_anchor,
+            &mut matches,
+        );
+        assert_eq!(matches, vec![11]);
+
+        let end_anchor = DiffSearchMatcher::new(
+            r";$",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        matches.clear();
+        collect_stream_match_visible_rows(
+            [
+                (20, Cow::Borrowed("let x = 1")),
+                (21, Cow::Borrowed("let y = 2;")),
+                (22, Cow::Borrowed("let z = 3")),
+            ],
+            &end_anchor,
+            &mut matches,
+        );
+        assert_eq!(matches, vec![21]);
+    }
+
+    #[test]
     fn diff_search_matcher_matches_across_adjacent_visible_rows() {
         let matcher = DiffSearchMatcher::new("alpha\nbeta", DiffSearchOptions::default());
         let mut matches = Vec::new();
@@ -2156,6 +2191,46 @@ mod tests {
                 (10, Cow::Borrowed("alpha")),
                 (11, Cow::Borrowed("beta")),
                 (12, Cow::Borrowed("gamma")),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![10]);
+    }
+
+    #[test]
+    fn diff_search_stream_collector_reports_each_start_row_once() {
+        let matcher = DiffSearchMatcher::new(
+            "a",
+            DiffSearchOptions {
+                match_case: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("aaaa")),
+                (11, Cow::Borrowed("bbbb")),
+                (12, Cow::Borrowed("caca")),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![10, 12]);
+    }
+
+    #[test]
+    fn diff_search_stream_collector_keeps_empty_row_separators() {
+        let matcher = DiffSearchMatcher::new("\nbar", DiffSearchOptions::default());
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("")),
+                (11, Cow::Borrowed("bar")),
+                (12, Cow::Borrowed("baz")),
             ],
             &matcher,
             &mut matches,

@@ -2139,6 +2139,41 @@ mod tests {
     }
 
     #[test]
+    fn query_overlay_highlights_literal_multiline_row_fragments() {
+        let theme = AppTheme::gitcomet_dark();
+
+        let first =
+            build_cached_diff_styled_text(theme, "foo", &[], "", None, DiffSyntaxMode::Auto, None);
+        let first = build_cached_diff_query_overlay_styled_text(
+            theme,
+            &first,
+            "foo\nbar",
+            Default::default(),
+        );
+        let first_ranges: Vec<_> = first
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(first_ranges, vec![0..3]);
+
+        let second =
+            build_cached_diff_styled_text(theme, "bar", &[], "", None, DiffSyntaxMode::Auto, None);
+        let second = build_cached_diff_query_overlay_styled_text(
+            theme,
+            &second,
+            "foo\nbar",
+            Default::default(),
+        );
+        let second_ranges: Vec<_> = second
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(second_ranges, vec![0..3]);
+    }
+
+    #[test]
     fn query_overlay_splits_across_base_and_query_boundaries_without_sorting() {
         let theme = AppTheme::gitcomet_dark();
         let text: SharedString = "abcdefghij".into();

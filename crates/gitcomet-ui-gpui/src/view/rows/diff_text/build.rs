@@ -813,7 +813,7 @@ pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
     }
 
     QUERY_OVERLAY_RANGES_BUF.with_borrow_mut(|query_ranges| {
-        matcher.find_ranges_into(base.text.as_ref(), query_ranges, 64);
+        matcher.find_row_overlay_ranges_into(base.text.as_ref(), query_ranges, 64);
         if query_ranges.is_empty() {
             return base.clone();
         }
