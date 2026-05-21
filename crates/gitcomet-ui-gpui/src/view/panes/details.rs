@@ -1,6 +1,7 @@
 use super::super::path_display;
 use super::super::*;
 use crate::kit::text_truncation::path_alignment_visible_signature;
+use gitcomet_state::model::AuthRetryOperation;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -506,6 +507,42 @@ impl DetailsPaneView {
         });
     }
 
+    fn should_preserve_pending_commit_amend_after_failed_log_entry(
+        state: &AppState,
+        repo_id: RepoId,
+    ) -> bool {
+        let auth_prompt_retries_amend = state.auth_prompt.as_ref().is_some_and(|prompt| {
+            matches!(
+                &prompt.operation,
+                AuthRetryOperation::Commit {
+                    repo_id: retry_repo_id,
+                    amend: true,
+                    ..
+                } if *retry_repo_id == repo_id
+            )
+        });
+        let commit_retry_in_flight = state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.pending_commit_retry
+                    .as_ref()
+                    .is_some_and(|pending| pending.amend)
+            });
+
+        auth_prompt_retries_amend || commit_retry_in_flight
+    }
+
+    fn should_clear_pending_commit_amend_after_log_entry(
+        state: &AppState,
+        repo_id: RepoId,
+        entry_ok: bool,
+    ) -> bool {
+        entry_ok
+            || !Self::should_preserve_pending_commit_amend_after_failed_log_entry(state, repo_id)
+    }
+
     pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
         let scale = self.ui_scale();
         (
@@ -718,11 +755,18 @@ impl DetailsPaneView {
             && let Some(entry) = repo.command_log.last()
             && entry.command == "Amend"
         {
+            let clear_pending = Self::should_clear_pending_commit_amend_after_log_entry(
+                &self.state,
+                repo_id,
+                entry.ok,
+            );
             if entry.ok {
                 self.commit_amend_enabled = false;
                 self.sync_commit_amend_enabled_to_root(false, cx);
             }
-            self.pending_commit_amend_repo = None;
+            if clear_pending {
+                self.pending_commit_amend_repo = None;
+            }
         }
         if switched_repo {
             if let Some(prev_repo_id) = prev_active_repo_id {
@@ -926,6 +970,7 @@ impl Render for DetailsPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_state::model::{AuthPromptState, PendingCommitRetry};
     use std::path::PathBuf;
 
     fn repo_state(id: RepoId, path: &str) -> RepoState {
@@ -935,6 +980,90 @@ mod tests {
                 workdir: PathBuf::from(path),
             },
         )
+    }
+
+    #[test]
+    fn pending_amend_marker_survives_auth_prompt_retry() {
+        let repo_id = RepoId(1);
+        let state = AppState {
+            repos: vec![repo_state(repo_id, "/tmp/repo")],
+            active_repo: Some(repo_id),
+            auth_prompt: Some(AuthPromptState {
+                kind: AuthPromptKind::UsernamePassword,
+                reason: "auth required".into(),
+                operation: AuthRetryOperation::Commit {
+                    repo_id,
+                    message: "message".into(),
+                    amend: true,
+                    push_after_commit: false,
+                },
+            }),
+            ..AppState::default()
+        };
+
+        assert!(
+            DetailsPaneView::should_preserve_pending_commit_amend_after_failed_log_entry(
+                &state, repo_id
+            )
+        );
+        assert!(
+            !DetailsPaneView::should_clear_pending_commit_amend_after_log_entry(
+                &state, repo_id, false
+            )
+        );
+    }
+
+    #[test]
+    fn pending_amend_marker_survives_in_flight_auth_retry() {
+        let repo_id = RepoId(1);
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.pending_commit_retry = Some(PendingCommitRetry {
+            message: "message".into(),
+            amend: true,
+            push_after_commit: false,
+        });
+        let state = AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+
+        assert!(
+            DetailsPaneView::should_preserve_pending_commit_amend_after_failed_log_entry(
+                &state, repo_id
+            )
+        );
+        assert!(
+            !DetailsPaneView::should_clear_pending_commit_amend_after_log_entry(
+                &state, repo_id, false
+            )
+        );
+        assert!(
+            DetailsPaneView::should_clear_pending_commit_amend_after_log_entry(
+                &state, repo_id, true
+            )
+        );
+    }
+
+    #[test]
+    fn pending_amend_marker_is_not_preserved_for_non_retry_failure() {
+        let repo_id = RepoId(1);
+        let state = AppState {
+            repos: vec![repo_state(repo_id, "/tmp/repo")],
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+
+        assert!(
+            !DetailsPaneView::should_preserve_pending_commit_amend_after_failed_log_entry(
+                &state, repo_id
+            )
+        );
+        assert!(
+            DetailsPaneView::should_clear_pending_commit_amend_after_log_entry(
+                &state, repo_id, false
+            )
+        );
     }
 
     #[test]
