@@ -664,6 +664,7 @@ pub enum InternalMsg {
     },
     RecentCommitMessagesLoaded {
         repo_id: RepoId,
+        request_rev: u64,
         result: Result<Vec<RecentCommitMessage>, Error>,
     },
     RebaseStateLoaded {

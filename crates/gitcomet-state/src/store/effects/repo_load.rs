@@ -1032,12 +1032,14 @@ pub(super) fn schedule_load_recent_commit_messages(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
+    request_rev: u64,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
                 repo_id,
+                request_rev,
                 result: repo.recent_commit_messages(limit),
             }),
         );

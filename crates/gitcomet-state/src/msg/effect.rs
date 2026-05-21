@@ -82,6 +82,7 @@ pub enum Effect {
     LoadRecentCommitMessages {
         repo_id: RepoId,
         limit: usize,
+        request_rev: u64,
     },
     LoadFileHistory {
         repo_id: RepoId,

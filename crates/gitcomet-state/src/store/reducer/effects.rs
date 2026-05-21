@@ -409,15 +409,23 @@ pub(super) fn load_recent_commit_messages(
         return Vec::new();
     }
     repo_state.set_recent_commit_messages(Loadable::Loading);
-    vec![Effect::LoadRecentCommitMessages { repo_id, limit }]
+    let request_rev = repo_state.recent_commit_messages_rev;
+    vec![Effect::LoadRecentCommitMessages {
+        repo_id,
+        limit,
+        request_rev,
+    }]
 }
 
 pub(super) fn recent_commit_messages_loaded(
     state: &mut AppState,
     repo_id: RepoId,
+    request_rev: u64,
     result: std::result::Result<Vec<RecentCommitMessage>, Error>,
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && repo_state.recent_commit_messages_rev == request_rev
+    {
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {

@@ -1471,9 +1471,11 @@ pub(super) fn reduce(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
-        Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded { repo_id, result }) => {
-            effects::recent_commit_messages_loaded(state, repo_id, result)
-        }
+        Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
+            repo_id,
+            request_rev,
+            result,
+        }) => effects::recent_commit_messages_loaded(state, repo_id, request_rev, result),
         Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
             repo_id,
             target,

@@ -11,10 +11,20 @@ fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
 }
 
 fn test_recent_commit_message() -> gitcomet_core::domain::RecentCommitMessage {
+    test_recent_commit_message_with_summary(
+        "1111111111111111111111111111111111111111",
+        "old message",
+    )
+}
+
+fn test_recent_commit_message_with_summary(
+    id: &str,
+    summary: &str,
+) -> gitcomet_core::domain::RecentCommitMessage {
     gitcomet_core::domain::RecentCommitMessage {
-        id: CommitId("1111111111111111111111111111111111111111".into()),
-        summary: Arc::from("old message"),
-        message: "old message\n\nbody".to_string(),
+        id: CommitId(id.into()),
+        summary: Arc::from(summary),
+        message: format!("{summary}\n\nbody"),
     }
 }
 
@@ -3481,6 +3491,120 @@ fn head_changing_repo_action_finish_invalidates_data_loaded_while_in_flight() {
     ));
     assert_eq!(state.repos[0].pending_force_push_lease, None);
     assert_eq!(state.repos[0].local_actions_in_flight, 0);
+}
+
+#[test]
+fn stale_recent_commit_messages_loaded_after_head_change_is_ignored() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.open = Loadable::Ready(());
+    state.repos.push(repo_state);
+
+    let first_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadRecentCommitMessages { repo_id, limit: 10 },
+    );
+    let first_request_rev = match first_effects.as_slice() {
+        [
+            Effect::LoadRecentCommitMessages {
+                repo_id: effect_repo_id,
+                limit,
+                request_rev,
+            },
+        ] if *effect_repo_id == repo_id && *limit == 10 => *request_rev,
+        effects => panic!("expected recent commit message load effect, got {effects:?}"),
+    };
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::Loading
+    ));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+
+    let second_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadRecentCommitMessages { repo_id, limit: 10 },
+    );
+    let second_request_rev = match second_effects.as_slice() {
+        [
+            Effect::LoadRecentCommitMessages {
+                repo_id: effect_repo_id,
+                limit,
+                request_rev,
+            },
+        ] if *effect_repo_id == repo_id && *limit == 10 => *request_rev,
+        effects => panic!("expected second recent commit message load effect, got {effects:?}"),
+    };
+    assert!(second_request_rev > first_request_rev);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
+            repo_id,
+            request_rev: first_request_rev,
+            result: Ok(vec![test_recent_commit_message_with_summary(
+                "2222222222222222222222222222222222222222",
+                "stale message",
+            )]),
+        }),
+    );
+
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::Loading
+    ));
+    assert_eq!(
+        state.repos[0].recent_commit_messages_rev,
+        second_request_rev
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
+            repo_id,
+            request_rev: second_request_rev,
+            result: Ok(vec![test_recent_commit_message_with_summary(
+                "3333333333333333333333333333333333333333",
+                "current message",
+            )]),
+        }),
+    );
+
+    match &state.repos[0].recent_commit_messages {
+        Loadable::Ready(messages) => {
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].summary.as_ref(), "current message");
+        }
+        other => panic!("expected current recent messages, got {other:?}"),
+    }
 }
 
 #[test]
