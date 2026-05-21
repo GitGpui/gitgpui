@@ -7,7 +7,7 @@ use crate::util::{
 };
 use gitcomet_core::domain::{
     Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, HistoryMode, LogCursor,
-    LogPage, ReflogEntry, StashEntry,
+    LogPage, RecentCommitMessage, ReflogEntry, StashEntry,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::Result;
@@ -1032,6 +1032,55 @@ impl GixRepo {
             parent_ids,
             files,
         })
+    }
+
+    pub(super) fn recent_commit_messages_impl(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<RecentCommitMessage>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let scan_limit = limit.saturating_mul(5).clamp(limit, 100);
+        let page = self.log_history_mode_page_impl(HistoryMode::FirstParent, scan_limit, None)?;
+        let repo = self._repo.to_thread_local();
+        let mut seen = HashSet::default();
+        let mut messages = Vec::with_capacity(limit);
+
+        for commit in page.commits {
+            let spec = commit.id.as_ref();
+            let object = repo.rev_parse_single(spec).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}")))
+            })?;
+            let commit_object = object
+                .object()
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
+                })?
+                .peel_to_commit()
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}")))
+                })?;
+            let message =
+                bytes_to_text_preserving_utf8(commit_object.message_raw_sloppy().as_ref())
+                    .trim_end()
+                    .to_string();
+            if message.trim().is_empty() || !seen.insert(message.clone()) {
+                continue;
+            }
+
+            messages.push(RecentCommitMessage {
+                id: commit.id,
+                summary: commit.summary,
+                message,
+            });
+            if messages.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(messages)
     }
 
     pub(super) fn reflog_head_impl(&self, limit: usize) -> Result<Vec<ReflogEntry>> {

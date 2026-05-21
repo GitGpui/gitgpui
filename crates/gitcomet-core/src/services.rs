@@ -170,6 +170,11 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    fn recent_commit_messages(&self, _limit: usize) -> Result<Vec<RecentCommitMessage>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "recent commit messages are not implemented for this backend",
+        )))
+    }
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>>;
     fn current_branch(&self) -> Result<String>;
     fn list_branches(&self) -> Result<Vec<Branch>>;
