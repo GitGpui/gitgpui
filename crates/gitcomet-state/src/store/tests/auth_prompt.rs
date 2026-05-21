@@ -39,6 +39,7 @@ fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
         | Effect::Pull { auth, .. }
         | Effect::PullBranch { auth, .. }
         | Effect::Push { auth, .. }
+        | Effect::PushAfterCommit { auth, .. }
         | Effect::ForcePush { auth, .. }
         | Effect::ForcePushWithLease { auth, .. }
         | Effect::PushSetUpstream { auth, .. }
@@ -982,6 +983,26 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             lease,
             ..
         }] if lease.remote == "origin" && lease.branch == "main"
+    ));
+
+    let push_after_commit_target = gitcomet_core::services::SafePushAfterCommitTarget {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+    let push_after_commit_effects = replay_case(RepoCommandKind::PushAfterCommit {
+        target: push_after_commit_target.clone(),
+        set_upstream: true,
+    });
+    assert!(matches!(
+        push_after_commit_effects.as_slice(),
+        [Effect::PushAfterCommit {
+            repo_id: RepoId(1),
+            target,
+            set_upstream: true,
+            ..
+        }] if target == &push_after_commit_target
     ));
 
     let unset_upstream_effects = replay_case(RepoCommandKind::UnsetUpstreamBranch {

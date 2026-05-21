@@ -149,6 +149,14 @@ pub struct SafePushAfterCommitContext {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SafePushAfterCommitTarget {
+    pub remote: String,
+    pub branch: String,
+    pub local_branch: String,
+    pub local_head: CommitId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ForcePushLease {
     pub remote: String,
     pub branch: String,
@@ -159,10 +167,11 @@ pub struct ForcePushLease {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SafePushAfterCommitDecision {
-    Push,
+    Push {
+        target: SafePushAfterCommitTarget,
+    },
     PushSetUpstream {
-        remote: String,
-        branch: String,
+        target: SafePushAfterCommitTarget,
     },
     Blocked {
         summary: String,
@@ -212,6 +221,11 @@ pub trait GitRepository: Send + Sync {
     }
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>>;
     fn current_branch(&self) -> Result<String>;
+    fn head_commit_id(&self) -> Result<Option<CommitId>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "reading HEAD commit id is not implemented for this backend",
+        )))
+    }
     fn list_branches(&self) -> Result<Vec<Branch>>;
     fn list_tags(&self) -> Result<Vec<Tag>> {
         Err(Error::new(ErrorKind::Unsupported(
@@ -449,6 +463,22 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "safe push after commit is not implemented for this backend",
         )))
+    }
+
+    fn push_after_commit_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        validate_safe_push_after_commit_target(self, target)?;
+        self.push_with_output()
+    }
+
+    fn push_after_commit_set_upstream_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        validate_safe_push_after_commit_target(self, target)?;
+        self.push_set_upstream_with_output(&target.remote, &target.branch)
     }
 
     fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {
@@ -714,6 +744,33 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
+}
+
+fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(
+    repo: &R,
+    target: &SafePushAfterCommitTarget,
+) -> Result<()> {
+    let current_branch = repo.current_branch()?;
+    if current_branch != target.local_branch {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "stale push-after-commit target: expected branch {}, but current branch is {}",
+            target.local_branch, current_branch
+        ))));
+    }
+
+    let current_head = repo.head_commit_id()?.ok_or_else(|| {
+        Error::new(ErrorKind::Backend(
+            "stale push-after-commit target: current HEAD does not point to a commit".to_string(),
+        ))
+    })?;
+    if current_head != target.local_head {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "stale push-after-commit target: expected HEAD {}, but current HEAD is {}",
+            target.local_head, current_head
+        ))));
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

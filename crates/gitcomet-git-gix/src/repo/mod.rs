@@ -11,8 +11,8 @@ use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
     BlameLine, CommandOutput, CommitOperationOutcome, ConflictFileStages, ConflictSide,
     ForcePushLease, GitRepository, MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result,
-    SafePushAfterCommitContext, SafePushAfterCommitDecision, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+    SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -229,6 +229,10 @@ impl GitRepository for GixRepo {
         self.current_branch_impl()
     }
 
+    fn head_commit_id(&self) -> Result<Option<CommitId>> {
+        self.head_commit_id_impl()
+    }
+
     fn list_branches(&self) -> Result<Vec<Branch>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_branches_impl()
@@ -432,6 +436,20 @@ impl GitRepository for GixRepo {
         context: &SafePushAfterCommitContext,
     ) -> Result<SafePushAfterCommitDecision> {
         self.safe_push_after_commit_impl(context)
+    }
+
+    fn push_after_commit_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_with_output_impl(target)
+    }
+
+    fn push_after_commit_set_upstream_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_set_upstream_with_output_impl(target)
     }
 
     fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {

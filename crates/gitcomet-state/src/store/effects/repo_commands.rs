@@ -5,7 +5,7 @@ use gitcomet_core::auth::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, ForcePushLease, GitRepository, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitContext, SubmoduleTrustTarget,
+    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -640,6 +640,37 @@ pub(super) fn schedule_push(
         repo_id,
         RepoCommandKind::Push,
         move |repo| run_with_git_auth(auth, || repo.push_with_output()),
+    );
+}
+
+pub(super) fn schedule_push_after_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    target: SafePushAfterCommitTarget,
+    set_upstream: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_target = target.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PushAfterCommit {
+            target: command_target,
+            set_upstream,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                if set_upstream {
+                    repo.push_after_commit_set_upstream_with_output(&target)
+                } else {
+                    repo.push_after_commit_with_output(&target)
+                }
+            })
+        },
     );
 }
 

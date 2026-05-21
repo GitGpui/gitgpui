@@ -720,6 +720,21 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::PushAfterCommit {
+            repo_id,
+            target,
+            set_upstream,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::PushAfterCommit {
+                    target,
+                    set_upstream,
+                },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::ForcePush { repo_id, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -1471,6 +1486,20 @@ pub(super) fn schedule_effect(
         Effect::Push { repo_id, auth } => {
             repo_commands::schedule_push(executor, repos, msg_tx, repo_id, auth)
         }
+        Effect::PushAfterCommit {
+            repo_id,
+            target,
+            set_upstream,
+            auth,
+        } => repo_commands::schedule_push_after_commit(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            target,
+            set_upstream,
+            auth,
+        ),
         Effect::ForcePush { repo_id, auth } => {
             repo_commands::schedule_force_push(executor, repos, msg_tx, repo_id, auth)
         }

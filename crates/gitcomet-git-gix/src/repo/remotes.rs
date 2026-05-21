@@ -8,7 +8,7 @@ use gitcomet_core::domain::{CommitId, Remote, RemoteBranch, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, ForcePushLease, PullMode, RemoteUrlKind, Result, SafePushAfterCommitContext,
-    SafePushAfterCommitDecision,
+    SafePushAfterCommitDecision, SafePushAfterCommitTarget,
 };
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet as HashSet;
@@ -438,7 +438,7 @@ impl GixRepo {
             ))));
         }
 
-        let current_head = self.head_commit_id_for_force_push_lease()?.ok_or_else(|| {
+        let current_head = self.head_commit_id_impl()?.ok_or_else(|| {
             Error::new(ErrorKind::Backend(
                 "stale force-push lease: current HEAD does not point to a commit".to_string(),
             ))
@@ -464,9 +464,93 @@ impl GixRepo {
         run_git_with_output(cmd, &command_label)
     }
 
-    fn head_commit_id_for_force_push_lease(&self) -> Result<Option<CommitId>> {
+    pub(super) fn head_commit_id_impl(&self) -> Result<Option<CommitId>> {
         let repo = self.reopen_repo()?;
         gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(id.to_string().into())))
+    }
+
+    fn validate_push_after_commit_target(&self, target: &SafePushAfterCommitTarget) -> Result<()> {
+        validate_ref_like_arg(&target.remote, "remote name")?;
+        validate_ref_like_arg(&target.branch, "branch name")?;
+        validate_ref_like_arg(&target.local_branch, "local branch name")?;
+        validate_hex_commit_id(&target.local_head)?;
+
+        let current_branch = self.current_branch_name()?.ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
+                "stale push-after-commit target: expected branch {}, but HEAD is detached",
+                target.local_branch
+            )))
+        })?;
+        if current_branch != target.local_branch {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "stale push-after-commit target: expected branch {}, but current branch is {}",
+                target.local_branch, current_branch
+            ))));
+        }
+
+        let current_head = self.head_commit_id_impl()?.ok_or_else(|| {
+            Error::new(ErrorKind::Backend(
+                "stale push-after-commit target: current HEAD does not point to a commit"
+                    .to_string(),
+            ))
+        })?;
+        if current_head != target.local_head {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "stale push-after-commit target: expected HEAD {}, but current HEAD is {}",
+                target.local_head, current_head
+            ))));
+        }
+
+        Ok(())
+    }
+
+    fn push_after_commit_target_with_optional_output_impl(
+        &self,
+        target: &SafePushAfterCommitTarget,
+        set_upstream: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        self.validate_push_after_commit_target(target)?;
+
+        let source = if set_upstream {
+            format!("refs/heads/{}", target.local_branch)
+        } else {
+            target.local_head.to_string()
+        };
+        let refspec = format!("{source}:refs/heads/{}", target.branch);
+        let command_label = if set_upstream {
+            format!(
+                "git push --set-upstream {} {}:refs/heads/{}",
+                target.remote, source, target.branch
+            )
+        } else {
+            format!(
+                "git push {} {}:refs/heads/{}",
+                target.remote, source, target.branch
+            )
+        };
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push");
+        if set_upstream {
+            cmd.arg("--set-upstream");
+        }
+        cmd.arg("--").arg(&target.remote).arg(refspec);
+        run_git_command_with_optional_output(cmd, &command_label, capture_output)
+    }
+
+    pub(super) fn push_after_commit_with_output_impl(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_target_with_optional_output_impl(target, false, true)
+    }
+
+    pub(super) fn push_after_commit_set_upstream_with_output_impl(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_target_with_optional_output_impl(target, true, true)
     }
 
     fn remote_branch_tip(&self, remote: &str, branch: &str) -> Result<Option<CommitId>> {
@@ -557,8 +641,16 @@ impl GixRepo {
                 lease: None,
             });
         };
+        let target = SafePushAfterCommitTarget {
+            remote,
+            branch,
+            local_branch: local_branch.to_string(),
+            local_head: post_head.clone(),
+        };
 
-        let Some(remote_tip) = self.fetch_remote_branch_tip_for_safe_push(&remote, &branch)? else {
+        let Some(remote_tip) =
+            self.fetch_remote_branch_tip_for_safe_push(&target.remote, &target.branch)?
+        else {
             return if has_upstream {
                 Ok(SafePushAfterCommitDecision::Blocked {
                     summary: format!(
@@ -567,15 +659,15 @@ impl GixRepo {
                     lease: None,
                 })
             } else {
-                Ok(SafePushAfterCommitDecision::PushSetUpstream { remote, branch })
+                Ok(SafePushAfterCommitDecision::PushSetUpstream { target })
             };
         };
 
         if self.commit_is_ancestor(&remote_tip, post_head)? {
             return if has_upstream {
-                Ok(SafePushAfterCommitDecision::Push)
+                Ok(SafePushAfterCommitDecision::Push { target })
             } else {
-                Ok(SafePushAfterCommitDecision::PushSetUpstream { remote, branch })
+                Ok(SafePushAfterCommitDecision::PushSetUpstream { target })
             };
         }
 
@@ -585,8 +677,8 @@ impl GixRepo {
                     "The amended commit appears to be published at {display_ref}. Use Force push with lease to update it without overwriting newer remote work."
                 ),
                 lease: Some(ForcePushLease {
-                    remote,
-                    branch,
+                    remote: target.remote,
+                    branch: target.branch,
                     expected: remote_tip,
                     local_branch: local_branch.to_string(),
                     local_head: post_head.clone(),

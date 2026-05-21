@@ -566,12 +566,19 @@ impl DetailsPaneView {
         pending: &PendingCommitAmend,
         repo: &'a RepoState,
     ) -> Option<&'a CommandLogEntry> {
-        let entry = repo.command_log.last()?;
-        if entry.command == "Amend" && pending.last_command_log_entry.as_ref() != Some(entry) {
-            Some(entry)
-        } else {
-            None
-        }
+        let start = pending
+            .last_command_log_entry
+            .as_ref()
+            .and_then(|last_seen| {
+                repo.command_log
+                    .iter()
+                    .rposition(|entry| entry == last_seen)
+                    .map(|index| index + 1)
+            })
+            .unwrap_or(0);
+        repo.command_log[start..]
+            .iter()
+            .find(|entry| entry.command == "Amend")
     }
 
     pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
@@ -1059,6 +1066,28 @@ mod tests {
         let mut repo = repo_state(repo_id, "/tmp/repo");
         repo.command_log.push(old_entry);
         repo.command_log.push(new_entry);
+
+        assert_eq!(
+            DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
+                .map(|entry| entry.time),
+            Some(UNIX_EPOCH + Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn pending_amend_observes_amend_before_later_push_log_entry() {
+        let repo_id = RepoId(1);
+        let old_entry = command_log_entry("Amend", true, 1);
+        let new_entry = command_log_entry("Amend", true, 2);
+        let push_entry = command_log_entry("Push after commit", true, 3);
+        let pending = PendingCommitAmend {
+            repo_id,
+            last_command_log_entry: Some(old_entry.clone()),
+        };
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.command_log.push(old_entry);
+        repo.command_log.push(new_entry);
+        repo.command_log.push(push_entry);
 
         assert_eq!(
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)

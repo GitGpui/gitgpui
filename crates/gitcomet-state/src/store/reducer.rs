@@ -139,6 +139,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::MergeRef { .. }
             | Msg::SquashRef { .. }
             | Msg::Push { .. }
+            | Msg::PushAfterCommit { .. }
             | Msg::ForcePush { .. }
             | Msg::ForcePushWithLease { .. }
             | Msg::PushSetUpstream { .. }
@@ -318,6 +319,14 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::MergeRef { reference } => Msg::MergeRef { repo_id, reference },
         RepoCommandKind::SquashRef { reference } => Msg::SquashRef { repo_id, reference },
         RepoCommandKind::Push => Msg::Push { repo_id },
+        RepoCommandKind::PushAfterCommit {
+            target,
+            set_upstream,
+        } => Msg::PushAfterCommit {
+            repo_id,
+            target,
+            set_upstream,
+        },
         RepoCommandKind::ForcePush => Msg::ForcePush { repo_id },
         RepoCommandKind::ForcePushWithLease { lease } => Msg::ForcePushWithLease { repo_id, lease },
         RepoCommandKind::PushSetUpstream { remote, branch } => Msg::PushSetUpstream {
@@ -457,6 +466,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::Pull { auth: slot, .. }
         | Effect::PullBranch { auth: slot, .. }
         | Effect::Push { auth: slot, .. }
+        | Effect::PushAfterCommit { auth: slot, .. }
         | Effect::ForcePush { auth: slot, .. }
         | Effect::ForcePushWithLease { auth: slot, .. }
         | Effect::PushSetUpstream { auth: slot, .. }
@@ -1080,6 +1090,11 @@ pub(super) fn reduce(
             actions_emit_effects::squash_ref(repo_id, reference)
         }
         Msg::Push { repo_id } => actions_emit_effects::push(repos, state, repo_id),
+        Msg::PushAfterCommit {
+            repo_id,
+            target,
+            set_upstream,
+        } => actions_emit_effects::push_after_commit(repos, state, repo_id, target, set_upstream),
         Msg::ForcePush { repo_id } => actions_emit_effects::force_push(repos, state, repo_id),
         Msg::ForcePushWithLease { repo_id, lease } => {
             actions_emit_effects::force_push_with_lease(repos, state, repo_id, lease)

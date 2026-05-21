@@ -3,7 +3,7 @@ use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
-    SubmoduleTrustTarget,
+    SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -368,6 +368,12 @@ pub enum Effect {
     },
     Push {
         repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    PushAfterCommit {
+        repo_id: RepoId,
+        target: SafePushAfterCommitTarget,
+        set_upstream: bool,
         auth: Option<StagedGitAuth>,
     },
     ForcePush {

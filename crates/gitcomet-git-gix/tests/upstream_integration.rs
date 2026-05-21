@@ -383,17 +383,101 @@ fn safe_push_after_commit_without_upstream_sets_upstream_for_new_branch() {
         .safe_push_after_commit(&SafePushAfterCommitContext {
             amend: false,
             pre_head: None,
-            post_head: Some(post_head),
+            post_head: Some(post_head.clone()),
         })
         .unwrap();
 
     assert_eq!(
         decision,
         SafePushAfterCommitDecision::PushSetUpstream {
-            remote: "origin".to_string(),
-            branch: "new-topic".to_string(),
+            target: gitcomet_core::services::SafePushAfterCommitTarget {
+                remote: "origin".to_string(),
+                branch: "new-topic".to_string(),
+                local_branch: "new-topic".to_string(),
+                local_head: post_head,
+            },
         }
     );
+}
+
+#[test]
+fn push_after_commit_checked_push_rejects_stale_branch_and_head() {
+    if !require_git_shell_for_upstream_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+
+    run_git(&remote_repo, &["init", "--bare"]);
+    run_git(&work_repo, &["init"]);
+    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
+    run_git(&work_repo, &["config", "user.name", "You"]);
+    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    run_git(
+        &work_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_str().expect("remote path"),
+        ],
+    );
+
+    fs::write(work_repo.join("file.txt"), "base\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(&work_repo, &["checkout", "-b", "safe-main"]);
+    run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
+    let remote_base = commit_id(&remote_repo, "refs/heads/safe-main");
+
+    fs::write(work_repo.join("file.txt"), "safe\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "safe"],
+    );
+    let post_head = commit_id(&work_repo, "HEAD");
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).unwrap();
+    let decision = opened
+        .safe_push_after_commit(&SafePushAfterCommitContext {
+            amend: false,
+            pre_head: None,
+            post_head: Some(post_head.clone()),
+        })
+        .unwrap();
+    let SafePushAfterCommitDecision::Push { target } = decision else {
+        panic!("safe push should produce a checked push target");
+    };
+
+    run_git(&work_repo, &["checkout", "-b", "other"]);
+    let stale_branch_error = opened.push_after_commit_with_output(&target).unwrap_err();
+    assert!(format!("{stale_branch_error:?}").contains("stale push-after-commit target"));
+    assert_eq!(commit_id(&remote_repo, "refs/heads/safe-main"), remote_base);
+
+    run_git(&work_repo, &["checkout", &target.local_branch]);
+    fs::write(work_repo.join("file.txt"), "later\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "later"],
+    );
+    let stale_head_error = opened.push_after_commit_with_output(&target).unwrap_err();
+    assert!(format!("{stale_head_error:?}").contains("stale push-after-commit target"));
+    assert_eq!(commit_id(&remote_repo, "refs/heads/safe-main"), remote_base);
+
+    run_git(&work_repo, &["reset", "--hard", target.local_head.as_ref()]);
+    opened.push_after_commit_with_output(&target).unwrap();
+    assert_eq!(commit_id(&remote_repo, "refs/heads/safe-main"), post_head);
 }
 
 #[test]

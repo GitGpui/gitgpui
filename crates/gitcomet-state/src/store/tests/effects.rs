@@ -4328,6 +4328,20 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::PushAfterCommit {
+                repo_id,
+                target: gitcomet_core::services::SafePushAfterCommitTarget {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                    local_branch: "main".to_string(),
+                    local_head: CommitId("2222222222222222222222222222222222222222".into()),
+                },
+                set_upstream: false,
+                auth: None,
+            },
+            1,
+        ),
+        (
             Effect::ForcePush {
                 repo_id,
                 auth: None,

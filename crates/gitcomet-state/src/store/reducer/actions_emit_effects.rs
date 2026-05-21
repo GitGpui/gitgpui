@@ -9,7 +9,9 @@ use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
 use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
-use gitcomet_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+};
 use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -356,6 +358,22 @@ pub(super) fn push(
     }]
 }
 
+pub(super) fn push_after_commit(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: SafePushAfterCommitTarget,
+    set_upstream: bool,
+) -> Vec<Effect> {
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
+    vec![Effect::PushAfterCommit {
+        repo_id,
+        target,
+        set_upstream,
+        auth: None,
+    }]
+}
+
 pub(super) fn force_push(
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
@@ -677,20 +695,17 @@ pub(super) fn safe_push_after_commit_finished(
     result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
 ) -> Vec<Effect> {
     match result {
-        Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push) => {
+        Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_force_push_lease = None;
             }
-            push(repos, state, repo_id)
+            push_after_commit(repos, state, repo_id, target, false)
         }
-        Ok(gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream {
-            remote,
-            branch,
-        }) => {
+        Ok(gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_force_push_lease = None;
             }
-            push_set_upstream(repos, state, repo_id, remote, branch)
+            push_after_commit(repos, state, repo_id, target, true)
         }
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Blocked { summary, lease }) => {
             let git_log_settings = state.git_log_settings;
@@ -831,6 +846,7 @@ pub(super) fn repo_command_finished(
             repo_state.bump_ops_rev();
         }
         RepoCommandKind::Push
+        | RepoCommandKind::PushAfterCommit { .. }
         | RepoCommandKind::ForcePush
         | RepoCommandKind::ForcePushWithLease { .. }
         | RepoCommandKind::PushSetUpstream { .. }
@@ -864,6 +880,7 @@ pub(super) fn repo_command_finished(
             if matches!(
                 &command,
                 RepoCommandKind::Push
+                    | RepoCommandKind::PushAfterCommit { .. }
                     | RepoCommandKind::ForcePush
                     | RepoCommandKind::ForcePushWithLease { .. }
                     | RepoCommandKind::PushSetUpstream { .. }

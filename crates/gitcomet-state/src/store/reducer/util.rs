@@ -935,6 +935,7 @@ fn summarize_command(
             RepoCommandKind::MergeRef { .. } => "Merge",
             RepoCommandKind::SquashRef { .. } => "Squash",
             RepoCommandKind::Push => "Push",
+            RepoCommandKind::PushAfterCommit { .. } => "Push after commit",
             RepoCommandKind::ForcePush => "Force push",
             RepoCommandKind::ForcePushWithLease { .. } => "Force push with lease",
             RepoCommandKind::PushSetUpstream { .. } => "Push",
@@ -1061,6 +1062,18 @@ fn summarize_command(
                 "Push: Everything up-to-date".to_string()
             } else {
                 "Push: Completed".to_string()
+            }
+        }
+        RepoCommandKind::PushAfterCommit { set_upstream, .. } => {
+            let base = if output.stderr.contains("Everything up-to-date") {
+                "Everything up-to-date"
+            } else {
+                "Completed"
+            };
+            if *set_upstream {
+                format!("Push after commit -u: {base}")
+            } else {
+                format!("Push after commit: {base}")
             }
         }
         RepoCommandKind::ForcePush => {

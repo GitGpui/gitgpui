@@ -7,8 +7,8 @@ use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
     CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, PullMode, RemoteUrlKind,
-    ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+    SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -398,6 +398,11 @@ pub enum Msg {
     },
     Push {
         repo_id: RepoId,
+    },
+    PushAfterCommit {
+        repo_id: RepoId,
+        target: SafePushAfterCommitTarget,
+        set_upstream: bool,
     },
     ForcePush {
         repo_id: RepoId,
