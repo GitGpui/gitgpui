@@ -484,6 +484,18 @@ fn overlay_background_ranges_on_styled_text(
     }
 }
 
+fn should_apply_query_overlay_to_streamed_slice(
+    options: DiffSearchOptions,
+    slice_range: &Range<usize>,
+    total_len: usize,
+) -> bool {
+    if !options.whole_word && !options.regex {
+        return true;
+    }
+
+    slice_range.start == 0 && slice_range.end >= total_len
+}
+
 fn streamed_diff_text_relative_prepared_highlights(
     theme: AppTheme,
     spec: &StreamedDiffTextPaintSpec,
@@ -656,7 +668,13 @@ fn build_streamed_diff_slice_styled_text(
         }
     }
 
-    if !spec.query.as_ref().is_empty() {
+    if !spec.query.as_ref().is_empty()
+        && should_apply_query_overlay_to_streamed_slice(
+            spec.query_options,
+            &resolved_slice_range,
+            spec.raw_text.len(),
+        )
+    {
         base = build_cached_diff_query_overlay_styled_text(
             theme,
             &base,
@@ -1925,6 +1943,29 @@ mod tests {
         Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
     }
 
+    fn streamed_query_spec(
+        raw_text: &str,
+        query: &str,
+        query_options: DiffSearchOptions,
+    ) -> StreamedDiffTextPaintSpec {
+        StreamedDiffTextPaintSpec {
+            raw_text: gitcomet_core::file_diff::FileDiffLineText::from(raw_text),
+            query: query.to_owned().into(),
+            query_options,
+            word_ranges: Arc::from(Vec::<Range<usize>>::new()),
+            word_color: None,
+            syntax: StreamedDiffTextSyntaxSource::None,
+        }
+    }
+
+    fn highlight_ranges(styled: &CachedDiffStyledText) -> Vec<Range<usize>> {
+        styled
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect()
+    }
+
     #[test]
     fn row_bg_fill_bounds_overdraws_bottom_without_changing_origin_or_width() {
         let bounds = test_bounds(4.0, 8.0, 120.0, 20.0);
@@ -2167,5 +2208,62 @@ mod tests {
                 17,
             )
         );
+    }
+
+    #[test]
+    fn streamed_query_overlay_skips_whole_word_on_partial_slice() {
+        let theme = AppTheme::gitcomet_dark();
+        let spec = streamed_query_spec(
+            "foo_suffix",
+            "foo",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+
+        let (styled, _, resolved) = build_streamed_diff_slice_styled_text(theme, &spec, &(0..3));
+
+        assert_eq!(resolved, 0..3);
+        assert_eq!(styled.text.as_ref(), "foo");
+        assert!(styled.highlights.is_empty());
+    }
+
+    #[test]
+    fn streamed_query_overlay_skips_regex_anchor_on_partial_slice() {
+        let theme = AppTheme::gitcomet_dark();
+        let spec = streamed_query_spec(
+            "prefixfoo suffix",
+            r"^foo",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+
+        let (styled, _, resolved) = build_streamed_diff_slice_styled_text(theme, &spec, &(6..9));
+
+        assert_eq!(resolved, 6..9);
+        assert_eq!(styled.text.as_ref(), "foo");
+        assert!(styled.highlights.is_empty());
+    }
+
+    #[test]
+    fn streamed_query_overlay_keeps_boundary_sensitive_matches_on_full_slice() {
+        let theme = AppTheme::gitcomet_dark();
+        let spec = streamed_query_spec(
+            "foo suffix",
+            r"^foo",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+
+        let (styled, _, resolved) =
+            build_streamed_diff_slice_styled_text(theme, &spec, &(0.."foo suffix".len()));
+
+        assert_eq!(resolved, 0.."foo suffix".len());
+        assert_eq!(highlight_ranges(&styled), vec![0..3]);
     }
 }
