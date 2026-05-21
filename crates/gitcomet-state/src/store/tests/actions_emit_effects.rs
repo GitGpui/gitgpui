@@ -3261,6 +3261,11 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
+    let auth = gitcomet_core::auth::StagedGitAuth {
+        kind: gitcomet_core::auth::GitAuthKind::UsernamePassword,
+        username: Some("alice".to_string()),
+        secret: "token".to_string(),
+    };
 
     let effects = reduce(
         &mut repos,
@@ -3274,6 +3279,7 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
                 pre_head: None,
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
             },
+            auth: Some(auth.clone()),
             result: Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push {
                 target: target.clone(),
             }),
@@ -3286,8 +3292,8 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
             repo_id: id,
             target: effect_target,
             set_upstream: false,
-            ..
-        } if *id == repo_id && effect_target == &target
+            auth: Some(effect_auth),
+        } if *id == repo_id && effect_target == &target && effect_auth == &auth
     )));
     assert_eq!(state.repos[0].push_in_flight, 1);
 }
@@ -3324,6 +3330,7 @@ fn safe_push_after_commit_decision_push_set_upstream_enqueues_checked_push() {
                 pre_head: None,
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
             },
+            auth: None,
             result: Ok(
                 gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream {
                     target: target.clone(),
@@ -3377,6 +3384,7 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
                 pre_head: Some(expected.clone()),
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
             },
+            auth: None,
             result: Ok(
                 gitcomet_core::services::SafePushAfterCommitDecision::Blocked {
                     summary: "published amend".to_string(),
@@ -3433,6 +3441,7 @@ fn safe_push_after_commit_published_amend_lease_survives_followup_git_state_refr
                 pre_head: Some(expected),
                 post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
             },
+            auth: None,
             result: Ok(
                 gitcomet_core::services::SafePushAfterCommitDecision::Blocked {
                     summary: "published amend".to_string(),

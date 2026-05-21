@@ -717,6 +717,7 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::SafePushAfterCommitFinished {
                 repo_id,
                 context,
+                auth: None,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),

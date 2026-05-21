@@ -6,6 +6,7 @@ use super::util::{
 };
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
 use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
@@ -365,12 +366,23 @@ pub(super) fn push_after_commit(
     target: SafePushAfterCommitTarget,
     set_upstream: bool,
 ) -> Vec<Effect> {
+    push_after_commit_with_auth(repos, state, repo_id, target, set_upstream, None)
+}
+
+fn push_after_commit_with_auth(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: SafePushAfterCommitTarget,
+    set_upstream: bool,
+    auth: Option<StagedGitAuth>,
+) -> Vec<Effect> {
     bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::PushAfterCommit {
         repo_id,
         target,
         set_upstream,
-        auth: None,
+        auth,
     }]
 }
 
@@ -692,6 +704,7 @@ pub(super) fn safe_push_after_commit_finished(
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
     result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
 ) -> Vec<Effect> {
     match result {
@@ -699,13 +712,13 @@ pub(super) fn safe_push_after_commit_finished(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_force_push_lease = None;
             }
-            push_after_commit(repos, state, repo_id, target, false)
+            push_after_commit_with_auth(repos, state, repo_id, target, false, auth)
         }
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_force_push_lease = None;
             }
-            push_after_commit(repos, state, repo_id, target, true)
+            push_after_commit_with_auth(repos, state, repo_id, target, true, auth)
         }
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Blocked { summary, lease }) => {
             let git_log_settings = state.git_log_settings;

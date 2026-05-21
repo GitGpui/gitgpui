@@ -330,11 +330,13 @@ impl std::fmt::Debug for InternalMsg {
             InternalMsg::SafePushAfterCommitFinished {
                 repo_id,
                 context,
+                auth,
                 result,
             } => f
                 .debug_struct("SafePushAfterCommitFinished")
                 .field("repo_id", repo_id)
                 .field("context", context)
+                .field("auth", auth)
                 .field("result", result)
                 .finish(),
             InternalMsg::RepoCommandFinished {

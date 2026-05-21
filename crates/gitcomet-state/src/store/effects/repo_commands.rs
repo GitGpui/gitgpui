@@ -683,6 +683,7 @@ pub(super) fn schedule_safe_push_after_commit(
     auth: Option<StagedGitAuth>,
 ) {
     let finish_context = context.clone();
+    let follow_up_auth = auth.clone();
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = run_with_git_auth(auth, || repo.safe_push_after_commit(&context));
         send_or_log(
@@ -690,6 +691,7 @@ pub(super) fn schedule_safe_push_after_commit(
             Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
                 repo_id,
                 context: finish_context,
+                auth: follow_up_auth,
                 result,
             }),
         );

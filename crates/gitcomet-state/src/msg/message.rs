@@ -1,5 +1,6 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
@@ -783,6 +784,7 @@ pub enum InternalMsg {
     SafePushAfterCommitFinished {
         repo_id: RepoId,
         context: SafePushAfterCommitContext,
+        auth: Option<StagedGitAuth>,
         result: Result<SafePushAfterCommitDecision, Error>,
     },
     RepoCommandFinished {

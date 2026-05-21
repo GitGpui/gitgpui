@@ -321,6 +321,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
         Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
             repo_id,
             context: context.clone(),
+            auth: None,
             result: Err(auth_error(
                 "git fetch origin refs/heads/main failed: fatal: could not read Username for 'https://example.com': terminal prompts disabled",
             )),

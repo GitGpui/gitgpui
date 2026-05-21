@@ -1613,13 +1613,14 @@ pub(super) fn reduce(
         Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
             repo_id,
             context,
+            auth,
             result,
         }) => {
             let auth_prompt = result.as_ref().err().and_then(|error| {
                 auth_prompt_for_safe_push_after_commit(repo_id, context.clone(), error)
             });
             let effects = actions_emit_effects::safe_push_after_commit_finished(
-                repos, state, repo_id, result,
+                repos, state, repo_id, auth, result,
             );
             if let Some(prompt) = auth_prompt {
                 util::clear_staged_git_auth_env();
