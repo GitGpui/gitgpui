@@ -578,7 +578,7 @@ impl DetailsPaneView {
             .unwrap_or(0);
         repo.command_log[start..]
             .iter()
-            .find(|entry| entry.command == "Amend")
+            .rfind(|entry| entry.command == "Amend")
     }
 
     pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
@@ -1093,6 +1093,30 @@ mod tests {
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
                 .map(|entry| entry.time),
             Some(UNIX_EPOCH + Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn pending_amend_observes_successful_retry_after_failed_amend_log_entry() {
+        let repo_id = RepoId(1);
+        let marker_entry = command_log_entry("Commit", true, 1);
+        let failed_amend = command_log_entry("Amend", false, 2);
+        let successful_retry = command_log_entry("Amend", true, 3);
+        let pending = PendingCommitAmend {
+            repo_id,
+            last_command_log_entry: Some(marker_entry.clone()),
+        };
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.command_log.push(marker_entry);
+        repo.command_log.push(failed_amend);
+        repo.command_log.push(successful_retry);
+
+        let completed_entry =
+            DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo);
+
+        assert_eq!(
+            completed_entry.map(|entry| (entry.ok, entry.time)),
+            Some((true, UNIX_EPOCH + Duration::from_secs(3)))
         );
     }
 
