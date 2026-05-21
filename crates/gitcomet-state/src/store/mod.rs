@@ -65,11 +65,44 @@ fn is_control_command(command: &StoreWorkerCommand) -> bool {
     }
 }
 
+fn can_control_command_overtake(command: &StoreWorkerCommand) -> bool {
+    matches!(
+        command,
+        StoreWorkerCommand::Msg(msg) if matches!(msg.as_ref(), Msg::Internal(_))
+    )
+}
+
+fn first_control_command_before_order_barrier(
+    deferred: &VecDeque<StoreWorkerCommand>,
+) -> Option<usize> {
+    for (ix, command) in deferred.iter().enumerate() {
+        if is_control_command(command) {
+            return Some(ix);
+        }
+        if !can_control_command_overtake(command) {
+            return None;
+        }
+    }
+    None
+}
+
+fn has_order_barrier_before_control(deferred: &VecDeque<StoreWorkerCommand>) -> bool {
+    for command in deferred {
+        if is_control_command(command) {
+            return false;
+        }
+        if !can_control_command_overtake(command) {
+            return true;
+        }
+    }
+    false
+}
+
 fn recv_next_worker_command(
     command_rx: &mpsc::Receiver<StoreWorkerCommand>,
     deferred: &mut VecDeque<StoreWorkerCommand>,
 ) -> Result<StoreWorkerCommand, mpsc::RecvError> {
-    if let Some(ix) = deferred.iter().position(is_control_command) {
+    if let Some(ix) = first_control_command_before_order_barrier(deferred) {
         return Ok(deferred.remove(ix).expect("deferred command exists"));
     }
 
@@ -80,11 +113,21 @@ fn recv_next_worker_command(
     if is_control_command(&first) {
         return Ok(first);
     }
+    if !can_control_command_overtake(&first) {
+        return Ok(first);
+    }
+    if has_order_barrier_before_control(deferred) {
+        return Ok(first);
+    }
 
     while let Ok(command) = command_rx.try_recv() {
         if is_control_command(&command) {
             deferred.push_front(first);
             return Ok(command);
+        }
+        if !can_control_command_overtake(&command) {
+            deferred.push_back(command);
+            break;
         }
         deferred.push_back(command);
     }

@@ -135,6 +135,90 @@ fn worker_command_prioritizes_close_repo_over_queued_open_error() {
     }
 }
 
+#[test]
+fn worker_command_keeps_queued_open_repo_before_close_repo() {
+    let repo_id = RepoId(7);
+    let path = PathBuf::from("/tmp/repo");
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::OpenRepo(
+        path.clone(),
+    ))))
+    .expect("send open");
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::CloseRepo {
+        repo_id,
+    })))
+    .expect("send close");
+
+    let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("next command");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::OpenRepo(got) if got == path));
+        }
+        _ => panic!("expected open repo command first"),
+    }
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("queued close");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::CloseRepo { repo_id: got } if got == repo_id));
+        }
+        _ => panic!("expected close repo command second"),
+    }
+}
+
+#[test]
+fn worker_command_keeps_deferred_open_repo_before_later_close_repo() {
+    let repo_id = RepoId(7);
+    let path = PathBuf::from("/tmp/repo");
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+        crate::msg::InternalMsg::TagsLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        },
+    ))))
+    .expect("send background result");
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::OpenRepo(
+        path.clone(),
+    ))))
+    .expect("send open");
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::CloseRepo {
+        repo_id,
+    })))
+    .expect("send close");
+
+    let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("background result");
+    assert!(matches!(
+        command,
+        StoreWorkerCommand::Msg(msg)
+            if matches!(
+                *msg,
+                Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+                    repo_id: got,
+                    ..
+                }) if got == repo_id
+            )
+    ));
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("queued open");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::OpenRepo(got) if got == path));
+        }
+        _ => panic!("expected open repo command second"),
+    }
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("queued close");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::CloseRepo { repo_id: got } if got == repo_id));
+        }
+        _ => panic!("expected close repo command third"),
+    }
+}
+
 fn has_effect_for_repo(
     effects: &[Effect],
     repo_id: RepoId,

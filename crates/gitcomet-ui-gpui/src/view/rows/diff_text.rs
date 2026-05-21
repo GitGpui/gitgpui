@@ -2139,38 +2139,30 @@ mod tests {
     }
 
     #[test]
-    fn query_overlay_highlights_literal_multiline_row_fragments() {
+    fn query_overlay_skips_literal_multiline_row_fragments_without_stream_match_context() {
         let theme = AppTheme::gitcomet_dark();
 
-        let first =
+        let first_base =
             build_cached_diff_styled_text(theme, "foo", &[], "", None, DiffSyntaxMode::Auto, None);
         let first = build_cached_diff_query_overlay_styled_text(
             theme,
-            &first,
+            &first_base,
             "foo\nbar",
             Default::default(),
         );
-        let first_ranges: Vec<_> = first
-            .highlights
-            .iter()
-            .map(|(range, _)| range.clone())
-            .collect();
-        assert_eq!(first_ranges, vec![0..3]);
+        assert!(Arc::ptr_eq(&first.highlights, &first_base.highlights));
+        assert_eq!(first.highlights_hash, first_base.highlights_hash);
 
-        let second =
+        let second_base =
             build_cached_diff_styled_text(theme, "bar", &[], "", None, DiffSyntaxMode::Auto, None);
         let second = build_cached_diff_query_overlay_styled_text(
             theme,
-            &second,
+            &second_base,
             "foo\nbar",
             Default::default(),
         );
-        let second_ranges: Vec<_> = second
-            .highlights
-            .iter()
-            .map(|(range, _)| range.clone())
-            .collect();
-        assert_eq!(second_ranges, vec![0..3]);
+        assert!(Arc::ptr_eq(&second.highlights, &second_base.highlights));
+        assert_eq!(second.highlights_hash, second_base.highlights_hash);
     }
 
     #[test]

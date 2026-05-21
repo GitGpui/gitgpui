@@ -181,56 +181,6 @@ impl DiffSearchMatcher {
         max_matches: usize,
     ) {
         self.find_ranges_into(haystack, out, max_matches);
-        if !out.is_empty() || max_matches == 0 || self.options.regex || !self.query.contains('\n') {
-            return;
-        }
-
-        self.find_literal_multiline_row_fragment_ranges_into(haystack, out, max_matches);
-    }
-
-    fn find_literal_multiline_row_fragment_ranges_into(
-        &self,
-        haystack: &str,
-        out: &mut Vec<Range<usize>>,
-        max_matches: usize,
-    ) {
-        let fragments: Vec<_> = self.query.split('\n').collect();
-        for (fragment_ix, fragment) in fragments.iter().enumerate() {
-            if fragment.is_empty() {
-                continue;
-            }
-
-            let fragment_matcher = DiffSearchMatcher::new(fragment, self.options);
-            let is_first = fragment_ix == 0;
-            let is_last = fragment_ix + 1 == fragments.len();
-            let search_start = if is_first && !is_last {
-                haystack.len().saturating_sub(fragment.len())
-            } else {
-                0
-            };
-            let Some(range) = fragment_matcher.find_range_at_or_after(haystack, search_start)
-            else {
-                continue;
-            };
-
-            let valid_boundary = match (is_first, is_last) {
-                (true, true) => true,
-                (true, false) => range.end == haystack.len(),
-                (false, true) => range.start == 0,
-                (false, false) => range.start == 0 && range.end == haystack.len(),
-            };
-            if !valid_boundary {
-                continue;
-            }
-
-            out.push(range);
-            if out.len() == max_matches {
-                break;
-            }
-        }
-
-        out.sort_unstable_by_key(|range| (range.start, range.end));
-        out.dedup();
     }
 
     fn find_range_at_or_after(&self, haystack: &str, start_at: usize) -> Option<Range<usize>> {
@@ -2209,6 +2159,35 @@ mod tests {
         );
 
         assert_eq!(matches, vec![10]);
+    }
+
+    #[test]
+    fn diff_search_matcher_does_not_match_multiline_fragments_on_non_adjacent_rows() {
+        let matcher = DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default());
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("foo")),
+                (11, Cow::Borrowed("not the middle of the query")),
+                (12, Cow::Borrowed("bar")),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn diff_search_row_overlay_does_not_highlight_multiline_fragments() {
+        let matcher = DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default());
+        let mut ranges = Vec::new();
+
+        matcher.find_row_overlay_ranges_into("foo", &mut ranges, 64);
+        assert!(ranges.is_empty());
+
+        matcher.find_row_overlay_ranges_into("bar", &mut ranges, 64);
+        assert!(ranges.is_empty());
     }
 
     #[test]
