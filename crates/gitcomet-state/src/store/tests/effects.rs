@@ -2412,6 +2412,7 @@ fn stash_effect_requests_stash_reload_on_success() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::Stash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -2579,6 +2580,7 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::PopStash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -2746,6 +2748,7 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::PopStash,
                 result: Err(_),
             }) => {
                 saw_finished_err = true;
@@ -2911,6 +2914,7 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::DropStash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -3074,6 +3078,7 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::DropStash,
                 result: Err(_),
             }) => {
                 saw_finished_err = true;
@@ -3476,6 +3481,7 @@ fn wait_for_checkout_refresh_messages(
             }
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: rid,
+                action: _,
                 result: Ok(()),
             }) if rid == repo_id => {
                 saw_finished = true;

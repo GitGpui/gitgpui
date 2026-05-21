@@ -779,6 +779,26 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
     )
 }
 
+fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
+    matches!(
+        command,
+        RepoCommandKind::Pull { .. }
+            | RepoCommandKind::PullBranch { .. }
+            | RepoCommandKind::MergeRef { .. }
+            | RepoCommandKind::SquashRef { .. }
+            | RepoCommandKind::Push
+            | RepoCommandKind::PushAfterCommit { .. }
+            | RepoCommandKind::ForcePush
+            | RepoCommandKind::ForcePushWithLease { .. }
+            | RepoCommandKind::PushSetUpstream { .. }
+            | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::Rebase { .. }
+            | RepoCommandKind::RebaseContinue
+            | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::MergeAbort
+    )
+}
+
 fn changed_submodule_path(command: &RepoCommandKind) -> Option<&std::path::Path> {
     match command {
         RepoCommandKind::LoadSubmodule { path, .. }
@@ -877,14 +897,7 @@ pub(super) fn repo_command_finished(
         Ok(output) => {
             repo_state.last_error = None;
             clear_banner = true;
-            if matches!(
-                &command,
-                RepoCommandKind::Push
-                    | RepoCommandKind::PushAfterCommit { .. }
-                    | RepoCommandKind::ForcePush
-                    | RepoCommandKind::ForcePushWithLease { .. }
-                    | RepoCommandKind::PushSetUpstream { .. }
-            ) {
+            if command_clears_pending_force_push_lease(&command) {
                 repo_state.pending_force_push_lease = None;
             }
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);

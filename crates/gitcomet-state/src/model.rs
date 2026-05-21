@@ -825,6 +825,11 @@ impl RepoState {
         self.recent_commit_messages_rev = self.recent_commit_messages_rev.wrapping_add(1);
     }
 
+    pub(crate) fn clear_head_dependent_cached_state(&mut self) {
+        self.pending_force_push_lease = None;
+        self.set_recent_commit_messages(Loadable::NotLoaded);
+    }
+
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
         let worktrees = loadable_into_arc(worktrees);
         if self.worktrees == worktrees {

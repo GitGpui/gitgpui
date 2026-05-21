@@ -302,9 +302,14 @@ impl std::fmt::Debug for InternalMsg {
                 .field("target", target)
                 .field("result", result)
                 .finish(),
-            InternalMsg::RepoActionFinished { repo_id, result } => f
+            InternalMsg::RepoActionFinished {
+                repo_id,
+                action,
+                result,
+            } => f
                 .debug_struct("RepoActionFinished")
                 .field("repo_id", repo_id)
+                .field("action", action)
                 .field("result", result)
                 .finish(),
             InternalMsg::CommitFinished { repo_id, result } => f

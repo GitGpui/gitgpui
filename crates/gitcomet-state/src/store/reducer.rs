@@ -61,6 +61,14 @@ fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
     }
 }
 
+fn begin_head_changing_local_action(state: &mut AppState, repo_id: RepoId) {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
+        repo_state.clear_head_dependent_cached_state();
+        repo_state.bump_ops_rev();
+    }
+}
+
 fn start_submodule_add_progress(
     state: &mut AppState,
     repo_id: RepoId,
@@ -772,7 +780,7 @@ pub(super) fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
-            begin_local_action(state, repo_id);
+            begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::checkout_branch(repo_id, name)
         }
         Msg::CheckoutRemoteBranch {
@@ -784,22 +792,22 @@ pub(super) fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
-            begin_local_action(state, repo_id);
+            begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::checkout_remote_branch(repo_id, remote, branch, local_branch)
         }
         Msg::CheckoutCommit { repo_id, commit_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(Some(commit_id.clone()));
             }
-            begin_local_action(state, repo_id);
+            begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::checkout_commit(repo_id, commit_id)
         }
         Msg::CherryPickCommit { repo_id, commit_id } => {
-            begin_local_action(state, repo_id);
+            begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::cherry_pick_commit(repo_id, commit_id)
         }
         Msg::RevertCommit { repo_id, commit_id } => {
-            begin_local_action(state, repo_id);
+            begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id)
         }
         Msg::CreateBranch {
@@ -818,7 +826,7 @@ pub(super) fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
-            begin_local_action(state, repo_id);
+            begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
         }
         Msg::DeleteBranch { repo_id, name } => {
@@ -1516,9 +1524,11 @@ pub(super) fn reduce(
             target,
             result,
         }) => diff_selection::diff_file_image_loaded(state, repo_id, target, result),
-        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result }) => {
-            external_and_history::repo_action_finished(state, repo_id, result)
-        }
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action,
+            result,
+        }) => external_and_history::repo_action_finished(state, repo_id, action, result),
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
             let pending_commit = state
                 .repos

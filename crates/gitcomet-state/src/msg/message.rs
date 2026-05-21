@@ -18,6 +18,29 @@ use super::repo_external_change::RepoExternalChange;
 use super::{RepoPath, RepoPathList};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepoActionKind {
+    CheckoutBranch,
+    CheckoutRemoteBranch,
+    CheckoutCommit,
+    CherryPickCommit,
+    RevertCommit,
+    CreateBranch,
+    CreateBranchAndCheckout,
+    DeleteBranch,
+    ForceDeleteBranch,
+    StagePath,
+    StagePaths,
+    UnstagePath,
+    UnstagePaths,
+    DiscardWorktreeChangesPath,
+    DiscardWorktreeChangesPaths,
+    Stash,
+    ApplyStash,
+    PopStash,
+    DropStash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictAutosolveMode {
     Safe,
     Regex,
@@ -745,6 +768,7 @@ pub enum InternalMsg {
     },
     RepoActionFinished {
         repo_id: RepoId,
+        action: RepoActionKind,
         result: Result<(), Error>,
     },
     CommitFinished {
@@ -775,7 +799,7 @@ impl From<InternalMsg> for Msg {
 
 #[cfg(test)]
 mod tests {
-    use super::{InternalMsg, Msg};
+    use super::{InternalMsg, Msg, RepoActionKind};
     use crate::model::RepoId;
     use gitcomet_core::error::{Error, ErrorKind};
     use std::path::PathBuf;
@@ -784,6 +808,7 @@ mod tests {
     fn wraps_internal_messages() {
         let msg: Msg = InternalMsg::RepoActionFinished {
             repo_id: RepoId(7),
+            action: RepoActionKind::CheckoutBranch,
             result: Ok(()),
         }
         .into();
@@ -792,6 +817,7 @@ mod tests {
             msg,
             Msg::Internal(InternalMsg::RepoActionFinished {
                 repo_id: RepoId(7),
+                action: RepoActionKind::CheckoutBranch,
                 result: Ok(())
             })
         ));

@@ -1,5 +1,35 @@
 use super::*;
 
+fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
+    gitcomet_core::services::ForcePushLease {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        expected: CommitId("1111111111111111111111111111111111111111".into()),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    }
+}
+
+fn test_recent_commit_message() -> gitcomet_core::domain::RecentCommitMessage {
+    gitcomet_core::domain::RecentCommitMessage {
+        id: CommitId("1111111111111111111111111111111111111111".into()),
+        summary: Arc::from("old message"),
+        message: "old message\n\nbody".to_string(),
+    }
+}
+
+fn repo_with_head_dependent_cached_state(repo_id: RepoId) -> RepoState {
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.pending_force_push_lease = Some(test_force_push_lease());
+    repo_state.set_recent_commit_messages(Loadable::Ready(vec![test_recent_commit_message()]));
+    repo_state
+}
+
 #[test]
 fn pull_and_push_mark_in_flight_until_command_finished() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -3361,17 +3391,105 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
 }
 
 #[test]
+fn checkout_branch_clears_stale_force_push_lease_and_recent_messages() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+    let recent_rev = state.repos[0].recent_commit_messages_rev;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CheckoutBranch {
+            repo_id,
+            name: "feature".to_string(),
+        },
+    );
+
+    assert!(effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::CheckoutBranch { repo_id: id, name }
+                if *id == repo_id && name == "feature"
+        )
+    }));
+    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert!(state.repos[0].recent_commit_messages_rev > recent_rev);
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+}
+
+#[test]
+fn cherry_pick_clears_recent_messages_from_previous_head() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CherryPickCommit {
+            repo_id,
+            commit_id: CommitId("3333333333333333333333333333333333333333".into()),
+        },
+    );
+
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert_eq!(state.repos[0].pending_force_push_lease, None);
+}
+
+#[test]
+fn head_changing_repo_action_finish_invalidates_data_loaded_while_in_flight() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
+    repo_state.local_actions_in_flight = 1;
+    state.repos.push(repo_state);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::CherryPickCommit,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+}
+
+#[test]
 fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
-    let mut repo_state = RepoState::new_opening(
-        repo_id,
-        RepoSpec {
-            workdir: PathBuf::from("/tmp/repo"),
-        },
-    );
+    let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
     repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         path: PathBuf::from("a.txt"),
         area: DiffArea::Staged,
@@ -3397,6 +3515,8 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     assert!(!effects.is_empty());
     let repo = &state.repos[0];
     assert!(repo.diff_state.diff_target.is_none());
+    assert_eq!(repo.pending_force_push_lease, None);
+    assert!(matches!(&repo.recent_commit_messages, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
     assert!(matches!(

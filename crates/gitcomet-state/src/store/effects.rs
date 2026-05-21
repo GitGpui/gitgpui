@@ -6,7 +6,7 @@ mod repo_load;
 mod util;
 
 use crate::model::AppState;
-use crate::msg::{Effect, Msg, RepoCommandKind};
+use crate::msg::{Effect, Msg, RepoActionKind, RepoCommandKind};
 use crate::session;
 use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::error::{Error, ErrorKind};
@@ -85,6 +85,19 @@ fn git_unavailable_error(runtime: &GitRuntimeState) -> Error {
             .unwrap_or("Git executable is unavailable.")
             .to_string(),
     ))
+}
+
+fn send_repo_action_unavailable(
+    repo_id: RepoId,
+    action: RepoActionKind,
+    runtime: &GitRuntimeState,
+    send: &impl Fn(Msg),
+) {
+    send(Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+        repo_id,
+        action,
+        result: Err(git_unavailable_error(runtime)),
+    }))
 }
 
 fn send_unavailable_git_effect_result(
@@ -464,29 +477,74 @@ fn send_unavailable_git_effect_result(
                 conflict_session: None,
             }));
         }
-        Effect::CheckoutBranch { repo_id, .. }
-        | Effect::CheckoutRemoteBranch { repo_id, .. }
-        | Effect::CheckoutCommit { repo_id, .. }
-        | Effect::CherryPickCommit { repo_id, .. }
-        | Effect::RevertCommit { repo_id, .. }
-        | Effect::CreateBranch { repo_id, .. }
-        | Effect::CreateBranchAndCheckout { repo_id, .. }
-        | Effect::DeleteBranch { repo_id, .. }
-        | Effect::ForceDeleteBranch { repo_id, .. }
-        | Effect::StagePath { repo_id, .. }
-        | Effect::StagePaths { repo_id, .. }
-        | Effect::UnstagePath { repo_id, .. }
-        | Effect::UnstagePaths { repo_id, .. }
-        | Effect::DiscardWorktreeChangesPath { repo_id, .. }
-        | Effect::DiscardWorktreeChangesPaths { repo_id, .. }
-        | Effect::Stash { repo_id, .. }
-        | Effect::ApplyStash { repo_id, .. }
-        | Effect::PopStash { repo_id, .. }
-        | Effect::DropStash { repo_id, .. } => {
-            send(Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
-                repo_id,
-                result: Err(git_unavailable_error(runtime)),
-            }))
+        Effect::CheckoutBranch { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::CheckoutBranch, runtime, &send)
+        }
+        Effect::CheckoutRemoteBranch { repo_id, .. } => send_repo_action_unavailable(
+            repo_id,
+            RepoActionKind::CheckoutRemoteBranch,
+            runtime,
+            &send,
+        ),
+        Effect::CheckoutCommit { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::CheckoutCommit, runtime, &send)
+        }
+        Effect::CherryPickCommit { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::CherryPickCommit, runtime, &send)
+        }
+        Effect::RevertCommit { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::RevertCommit, runtime, &send)
+        }
+        Effect::CreateBranch { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::CreateBranch, runtime, &send)
+        }
+        Effect::CreateBranchAndCheckout { repo_id, .. } => send_repo_action_unavailable(
+            repo_id,
+            RepoActionKind::CreateBranchAndCheckout,
+            runtime,
+            &send,
+        ),
+        Effect::DeleteBranch { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::DeleteBranch, runtime, &send)
+        }
+        Effect::ForceDeleteBranch { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::ForceDeleteBranch, runtime, &send)
+        }
+        Effect::StagePath { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::StagePath, runtime, &send)
+        }
+        Effect::StagePaths { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::StagePaths, runtime, &send)
+        }
+        Effect::UnstagePath { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::UnstagePath, runtime, &send)
+        }
+        Effect::UnstagePaths { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::UnstagePaths, runtime, &send)
+        }
+        Effect::DiscardWorktreeChangesPath { repo_id, .. } => send_repo_action_unavailable(
+            repo_id,
+            RepoActionKind::DiscardWorktreeChangesPath,
+            runtime,
+            &send,
+        ),
+        Effect::DiscardWorktreeChangesPaths { repo_id, .. } => send_repo_action_unavailable(
+            repo_id,
+            RepoActionKind::DiscardWorktreeChangesPaths,
+            runtime,
+            &send,
+        ),
+        Effect::Stash { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::Stash, runtime, &send)
+        }
+        Effect::ApplyStash { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::ApplyStash, runtime, &send)
+        }
+        Effect::PopStash { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::PopStash, runtime, &send)
+        }
+        Effect::DropStash { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::DropStash, runtime, &send)
         }
         Effect::CloneRepo { url, dest, .. } => {
             send(Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
