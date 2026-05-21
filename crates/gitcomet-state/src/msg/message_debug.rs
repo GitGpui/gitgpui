@@ -112,6 +112,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::RecentCommitMessagesLoaded { repo_id, result } => f
+                .debug_struct("RecentCommitMessagesLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::RebaseStateLoaded { repo_id, result } => f
                 .debug_struct("RebaseStateLoaded")
                 .field("repo_id", repo_id)

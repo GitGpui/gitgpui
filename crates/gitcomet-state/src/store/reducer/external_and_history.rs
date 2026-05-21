@@ -81,6 +81,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.history_state.blame = Loadable::NotLoaded;
     repo_state.set_worktrees(Loadable::NotLoaded);
     repo_state.set_submodules(Loadable::NotLoaded);
+    repo_state.set_recent_commit_messages(Loadable::NotLoaded);
     repo_state.set_selected_commit(None);
     repo_state.set_commit_details(Loadable::NotLoaded);
 
@@ -98,6 +99,7 @@ pub(super) fn repo_externally_changed(
 
     // Coalesce refreshes while a refresh is already in flight.
     let mut effects = if change.git_state {
+        repo_state.set_recent_commit_messages(Loadable::NotLoaded);
         let mut effects = refresh_primary_effects(repo_state);
         if repo_state
             .loads_in_flight

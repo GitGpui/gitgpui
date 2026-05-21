@@ -89,6 +89,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadStashes { .. }
             | Msg::LoadConflictFile { .. }
             | Msg::LoadReflog { .. }
+            | Msg::LoadRecentCommitMessages { .. }
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
@@ -215,6 +216,7 @@ fn auth_prompt_for_commit(
             repo_id,
             message: pending.message,
             amend: pending.amend,
+            push_after_commit: pending.push_after_commit,
         },
     })
 }
@@ -244,10 +246,19 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
             repo_id,
             message,
             amend,
+            push_after_commit,
         } => Some(if amend {
-            Msg::CommitAmend { repo_id, message }
+            Msg::CommitAmend {
+                repo_id,
+                message,
+                push_after_commit,
+            }
         } else {
-            Msg::Commit { repo_id, message }
+            Msg::Commit {
+                repo_id,
+                message,
+                push_after_commit,
+            }
         }),
         AuthRetryOperation::Clone { url, dest } => Some(Msg::CloneRepo { url, dest }),
     }
@@ -694,6 +705,9 @@ pub(super) fn reduce(
             mode,
         } => effects::load_conflict_file(state, repo_id, path, mode),
         Msg::LoadReflog { repo_id } => effects::load_reflog(state, repo_id),
+        Msg::LoadRecentCommitMessages { repo_id, limit } => {
+            effects::load_recent_commit_messages(state, repo_id, limit)
+        }
         Msg::LoadFileHistory {
             repo_id,
             path,
@@ -988,22 +1002,32 @@ pub(super) fn reduce(
             begin_local_action(state, repo_id);
             actions_emit_effects::save_worktree_file(repo_id, path, contents, stage)
         }
-        Msg::Commit { repo_id, message } => {
+        Msg::Commit {
+            repo_id,
+            message,
+            push_after_commit,
+        } => {
             begin_commit_action(state, repo_id);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_commit_retry = Some(PendingCommitRetry {
                     message: message.clone(),
                     amend: false,
+                    push_after_commit,
                 });
             }
             actions_emit_effects::commit(repo_id, message)
         }
-        Msg::CommitAmend { repo_id, message } => {
+        Msg::CommitAmend {
+            repo_id,
+            message,
+            push_after_commit,
+        } => {
             begin_commit_action(state, repo_id);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_commit_retry = Some(PendingCommitRetry {
                     message: message.clone(),
                     amend: true,
+                    push_after_commit,
                 });
             }
             actions_emit_effects::commit_amend(repo_id, message)
@@ -1395,6 +1419,9 @@ pub(super) fn reduce(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded { repo_id, result }) => {
+            effects::recent_commit_messages_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
             repo_id,
             target,
@@ -1454,17 +1481,24 @@ pub(super) fn reduce(
                 .iter()
                 .find(|r| r.id == repo_id)
                 .and_then(|r| r.pending_commit_retry.clone());
+            let push_after_commit = result.is_ok()
+                && pending_commit
+                    .as_ref()
+                    .is_some_and(|pending| pending.push_after_commit);
             let auth_prompt = result
                 .as_ref()
                 .err()
-                .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit, error));
-            let effects = actions_emit_effects::commit_finished(state, repo_id, result);
+                .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
+            let mut effects = actions_emit_effects::commit_finished(state, repo_id, result);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_commit_retry = None;
             }
             if let Some(prompt) = auth_prompt {
                 util::clear_staged_git_auth_env();
                 state.auth_prompt = Some(prompt);
+            }
+            if push_after_commit {
+                effects.extend(actions_emit_effects::push(repos, state, repo_id));
             }
             effects
         }
@@ -1474,17 +1508,24 @@ pub(super) fn reduce(
                 .iter()
                 .find(|r| r.id == repo_id)
                 .and_then(|r| r.pending_commit_retry.clone());
+            let push_after_commit = result.is_ok()
+                && pending_commit
+                    .as_ref()
+                    .is_some_and(|pending| pending.push_after_commit);
             let auth_prompt = result
                 .as_ref()
                 .err()
-                .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit, error));
-            let effects = actions_emit_effects::commit_amend_finished(state, repo_id, result);
+                .and_then(|error| auth_prompt_for_commit(repo_id, pending_commit.clone(), error));
+            let mut effects = actions_emit_effects::commit_amend_finished(state, repo_id, result);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.pending_commit_retry = None;
             }
             if let Some(prompt) = auth_prompt {
                 util::clear_staged_git_auth_env();
                 state.auth_prompt = Some(prompt);
+            }
+            if push_after_commit {
+                effects.extend(actions_emit_effects::push(repos, state, repo_id));
             }
             effects
         }

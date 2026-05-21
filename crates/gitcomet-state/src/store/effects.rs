@@ -196,6 +196,12 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadRecentCommitMessages { repo_id, .. } => send(Msg::Internal(
+            crate::msg::InternalMsg::RecentCommitMessagesLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::SaveWorktreeFile {
             repo_id,
             path,
@@ -1092,6 +1098,11 @@ pub(super) fn schedule_effect(
         }
         Effect::LoadMergeCommitMessage { repo_id } => {
             repo_load::schedule_load_merge_commit_message(executor, repos, msg_tx, repo_id);
+        }
+        Effect::LoadRecentCommitMessages { repo_id, limit } => {
+            repo_load::schedule_load_recent_commit_messages(
+                executor, repos, msg_tx, repo_id, limit,
+            );
         }
         Effect::LoadCommitDetails { repo_id, commit_id } => {
             repo_load::schedule_load_commit_details(executor, repos, msg_tx, repo_id, commit_id);

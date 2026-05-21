@@ -309,6 +309,7 @@ pub enum AuthRetryOperation {
         repo_id: RepoId,
         message: String,
         amend: bool,
+        push_after_commit: bool,
     },
     Clone {
         url: String,
@@ -420,6 +421,7 @@ pub struct CommandLogEntry {
 pub struct PendingCommitRetry {
     pub message: String,
     pub amend: bool,
+    pub push_after_commit: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -622,6 +624,8 @@ pub struct RepoState {
     pub stashes: Loadable<Arc<Vec<StashEntry>>>,
     pub stashes_rev: u64,
     pub reflog: Loadable<Vec<ReflogEntry>>,
+    pub recent_commit_messages: Loadable<Arc<Vec<RecentCommitMessage>>>,
+    pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
     pub merge_commit_message: Loadable<Option<String>>,
     pub merge_message_rev: u64,
@@ -693,6 +697,8 @@ impl RepoState {
             stashes: Loadable::NotLoaded,
             stashes_rev: 0,
             reflog: Loadable::NotLoaded,
+            recent_commit_messages: Loadable::NotLoaded,
+            recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
             merge_message_rev: 0,
@@ -797,6 +803,18 @@ impl RepoState {
         self.stashes = stashes;
         self.stashes_rev = self.stashes_rev.wrapping_add(1);
         self.bump_branch_sidebar_rev();
+    }
+
+    pub(crate) fn set_recent_commit_messages(
+        &mut self,
+        messages: Loadable<Vec<RecentCommitMessage>>,
+    ) {
+        let messages = loadable_into_arc(messages);
+        if self.recent_commit_messages == messages {
+            return;
+        }
+        self.recent_commit_messages = messages;
+        self.recent_commit_messages_rev = self.recent_commit_messages_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {

@@ -151,6 +151,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
+        | PopoverKind::CommitOptionsMenu { repo_id }
+        | PopoverKind::PreviousCommitMessagesMenu { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
         | PopoverKind::DiffEditorMenu { repo_id, .. }
         | PopoverKind::CommitMenu { repo_id, .. }
@@ -256,6 +258,16 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.remote_branches_rev.hash(hasher);
         }
 
+        PopoverKind::PreviousCommitMessagesMenu { .. } => {
+            repo.recent_commit_messages_rev.hash(hasher);
+        }
+
+        PopoverKind::CommitOptionsMenu { .. } => {
+            repo.log_rev.hash(hasher);
+            repo.ops_rev.hash(hasher);
+            repo.merge_message_rev.hash(hasher);
+        }
+
         PopoverKind::TagMenu { .. } => {
             repo.tags_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
@@ -334,6 +346,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
         PopoverKind::DiffActionMenu => 69u8.hash(hasher),
+        PopoverKind::CommitOptionsMenu { repo_id } => {
+            70u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
+        PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
+            71u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
 
         PopoverKind::ResetPrompt {
             repo_id,

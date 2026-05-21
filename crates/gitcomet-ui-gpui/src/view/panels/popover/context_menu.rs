@@ -5,6 +5,7 @@ mod branch_section;
 mod change_tracking_settings;
 mod commit;
 mod commit_file;
+mod commit_options;
 mod conflict_resolver_chunk;
 mod conflict_resolver_input_row;
 mod conflict_resolver_output;
@@ -13,6 +14,7 @@ mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
+mod previous_commit_messages;
 mod pull;
 mod push;
 mod remote;
@@ -215,6 +217,12 @@ impl PopoverHost {
         match kind {
             PopoverKind::PullPicker => Some(pull::model(self)),
             PopoverKind::PushPicker => Some(push::model(self)),
+            PopoverKind::CommitOptionsMenu { repo_id } => {
+                Some(commit_options::model(self, *repo_id))
+            }
+            PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
+                Some(previous_commit_messages::model(self, *repo_id))
+            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 Some(commit::model(self, *repo_id, commit_id))
             }
@@ -517,6 +525,31 @@ impl PopoverHost {
                     let _ = root_view.update(cx, |root, cx| {
                         root.set_change_tracking_view(view, cx);
                     });
+                });
+            }
+            ContextMenuAction::SetCommitAmendEnabled { enabled } => {
+                close_after_action = false;
+                self.commit_amend_enabled = enabled;
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.set_commit_amend_enabled(enabled, cx);
+                    });
+                });
+            }
+            ContextMenuAction::SetCommitPushAfterEnabled { enabled } => {
+                close_after_action = false;
+                self.commit_push_after_enabled = enabled;
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.set_commit_push_after_enabled(enabled, cx);
+                    });
+                });
+            }
+            ContextMenuAction::UseCommitMessage { message } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_commit_message_from_history(message, window, cx);
                 });
             }
             ContextMenuAction::StageSelectionOrPath {

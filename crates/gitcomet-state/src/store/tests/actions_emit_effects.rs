@@ -360,6 +360,7 @@ fn commit_emits_effect() {
         Msg::Commit {
             repo_id: RepoId(1),
             message: "hello".to_string(),
+            push_after_commit: false,
         },
     );
 
@@ -512,6 +513,7 @@ fn commit_amend_emits_effect() {
         Msg::CommitAmend {
             repo_id: RepoId(1),
             message: "amended".to_string(),
+            push_after_commit: false,
         },
     );
 
@@ -1252,6 +1254,7 @@ fn repo_operations_emit_effects() {
         Msg::Commit {
             repo_id: RepoId(1),
             message: "m".to_string(),
+            push_after_commit: false,
         },
     );
     assert!(matches!(
@@ -1579,6 +1582,7 @@ fn commit_bumps_ops_rev() {
         Msg::Commit {
             repo_id,
             message: "test commit".to_string(),
+            push_after_commit: false,
         },
     );
     assert!(
@@ -3122,6 +3126,72 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         }),
     );
     assert!(missing_amend.is_empty());
+}
+
+#[test]
+fn commit_finished_push_after_commit_enqueues_push_only_on_success() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].commit_in_flight = 1;
+    state.repos[0].pending_commit_retry = Some(crate::model::PendingCommitRetry {
+        message: "ship".to_string(),
+        amend: false,
+        push_after_commit: true,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Push { repo_id: id, .. } if *id == repo_id))
+    );
+    assert_eq!(state.repos[0].push_in_flight, 1);
+    assert!(state.repos[0].pending_commit_retry.is_none());
+
+    state.repos[0].push_in_flight = 0;
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].commit_in_flight = 1;
+    state.repos[0].pending_commit_retry = Some(crate::model::PendingCommitRetry {
+        message: "ship".to_string(),
+        amend: false,
+        push_after_commit: true,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Err(Error::new(ErrorKind::Backend("commit boom".to_string()))),
+        }),
+    );
+
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Push { .. }))
+    );
+    assert_eq!(state.repos[0].push_in_flight, 0);
 }
 
 #[test]

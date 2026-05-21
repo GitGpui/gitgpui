@@ -170,6 +170,10 @@ pub enum Msg {
     LoadReflog {
         repo_id: RepoId,
     },
+    LoadRecentCommitMessages {
+        repo_id: RepoId,
+        limit: usize,
+    },
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
@@ -354,10 +358,12 @@ pub enum Msg {
     Commit {
         repo_id: RepoId,
         message: String,
+        push_after_commit: bool,
     },
     CommitAmend {
         repo_id: RepoId,
         message: String,
+        push_after_commit: bool,
     },
     FetchAll {
         repo_id: RepoId,
@@ -618,6 +624,10 @@ pub enum InternalMsg {
     ReflogLoaded {
         repo_id: RepoId,
         result: Result<Vec<ReflogEntry>, Error>,
+    },
+    RecentCommitMessagesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<RecentCommitMessage>, Error>,
     },
     RebaseStateLoaded {
         repo_id: RepoId,

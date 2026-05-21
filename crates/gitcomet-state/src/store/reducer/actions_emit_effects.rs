@@ -555,6 +555,7 @@ pub(super) fn commit_finished(
         Ok(()) => {
             repo_state.last_error = None;
             clear_banner = true;
+            repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -607,6 +608,7 @@ pub(super) fn commit_amend_finished(
         Ok(()) => {
             repo_state.last_error = None;
             clear_banner = true;
+            repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -774,6 +776,7 @@ pub(super) fn repo_command_finished(
         Ok(output) => {
             repo_state.last_error = None;
             clear_banner = true;
+            repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             if matches!(
                 &command,
                 RepoCommandKind::Reset { .. }

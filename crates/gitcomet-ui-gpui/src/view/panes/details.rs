@@ -39,6 +39,9 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
     pub(in super::super) commit_message_drafts: HashMap<RepoId, SharedString>,
+    pub(in super::super) commit_amend_enabled: bool,
+    pub(in super::super) commit_push_after_enabled: bool,
+    pub(in super::super) pending_commit_amend_repo: Option<RepoId>,
     pub(in super::super) commit_message_user_edited: bool,
     pub(in super::super) commit_message_last_text: SharedString,
     pub(in super::super) commit_message_programmatic_change: bool,
@@ -65,6 +68,7 @@ pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) change_tracking_height: Option<u32>,
     pub(in super::super) untracked_height: Option<u32>,
     pub(in super::super) ui_scale_percent: u32,
+    pub(in super::super) commit_push_after_enabled: bool,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
@@ -194,6 +198,7 @@ impl DetailsPaneView {
             change_tracking_height,
             untracked_height,
             ui_scale_percent,
+            commit_push_after_enabled,
             root_view,
             tooltip_host,
         } = init;
@@ -339,6 +344,9 @@ impl DetailsPaneView {
             commit_details_date_input,
             commit_details_parent_input,
             commit_message_drafts: HashMap::default(),
+            commit_amend_enabled: false,
+            commit_push_after_enabled,
+            pending_commit_amend_repo: None,
             commit_message_user_edited: false,
             commit_message_last_text: SharedString::default(),
             commit_message_programmatic_change: false,
@@ -438,6 +446,64 @@ impl DetailsPaneView {
         self.status_section_resize = None;
         self.status_multi_selection.clear();
         cx.notify();
+    }
+
+    pub(in super::super) fn set_commit_amend_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_amend_enabled == enabled {
+            return;
+        }
+
+        self.commit_amend_enabled = enabled;
+        if !enabled {
+            self.pending_commit_amend_repo = None;
+        }
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_commit_push_after_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_push_after_enabled == enabled {
+            return;
+        }
+
+        self.commit_push_after_enabled = enabled;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_commit_message_from_history(
+        &mut self,
+        message: String,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.commit_message_user_edited = true;
+        self.commit_message_programmatic_change = true;
+        self.commit_message_last_text = message.clone().into();
+        self.commit_message_input
+            .update(cx, |input, cx| input.set_text(message, cx));
+        self.commit_message_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        let focus = self
+            .commit_message_input
+            .read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn sync_commit_amend_enabled_to_root(&self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_commit_amend_enabled(enabled, cx);
+            });
+        });
     }
 
     pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
@@ -639,6 +705,25 @@ impl DetailsPaneView {
 
         let switched_repo = prev_active_repo_id != next_repo_id;
         let mut restored_commit_message: Option<SharedString> = None;
+        if switched_repo {
+            let was_amend_enabled = self.commit_amend_enabled;
+            self.commit_amend_enabled = false;
+            self.pending_commit_amend_repo = None;
+            if was_amend_enabled {
+                self.sync_commit_amend_enabled_to_root(false, cx);
+            }
+        } else if let Some(repo_id) = self.pending_commit_amend_repo
+            && Some(repo_id) == next_repo_id
+            && let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id)
+            && let Some(entry) = repo.command_log.last()
+            && entry.command == "Amend"
+        {
+            if entry.ok {
+                self.commit_amend_enabled = false;
+                self.sync_commit_amend_enabled_to_root(false, cx);
+            }
+            self.pending_commit_amend_repo = None;
+        }
         if switched_repo {
             if let Some(prev_repo_id) = prev_active_repo_id {
                 let current: SharedString =

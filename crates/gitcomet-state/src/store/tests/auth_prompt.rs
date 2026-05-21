@@ -212,6 +212,7 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
     state.repos[0].pending_commit_retry = Some(PendingCommitRetry {
         message: "ship it".to_string(),
         amend: false,
+        push_after_commit: false,
     });
 
     reduce(
@@ -235,6 +236,7 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
             repo_id,
             message: "ship it".to_string(),
             amend: false,
+            push_after_commit: false,
         }
     );
 }
@@ -268,6 +270,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
     state.repos[0].pending_commit_retry = Some(PendingCommitRetry {
         message: "fixup".to_string(),
         amend: true,
+        push_after_commit: false,
     });
 
     reduce(
@@ -291,6 +294,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
             repo_id,
             message: "fixup".to_string(),
             amend: true,
+            push_after_commit: false,
         }
     );
 }
@@ -472,6 +476,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             repo_id,
             message: "first".to_string(),
             amend: false,
+            push_after_commit: false,
         },
     });
     let commit_effects = reduce(
@@ -499,6 +504,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         Some(PendingCommitRetry {
             message: "first".to_string(),
             amend: false,
+            push_after_commit: false,
         })
     );
 
@@ -509,6 +515,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             repo_id,
             message: "second".to_string(),
             amend: true,
+            push_after_commit: false,
         },
     });
     let amend_effects = reduce(
@@ -536,6 +543,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         Some(PendingCommitRetry {
             message: "second".to_string(),
             amend: true,
+            push_after_commit: false,
         })
     );
 }

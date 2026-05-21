@@ -2,9 +2,9 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, HistoryMode, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
-    RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence,
-    Worktree,
+    FileDiffText, HistoryMode, LogCursor, LogPage, RecentCommitMessage, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
+    Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -213,6 +213,10 @@ impl GitRepository for GixRepo {
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
         self.commit_details_impl(id)
+    }
+
+    fn recent_commit_messages(&self, limit: usize) -> Result<Vec<RecentCommitMessage>> {
+        self.recent_commit_messages_impl(limit)
     }
 
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
