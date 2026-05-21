@@ -733,6 +733,23 @@ fn collect_stream_match_visible_rows<'a>(
     }
 }
 
+fn collect_split_stream_match_visible_rows<'a>(
+    rows: impl IntoIterator<Item = (usize, Option<Cow<'a, str>>, Option<Cow<'a, str>>)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    let mut left_rows = Vec::new();
+    let mut right_rows = Vec::new();
+
+    for (visible_ix, left, right) in rows {
+        left_rows.push((visible_ix, left.unwrap_or(Cow::Borrowed(""))));
+        right_rows.push((visible_ix, right.unwrap_or(Cow::Borrowed(""))));
+    }
+
+    collect_stream_match_visible_rows(left_rows, matcher, out);
+    collect_stream_match_visible_rows(right_rows, matcher, out);
+}
+
 impl MainPaneView {
     pub(in crate::view) fn active_conflict_target(
         &self,
@@ -1089,27 +1106,22 @@ impl MainPaneView {
             let Some(provider) = self.file_diff_row_provider.as_ref() else {
                 return;
             };
-            let mut left_rows = Vec::new();
-            let mut right_rows = Vec::new();
-            for visible_ix in 0..total {
-                let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    continue;
-                };
-                let Some((left, right)) = provider.split_row_texts(mapped_ix) else {
-                    continue;
-                };
-                if let Some(left) = left {
-                    left_rows.push((visible_ix, Cow::Owned(expand_tabs_to_string(left.as_ref()))));
-                }
-                if let Some(right) = right {
-                    right_rows.push((
+            let rows: Vec<_> = (0..total)
+                .filter_map(|visible_ix| {
+                    let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                        return None;
+                    };
+                    let Some((left, right)) = provider.split_row_texts(mapped_ix) else {
+                        return None;
+                    };
+                    Some((
                         visible_ix,
-                        Cow::Owned(expand_tabs_to_string(right.as_ref())),
-                    ));
-                }
-            }
-            collect_stream_match_visible_rows(left_rows, matcher, &mut self.diff_search_matches);
-            collect_stream_match_visible_rows(right_rows, matcher, &mut self.diff_search_matches);
+                        left.map(|left| Cow::Owned(expand_tabs_to_string(left.as_ref()))),
+                        right.map(|right| Cow::Owned(expand_tabs_to_string(right.as_ref()))),
+                    ))
+                })
+                .collect();
+            collect_split_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
             self.diff_search_matches.sort_unstable();
             self.diff_search_matches.dedup();
             return;
@@ -1742,25 +1754,25 @@ fn conflict_resolver_visible_match_indices_with_matcher(
                 split_row_index,
                 two_way_split_projection,
             } = ctx.two_way_rows;
-            let mut left_rows = Vec::new();
-            let mut right_rows = Vec::new();
-            for visible_ix in 0..two_way_split_projection.visible_len() {
+            let rows = (0..two_way_split_projection.visible_len()).filter_map(|visible_ix| {
                 let Some((source_row, _conflict_ix)) = two_way_split_projection.get(visible_ix)
                 else {
-                    continue;
+                    return None;
                 };
                 let Some(row) = split_row_index.row_at(ctx.marker_segments, source_row) else {
-                    continue;
+                    return None;
                 };
-                if let Some(text) = row.old.as_ref() {
-                    left_rows.push((visible_ix, Cow::Owned(text.as_ref().to_string())));
-                }
-                if let Some(text) = row.new.as_ref() {
-                    right_rows.push((visible_ix, Cow::Owned(text.as_ref().to_string())));
-                }
-            }
-            collect_stream_match_visible_rows(left_rows, matcher, &mut out);
-            collect_stream_match_visible_rows(right_rows, matcher, &mut out);
+                Some((
+                    visible_ix,
+                    row.old
+                        .as_ref()
+                        .map(|text| Cow::Owned(text.as_ref().to_string())),
+                    row.new
+                        .as_ref()
+                        .map(|text| Cow::Owned(text.as_ref().to_string())),
+                ))
+            });
+            collect_split_stream_match_visible_rows(rows, matcher, &mut out);
         }
     }
     out.sort_unstable();
@@ -2008,8 +2020,8 @@ mod tests {
     use super::{
         AsciiCaseInsensitiveNeedle, ConflictResolverSearchContext,
         ConflictResolverSearchTwoWayRows, ConflictResolverSearchVisibleRows, DiffSearchMatcher,
-        DiffSearchOptions, DiffSearchQueryReuse, collect_stream_match_visible_rows,
-        conflict_resolver_visible_match_indices,
+        DiffSearchOptions, DiffSearchQueryReuse, collect_split_stream_match_visible_rows,
+        collect_stream_match_visible_rows, conflict_resolver_visible_match_indices,
         conflict_resolver_visible_match_indices_with_matcher, contains_ascii_case_insensitive,
         diff_search_query_reuse, diff_search_resume_match_ix,
         diff_search_split_row_texts_match_query, empty_conflict_resolver_search_two_way_rows,
@@ -2236,6 +2248,35 @@ mod tests {
             &mut matches,
         );
 
+        assert_eq!(matches, vec![10]);
+    }
+
+    #[test]
+    fn diff_search_split_stream_collector_preserves_missing_side_rows() {
+        let mut matches = Vec::new();
+        collect_split_stream_match_visible_rows(
+            [
+                (10, Some(Cow::Borrowed("foo")), Some(Cow::Borrowed("alpha"))),
+                (11, None, Some(Cow::Borrowed("beta"))),
+                (12, Some(Cow::Borrowed("bar")), Some(Cow::Borrowed("gamma"))),
+            ],
+            &DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default()),
+            &mut matches,
+        );
+        assert!(
+            matches.is_empty(),
+            "a missing split side cell must not collapse out of the search stream"
+        );
+
+        collect_split_stream_match_visible_rows(
+            [
+                (10, Some(Cow::Borrowed("foo")), Some(Cow::Borrowed("alpha"))),
+                (11, None, Some(Cow::Borrowed("beta"))),
+                (12, Some(Cow::Borrowed("bar")), Some(Cow::Borrowed("gamma"))),
+            ],
+            &DiffSearchMatcher::new("foo\n\nbar", DiffSearchOptions::default()),
+            &mut matches,
+        );
         assert_eq!(matches, vec![10]);
     }
 

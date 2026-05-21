@@ -3563,6 +3563,87 @@ fn push_raw_patch_diff_state(
 }
 
 #[gpui::test]
+fn split_file_diff_multiline_search_preserves_blank_side_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(9140);
+    let path = PathBuf::from("src/split_search.rs");
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "split_search_blank_side_rows",
+        path,
+        "\
+diff --git a/src/split_search.rs b/src/split_search.rs
+index 1111111..2222222 100644
+--- a/src/split_search.rs
++++ b/src/split_search.rs
+@@ -1,2 +1,3 @@
+ foo
++inserted
+ bar
+"
+        .to_string(),
+        "foo\nbar\n".to_string(),
+        "foo\ninserted\nbar\n".to_string(),
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "split search file diff fixture activates",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.file_diff_split_row_len() == 3
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_target.clone(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            pane.diff_view = DiffViewMode::Split;
+            pane.diff_search_active = true;
+
+            pane.diff_search_query = "foo\nbar".into();
+            pane.diff_search_recompute_matches();
+            assert!(
+                pane.diff_search_matches.is_empty(),
+                "split search must not collapse a visible blank left cell between foo and bar"
+            );
+
+            pane.diff_search_query = "foo\n\nbar".into();
+            pane.diff_search_recompute_matches();
+            assert_eq!(
+                pane.diff_search_matches.len(),
+                1,
+                "split search should match the visible left stream including the blank row"
+            );
+            let match_row = pane.diff_search_matches[0];
+            assert_eq!(
+                pane.diff_text_line_for_region(match_row, DiffTextRegion::SplitLeft)
+                    .as_ref(),
+                "foo"
+            );
+        });
+    });
+}
+
+#[gpui::test]
 fn diff_search_f3_continues_from_previous_location_after_patch_refresh(
     cx: &mut gpui::TestAppContext,
 ) {

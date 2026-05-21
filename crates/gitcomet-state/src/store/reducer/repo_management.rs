@@ -765,6 +765,10 @@ pub(super) fn repo_opened_err(
     spec: RepoSpec,
     error: Error,
 ) -> Vec<Effect> {
+    if !state.repos.iter().any(|repo| repo.id == repo_id) {
+        return Vec::new();
+    }
+
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
     };

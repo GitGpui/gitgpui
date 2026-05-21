@@ -92,6 +92,49 @@ fn worker_command_prioritizes_close_repo_over_queued_background_result() {
     }
 }
 
+#[test]
+fn worker_command_prioritizes_close_repo_over_queued_open_error() {
+    let repo_id = RepoId(7);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+        crate::msg::InternalMsg::RepoOpenedErr {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/not-a-repo"),
+            },
+            error: Error::new(ErrorKind::NotARepository),
+        },
+    ))))
+    .expect("send open error");
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::CloseRepo {
+        repo_id,
+    })))
+    .expect("send close");
+
+    let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("next command");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::CloseRepo { repo_id: got } if got == repo_id));
+        }
+        _ => panic!("expected close repo command first"),
+    }
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("deferred open error");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(
+                *msg,
+                Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
+                    repo_id: got,
+                    ..
+                }) if got == repo_id
+            ));
+        }
+        _ => panic!("expected deferred open error"),
+    }
+}
+
 fn has_effect_for_repo(
     effects: &[Effect],
     repo_id: RepoId,
@@ -2416,6 +2459,48 @@ fn repo_opened_ok_for_closed_repo_is_ignored() {
 
     assert!(effects.is_empty());
     assert!(state.repos.is_empty());
+    assert!(!repos.contains_key(&RepoId(1)));
+}
+
+#[test]
+fn repo_opened_err_for_closed_repo_is_ignored() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/not-a-repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo { repo_id: RepoId(1) },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/not-a-repo"),
+            },
+            error: Error::new(ErrorKind::NotARepository),
+        }),
+    );
+
+    assert!(effects.is_empty());
+    assert!(state.repos.is_empty());
+    assert_eq!(state.active_repo, None);
+    assert!(
+        state.notifications.is_empty(),
+        "stale open errors for a closed repo must not surface notifications"
+    );
     assert!(!repos.contains_key(&RepoId(1)));
 }
 
